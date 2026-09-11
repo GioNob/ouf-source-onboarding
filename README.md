@@ -9,7 +9,8 @@ This first executable increment contains the PostgreSQL 17 source/version workfl
 - DRAFT -> IN_REVIEW -> APPROVED -> ACTIVE;
 - short-lived approval challenges bound to the canonical configuration hash;
 - HUMAN_USER-only confirmation and activation;
+- executable validation engine with typed findings and append-only validation evidence;
 - append-only approval evidence and audit;
 - atomic ACTIVE bundle switch with historical bundle retention.
 
-It does not yet claim completion of discovery, mapping, file onboarding, Authorization Policy Registry, or the complete Trusted Human Surface.
+It does not yet claim completion of discovery, mapping authoring, file onboarding, Authorization Policy Registry, or the complete Trusted Human Surface.

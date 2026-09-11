@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/sync-profile-v1.json",
+  "title": "OUF SyncProfile v1",
+  "description": "Runtime synchronization profile consumed by Source Sync / Ingestion. It does not transfer scheduling ownership to Gateway.",
+  "type": "object",
+  "required": [
+    "bootstrap",
+    "incremental"
+  ],
+  "properties": {
+    "bootstrap": {
+      "type": "string",
+      "enum": [
+        "FULL_SNAPSHOT"
+      ]
+    },
+    "incremental": {
+      "type": "string",
+      "enum": [
+        "CHANGE_TOKEN",
+        "LAST_MODIFIED",
+        "MONOTONIC_ID",
+        "SNAPSHOT_DIFF",
+        "NONE"
+      ]
+    },
+    "pageSize": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "pollInterval": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "watermarkRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "changeTokenRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "retryPolicyRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "checkpointing": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "deletionDetection": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "concurrencyLimits": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-scope-control": "No scheduler implementation, cron engine or broker is defined by this schema."
+}

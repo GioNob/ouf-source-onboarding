@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/change-representation-profile-v1.json",
+  "title": "OUF ChangeRepresentationProfile v1",
+  "type": "object",
+  "required": [
+    "mode"
+  ],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "FULL_SNAPSHOT",
+        "DELTA_PATCH",
+        "PROPERTY_EVENTS"
+      ]
+    },
+    "baseReference": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "eventContractRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-compatibility": {
+    "legacyDefault": "FULL_SNAPSHOT"
+  },
+  "x-ouf-scope-control": "The profile describes incoming change representation; UDP still decides whether a canonical revision is created."
+}

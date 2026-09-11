@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/published-configuration-bundle-v1.json",
+  "title": "OUF PublishedConfigurationBundle v1",
+  "description": "Immutable execution contract from Source Onboarding & Configuration to runtime consumers.",
+  "type": "object",
+  "required": [
+    "bundleId",
+    "bundleVersion",
+    "environment",
+    "source",
+    "createdFromOnboardingVersion",
+    "effectiveFrom",
+    "checksum",
+    "status"
+  ],
+  "properties": {
+    "bundleId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "bundleVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "environment": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "sourceId",
+        "sourceKind",
+        "acquisitionMode"
+      ],
+      "properties": {
+        "sourceId": {
+          "type": "string"
+        },
+        "typeCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceKind": {
+          "type": "string",
+          "enum": [
+            "EXTERNAL_API",
+            "OGC_SERVICE",
+            "INTERNAL_MANAGED"
+          ]
+        },
+        "acquisitionMode": {
+          "type": "string",
+          "enum": [
+            "PULL",
+            "MANAGED"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "sourceDefinitionRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bindingRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sourceRuntimeProfileRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "objectTypes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "typeCode",
+          "schemaRef",
+          "semanticMappingRef"
+        ],
+        "properties": {
+          "typeCode": {
+            "type": "string"
+          },
+          "schemaRef": {
+            "type": "string"
+          },
+          "semanticMappingRef": {
+            "type": "string"
+          },
+          "relationshipMappingRefs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "extractionProfileRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "syncProfile": {
+      "$ref": "sync-profile-v1.json"
+    },
+    "sourceObjectIdentityPolicy": {
+      "$ref": "source-object-identity-policy-v1.json"
+    },
+    "temporalMapping": {
+      "$ref": "temporal-mapping-v1.json"
+    },
+    "changeRepresentationProfile": {
+      "$ref": "change-representation-profile-v1.json"
+    },
+    "deltaPatchContract": {
+      "$ref": "delta-patch-contract-v1.json"
+    },
+    "semanticRefs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "authorityPolicies": {
+      "type": "array",
+      "items": {
+        "$ref": "authority-policy-ref-v1.json"
+      }
+    },
+    "dataAccessPolicies": {
+      "type": "array",
+      "items": {
+        "$ref": "data-access-policy-v1.json"
+      }
+    },
+    "createdFromOnboardingVersion": {
+      "type": "string"
+    },
+    "effectiveFrom": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "activatedAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "activatedBy": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "checksum": {
+      "type": "string",
+      "minLength": 1
+    },
+    "configurationHash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "APPROVED",
+        "ACTIVE",
+        "SUPERSEDED",
+        "REVOKED"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "properties": {
+              "acquisitionMode": {
+                "const": "PULL"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "bindingRef",
+          "extractionProfileRef"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "changeRepresentationProfile": {
+            "properties": {
+              "mode": {
+                "const": "DELTA_PATCH"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "deltaPatchContract"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-compatibility": {
+    "patch": "Optional additions that do not change existing required semantics.",
+    "minor": "Compatible new sections/capabilities safely ignorable by v1 consumers.",
+    "major": "Incompatible structure/semantic change; consumer compatibility required before activation.",
+    "legacyChangeRepresentationDefault": "FULL_SNAPSHOT"
+  },
+  "x-ouf-scope-control": "Runtime consumers must not reconstruct this bundle from Onboarding internal tables."
+}

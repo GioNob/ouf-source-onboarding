@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/temporal-mapping-v1.json",
+  "title": "OUF TemporalMapping v1",
+  "type": "object",
+  "required": [
+    "mode"
+  ],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "SOURCE_EXPLICIT",
+        "OPEN_ENDED",
+        "DERIVED_RULE",
+        "OBSERVATION_ONLY"
+      ]
+    },
+    "validFromField": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "validToField": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "derivedRuleRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observedAtField": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "SOURCE_EXPLICIT"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "required": [
+          "validFromField"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "DERIVED_RULE"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "required": [
+          "derivedRuleRef"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-scope-control": "No validTo value is invented by runtime unless an explicit approved DERIVED_RULE exists."
+}

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/authority-policy-ref-v1.json",
+  "title": "OUF Authority Policy Descriptor v1",
+  "description": "Runtime-carried source authority descriptor. Final conflict resolution remains UDP-owned.",
+  "type": "object",
+  "required": [
+    "scope",
+    "target",
+    "authority"
+  ],
+  "properties": {
+    "scope": {
+      "type": "string",
+      "enum": [
+        "OBJECT",
+        "PROPERTY",
+        "GEOMETRY",
+        "RELATIONSHIP",
+        "TIME"
+      ]
+    },
+    "target": {
+      "type": "string"
+    },
+    "authority": {
+      "type": "string",
+      "enum": [
+        "AUTHORITATIVE",
+        "NON_AUTHORITATIVE",
+        "CONTRIBUTING"
+      ]
+    },
+    "validFrom": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "validTo": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ]
+}

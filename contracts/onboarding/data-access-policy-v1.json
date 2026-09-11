@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/data-access-policy-v1.json",
+  "title": "OUF DataAccessPolicy v1",
+  "type": "object",
+  "required": [
+    "target",
+    "label"
+  ],
+  "properties": {
+    "target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "OBJECT",
+        "PROPERTY",
+        "GEOMETRY",
+        "RELATIONSHIP",
+        "LINEAGE",
+        null
+      ]
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-scope-control": "Onboarding classifies/publishes labels; Authorization/UDP enforce them at runtime."
+}

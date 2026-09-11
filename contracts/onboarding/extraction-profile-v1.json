@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/extraction-profile-v1.json",
+  "title": "OUF ExtractionProfile v1",
+  "description": "Approved technical extraction instructions for Source Sync / Connector / Gateway southbound; no semantic rationale is included.",
+  "type": "object",
+  "required": [
+    "profileId",
+    "version",
+    "sourceId",
+    "selection",
+    "projection",
+    "sync"
+  ],
+  "properties": {
+    "profileId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "integer",
+          "minimum": 1
+        }
+      ]
+    },
+    "sourceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selection": {
+      "type": "object",
+      "properties": {
+        "procedureTypes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "eligibleNativeStates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "uniqueItems": true
+      }
+    },
+    "sync": {
+      "$ref": "sync-profile-v1.json"
+    },
+    "runtime": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "PULL",
+            "MANAGED"
+          ]
+        },
+        "endpointRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceTypeScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sourceStatusFilter": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fieldProjectionRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "incrementalStrategy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pageSize": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "queryTemplateRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credentialRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limits": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "processingRefs": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "adapterProfileId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "semanticMappingSetId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-scope-control": "Field classification, ontologies, vocabularies and semantic rationale remain outside this runtime extraction contract."
+}

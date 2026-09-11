@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/delta-patch-contract-v1.json",
+  "title": "OUF DeltaPatchContract v1",
+  "type": "object",
+  "required": [
+    "mode",
+    "baseReference",
+    "operations",
+    "propertyBindings"
+  ],
+  "properties": {
+    "mode": {
+      "const": "DELTA_PATCH"
+    },
+    "baseReference": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "SET",
+          "REMOVE"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "propertyBindings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "sourcePath",
+          "targetProperty",
+          "changeSection"
+        ],
+        "properties": {
+          "sourcePath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targetProperty": {
+            "type": "string",
+            "minLength": 1
+          },
+          "changeSection": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-scope-control": "No UDP table/index/column or physical storage plan is permitted in this logical contract."
+}

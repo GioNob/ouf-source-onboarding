@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/relationship-mapping-v1.json",
+  "title": "OUF RelationshipMapping v1",
+  "type": "object",
+  "required": [
+    "mappingId",
+    "sourceField",
+    "relationIri",
+    "targetClassIri",
+    "resolution",
+    "provenancePolicy"
+  ],
+  "properties": {
+    "mappingId": {
+      "type": "string"
+    },
+    "sourceField": {
+      "type": "string"
+    },
+    "relationIri": {
+      "type": "string"
+    },
+    "targetClassIri": {
+      "type": "string"
+    },
+    "resolution": {
+      "type": "object",
+      "required": [
+        "strategy",
+        "onNoMatch",
+        "onMultipleMatches"
+      ],
+      "properties": {
+        "strategy": {
+          "type": "string"
+        },
+        "targetKeyProperty": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceValuePath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "onNoMatch": {
+          "type": "string",
+          "enum": [
+            "QUARANTINE_RELATION",
+            "SKIP_WITH_WARNING",
+            "CREATE_CANDIDATE"
+          ]
+        },
+        "onMultipleMatches": {
+          "type": "string",
+          "enum": [
+            "REVIEW_REQUIRED",
+            "QUARANTINE_RELATION"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "provenancePolicy": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-scope-control": "The contract configures resolution evidence/strategy; it does not materialize edges or choose an arbitrary target instance."
+}

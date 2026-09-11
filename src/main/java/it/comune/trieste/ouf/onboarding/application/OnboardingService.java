@@ -12,8 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class OnboardingService {
-  private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final Duration challengeTtl;
-  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl){this.db=db;this.json=json;this.hashes=hashes;this.challengeTtl=challengeTtl;}
+  private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ConfigurationValidator validator; private final Duration challengeTtl;
+  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl){this.db=db;this.json=json;this.hashes=hashes;this.validator=validator;this.challengeTtl=challengeTtl;}
 
   @Transactional public Map<String,Object> createSource(String id,String name,String kind,String mode,String owner,Map<String,Object> metadata,Actor actor,String correlation){
     if("INTERNAL_MANAGED".equals(kind)&&!"MANAGED".equals(mode))throw bad("ONB_SOURCE_MODE_INVALID","INTERNAL_MANAGED requires MANAGED acquisition");
@@ -40,10 +40,18 @@ public class OnboardingService {
   }
 
   @Transactional public Map<String,Object> submit(String sourceId,UUID id,long expected,Actor actor,String correlation){
-    Map<String,Object> current=version(sourceId,id);String hash=hashes.of(current.get("configuration"));
+    Map<String,Object> current=version(sourceId,id);Map<String,Object> validation=validate(sourceId,id,actor,correlation);if(!"PASS".equals(validation.get("result")))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALIDATION_FAILED","Configuration contains blocking validation errors");String hash=hashes.of(current.get("configuration"));
     int rows=db.sql("update ouf_onboarding.onboarding_version set state='IN_REVIEW',configuration_hash=:h,frozen_at=transaction_timestamp(),lock_version=lock_version+1,updated_at=transaction_timestamp() where source_id=:s and onboarding_version_id=:i and state='DRAFT' and lock_version=:l")
       .param("h",hash).param("s",sourceId).param("i",id).param("l",expected).update();
     if(rows!=1)throw precondition();audit(sourceId,id,correlation,actor,"VERSION_SUBMITTED",Map.of("configurationHash",hash));return version(sourceId,id);
+  }
+
+  @Transactional public Map<String,Object> validate(String sourceId,UUID id,Actor actor,String correlation){
+    Map<String,Object> current=version(sourceId,id);@SuppressWarnings("unchecked") Map<String,Object> configuration=(Map<String,Object>)current.get("configuration");var result=validator.validate(sourceId,configuration);UUID runId=UUID.randomUUID();String hash=hashes.of(configuration);
+    db.sql("insert into ouf_onboarding.validation_run(validation_run_id,onboarding_version_id,source_id,configuration_hash,result,error_count,warning_count,findings,actor_subject,actor_type,correlation_id) values(:i,:v,:s,:h,:r,:e,:w,cast(:f as jsonb),:a,:t,:c)")
+      .param("i",runId).param("v",id).param("s",sourceId).param("h",hash).param("r",result.valid()?"PASS":"FAIL").param("e",result.errors()).param("w",result.warnings()).param("f",write(result.findings())).param("a",actor.subject()).param("t",actor.type()).param("c",correlation).update();
+    audit(sourceId,id,correlation,actor,"VERSION_VALIDATED",Map.of("validationRunId",runId.toString(),"result",result.valid()?"PASS":"FAIL","errors",result.errors()));
+    Map<String,Object> response=new LinkedHashMap<>();response.put("validationRunId",runId);response.put("sourceId",sourceId);response.put("onboardingVersionId",id);response.put("configurationHash",hash);response.put("result",result.valid()?"PASS":"FAIL");response.put("errorCount",result.errors());response.put("warningCount",result.warnings());response.put("findings",result.findings());return response;
   }
 
   @Transactional public Map<String,Object> createChallenge(String sourceId,UUID versionId,Actor actor,String correlation){

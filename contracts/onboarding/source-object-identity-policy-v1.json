@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/source-object-identity-policy-v1.json",
+  "title": "OUF SourceObjectIdentityPolicy v1",
+  "type": "object",
+  "required": [
+    "strategy"
+  ],
+  "properties": {
+    "strategy": {
+      "type": "string",
+      "enum": [
+        "NATIVE_KEY",
+        "COMPOSITE_NATIVE_KEY",
+        "MANAGED_DETERMINISTIC"
+      ]
+    },
+    "sourceFields": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "normalizationRuleRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-scope-control": "This policy defines source-object provenance identity only; it never assigns UrbanObjectId."
+}

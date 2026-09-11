@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/semantic-mapping-v1.json",
+  "title": "OUF SemanticMapping v1",
+  "type": "object",
+  "required": [
+    "mappingId",
+    "sourceType",
+    "targetClasses",
+    "semanticRefs"
+  ],
+  "properties": {
+    "mappingId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceType": {
+      "type": "object",
+      "required": [
+        "sourceId",
+        "typeCode"
+      ],
+      "properties": {
+        "sourceId": {
+          "type": "string"
+        },
+        "typeCode": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "targetClasses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "ontologyId",
+          "ontologyVersion",
+          "classIri"
+        ],
+        "properties": {
+          "ontologyId": {
+            "type": "string"
+          },
+          "ontologyVersion": {
+            "type": "string"
+          },
+          "classIri": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "propertyMappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sourceField",
+          "targetPropertyIri",
+          "transform"
+        ],
+        "properties": {
+          "sourceField": {
+            "type": "string"
+          },
+          "targetPropertyIri": {
+            "type": "string"
+          },
+          "transform": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "vocabularyMappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sourceField",
+          "vocabularyId",
+          "vocabularyVersion",
+          "valueMapRef"
+        ],
+        "properties": {
+          "sourceField": {
+            "type": "string"
+          },
+          "vocabularyId": {
+            "type": "string"
+          },
+          "vocabularyVersion": {
+            "type": "string"
+          },
+          "valueMapRef": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "semanticRefs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": true,
+  "x-ouf-status": "field-level-reconciled-draft",
+  "x-ouf-source-basis": [
+    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
+    "Ingestion Runtime v1.2",
+    "Urban API Gateway v1.2"
+  ],
+  "x-ouf-scope-control": "The mapping references published semantic artifacts; it does not duplicate or author the Semantic Registry."
+}
