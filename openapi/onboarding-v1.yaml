@@ -138,6 +138,56 @@ paths:
                 additionalProperties: true
         default:
           $ref: '#/components/responses/Problem'
+  /sources/{sourceId}/onboarding-versions/{versionId}:
+    get:
+      operationId: getOnboardingVersion
+      summary: Observe the governed onboarding state
+      x-ouf-mcp-capability: ouf.source-onboarding.status.read
+      parameters:
+        - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200': {description: Current immutable or draft version state}
+        default: {$ref: '#/components/responses/Problem'}
+  /sources/{sourceId}/onboarding-versions/{versionId}/submit:
+    post:
+      operationId: submitOnboardingVersion
+      summary: Freeze and submit a validated draft for human review
+      x-ouf-mcp-capability: ouf.source-onboarding.submit
+      parameters:
+        - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/VersionId'
+        - name: If-Match
+          in: header
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: Version frozen in IN_REVIEW}
+        default: {$ref: '#/components/responses/Problem'}
+  /sources/{sourceId}/onboarding-versions/{versionId}/approval-challenges:
+    post:
+      operationId: createTrustedApprovalHandoff
+      summary: Create an opaque handoff to the direct HUMAN_USER approval surface
+      description: MCP may create and return the handoff. Confirmation and activation are deliberately absent from the MCP surface.
+      x-ouf-mcp-capability: ouf.source-onboarding.approval-handoff.create
+      parameters:
+        - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '201':
+          description: Trusted approval handoff created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challenge_id, configuration_hash, expires_at, trustedApprovalRef]
+                properties:
+                  challenge_id: {type: string, format: uuid}
+                  configuration_hash: {type: string}
+                  expires_at: {type: string, format: date-time}
+                  trustedApprovalRef: {type: string, pattern: '^ths://'}
+                additionalProperties: true
+        default: {$ref: '#/components/responses/Problem'}
 components:
   securitySchemes:
     bearerAuth:
@@ -159,6 +209,16 @@ components:
       schema:
         type: string
         format: uuid
+    SourceId:
+      name: sourceId
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
   responses:
     Problem:
       description: RFC 9457 problem response
@@ -184,7 +244,7 @@ components:
         mediaType:
           type: string
           enum: [text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet]
-        sizeBytes: {type: integer, minimum: 1, maximum: 52428800}
+        sizeBytes: {type: integer, minimum: 1, maximum: 10485760}
         retentionRef: {type: string, minLength: 1}
     ManagedFileAsset:
       type: object
@@ -200,8 +260,15 @@ components:
       additionalProperties: true
     FileProfileJob:
       type: object
-      required: [job_id, asset_id, state, attempts]
+      required: [jobId, status, createdAt, updatedAt]
       properties:
+        jobId: {type: string, format: uuid}
+        status: {type: string, enum: [QUEUED, RUNNING, RETRY_WAIT, SUCCEEDED, FAILED, CANCELLED]}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        nextRetryAt: {type: [string, 'null'], format: date-time}
+        resultRef: {type: [string, 'null']}
+        errorCode: {type: [string, 'null']}
         job_id: {type: string, format: uuid}
         asset_id: {type: string, format: uuid}
         state: {type: string, enum: [READY, RUNNING, RETRY_WAIT, SUCCEEDED, FAILED, CANCELLED]}

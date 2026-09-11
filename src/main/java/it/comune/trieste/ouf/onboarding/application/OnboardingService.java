@@ -12,8 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class OnboardingService {
-  private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ConfigurationValidator validator; private final Duration challengeTtl;
-  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl){this.db=db;this.json=json;this.hashes=hashes;this.validator=validator;this.challengeTtl=challengeTtl;}
+  private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ConfigurationValidator validator; private final PublishedBundleCompiler bundles; private final Duration challengeTtl;
+  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,PublishedBundleCompiler bundles,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl){this.db=db;this.json=json;this.hashes=hashes;this.validator=validator;this.bundles=bundles;this.challengeTtl=challengeTtl;}
 
   @Transactional public Map<String,Object> createSource(String id,String name,String kind,String mode,String owner,Map<String,Object> metadata,Actor actor,String correlation){
     if("INTERNAL_MANAGED".equals(kind)&&!"MANAGED".equals(mode))throw bad("ONB_SOURCE_MODE_INVALID","INTERNAL_MANAGED requires MANAGED acquisition");
@@ -60,7 +60,7 @@ public class OnboardingService {
     db.sql("insert into ouf_onboarding.approval_challenge(challenge_id,onboarding_version_id,source_id,configuration_hash,status,expires_at) values(:c,:v,:s,:h,'CREATED',:e)")
       .param("c",id).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).param("e",OffsetDateTime.ofInstant(expires,ZoneOffset.UTC)).update();
     audit(sourceId,versionId,correlation,actor,"APPROVAL_CHALLENGE_CREATED",Map.of("challengeId",id.toString()));
-    return db.sql("select challenge_id,onboarding_version_id,source_id,configuration_hash,status,expires_at,created_at from ouf_onboarding.approval_challenge where challenge_id=:i").param("i",id).query().singleRow();
+    Map<String,Object> response=new LinkedHashMap<>(db.sql("select challenge_id,onboarding_version_id,source_id,configuration_hash,status,expires_at,created_at from ouf_onboarding.approval_challenge where challenge_id=:i").param("i",id).query().singleRow());response.put("trustedApprovalRef","ths://approval-challenges/"+id);return response;
   }
 
   @Transactional public Map<String,Object> confirm(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){
@@ -80,7 +80,7 @@ public class OnboardingService {
     if(!"HUMAN_USER".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_HUMAN_ACTIVATION_REQUIRED","Activation requires a HUMAN_USER identity");
     Map<String,Object> v=version(sourceId,versionId);if(!"APPROVED".equals(v.get("state")))throw invalid("Version must be APPROVED");
     boolean compatible=db.sql("select compatible from ouf_onboarding.consumer_compatibility_attestation where onboarding_version_id=:v and consumer='INGESTION_RUNTIME' and configuration_hash=:h order by created_at desc,attestation_id desc limit 1").param("v",versionId).param("h",v.get("configuration_hash")).query(Boolean.class).optional().orElse(false);if(!compatible)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_INGESTION_COMPAT_REQUIRED","Ingestion Runtime must accept the frozen configuration before activation");
-    Map<String,Object> bundle=new LinkedHashMap<>();bundle.put("bundleVersion",v.get("version"));bundle.put("source",source(sourceId));bundle.put("configuration",v.get("configuration"));bundle.put("effectiveFrom",Instant.now().toString());String checksum=hashes.of(bundle);bundle.put("checksum",checksum);
+    @SuppressWarnings("unchecked") Map<String,Object> configuration=(Map<String,Object>)v.get("configuration");Map<String,Object> bundle=bundles.compile(sourceId,versionId,v.get("version"),String.valueOf(v.get("configuration_hash")),configuration);String checksum=String.valueOf(bundle.get("checksum"));
     db.sql("update ouf_onboarding.published_configuration set active=false where source_id=:s and active=true").param("s",sourceId).update();
     db.sql("update ouf_onboarding.onboarding_version set state='SUPERSEDED',lock_version=lock_version+1,updated_at=transaction_timestamp() where source_id=:s and state='ACTIVE'").param("s",sourceId).update();
     db.sql("insert into ouf_onboarding.published_configuration(publication_id,source_id,onboarding_version_id,bundle_version,bundle,checksum,active,effective_from) values(:p,:s,:v,:n,cast(:b as jsonb),:h,true,transaction_timestamp())")
@@ -89,7 +89,7 @@ public class OnboardingService {
     audit(sourceId,versionId,correlation,actor,"VERSION_ACTIVATED",Map.of("checksum",checksum));return activeBundle(sourceId);
   }
   @Transactional public Map<String,Object> attestIngestionCompatibility(String sourceId,UUID versionId,boolean compatible,String detail,Actor actor,String correlation){
-    if(!"SERVICE".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_SERVICE_ATTESTATION_REQUIRED","Compatibility attestation requires an authenticated SERVICE identity");Map<String,Object> v=version(sourceId,versionId);if(!Set.of("IN_REVIEW","APPROVED").contains(String.valueOf(v.get("state"))))throw invalid("Compatibility may be attested only for a frozen version");UUID id=UUID.randomUUID();db.sql("insert into ouf_onboarding.consumer_compatibility_attestation(attestation_id,onboarding_version_id,consumer,configuration_hash,compatible,detail,actor_subject) values(:i,:v,'INGESTION_RUNTIME',:h,:c,:d,:a)").param("i",id).param("v",versionId).param("h",v.get("configuration_hash")).param("c",compatible).param("d",detail).param("a",actor.subject()).update();audit(sourceId,versionId,correlation,actor,"INGESTION_COMPAT_ATTESTED",Map.of("compatible",compatible));return db.sql("select attestation_id,onboarding_version_id,consumer,configuration_hash,compatible,detail,actor_subject,created_at from ouf_onboarding.consumer_compatibility_attestation where attestation_id=:i").param("i",id).query().singleRow();
+    if(!"SERVICE".equals(actor.type())||!actor.capabilities().contains("ouf.ingestion.configuration.attest"))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_INGESTION_ATTESTATION_AUTHORITY_REQUIRED","Compatibility attestation requires the Authorization-owned Ingestion Runtime capability");Map<String,Object> v=version(sourceId,versionId);if(!Set.of("IN_REVIEW","APPROVED").contains(String.valueOf(v.get("state"))))throw invalid("Compatibility may be attested only for a frozen version");UUID id=UUID.randomUUID();db.sql("insert into ouf_onboarding.consumer_compatibility_attestation(attestation_id,onboarding_version_id,consumer,configuration_hash,compatible,detail,actor_subject) values(:i,:v,'INGESTION_RUNTIME',:h,:c,:d,:a)").param("i",id).param("v",versionId).param("h",v.get("configuration_hash")).param("c",compatible).param("d",detail).param("a",actor.subject()).update();audit(sourceId,versionId,correlation,actor,"INGESTION_COMPAT_ATTESTED",Map.of("compatible",compatible));return db.sql("select attestation_id,onboarding_version_id,consumer,configuration_hash,compatible,detail,actor_subject,created_at from ouf_onboarding.consumer_compatibility_attestation where attestation_id=:i").param("i",id).query().singleRow();
   }
   public Map<String,Object> activeBundle(String sourceId){return jsonRow(db.sql("select publication_id,source_id,onboarding_version_id,bundle_version,bundle::text bundle,checksum,effective_from from ouf_onboarding.published_configuration where source_id=:s and active=true").param("s",sourceId).query().listOfRows().stream().findFirst().orElseThrow(()->missing("active bundle")),"bundle");}
 
@@ -100,5 +100,5 @@ public class OnboardingService {
   private static DomainFailure invalid(String message){return new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_INVALID_STATE_TRANSITION",message);}
   private static DomainFailure bad(String code,String message){return new DomainFailure(HttpStatus.BAD_REQUEST,code,message);}
   private static DomainFailure precondition(){return new DomainFailure(HttpStatus.PRECONDITION_FAILED,"ONB_ETAG_MISMATCH","Stale ETag or immutable version");}
-  public record Actor(String subject,String type){}
+  public record Actor(String subject,String type,Set<String> capabilities){public Actor(String subject,String type){this(subject,type,Set.of());}public Actor{capabilities=capabilities==null?Set.of():Set.copyOf(capabilities);}}
 }

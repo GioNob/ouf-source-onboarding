@@ -32,6 +32,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Verify frozen rc3 contract pin
+        run: sh scripts/verify-contract-freeze.sh
       - name: Compile, test and package
         run: timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
       - name: Build non-root container

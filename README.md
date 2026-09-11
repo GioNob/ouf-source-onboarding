@@ -35,6 +35,8 @@ The intended MCP/agent experience is: “I want to add this CSV as an object sou
 
 The AI agent may propose and drive the workflow, but approval and activation remain human-only. Request identity is derived from a validated server principal and trusted role mapping; actor identity headers are not accepted.
 
+Authentication, principal normalization, tenant/resource authorization and policy decisions are owned by the OUF Authorization module. Onboarding consumes only the trusted server principal, roles, authentication-context reference and `ouf.authorizedCapabilities` request context produced by that integration; it does not validate JWTs or own IAM policy. Domain guards remain fail-closed, including the dedicated `ouf.ingestion.configuration.attest` capability required for compatibility attestation.
+
 The machine-readable MCP-facing surface is defined in `openapi/onboarding-v1.yaml`. To run the in-process profiling worker, configure `ouf.onboarding.object-store.gateway-base-url`; the adapter reads the opaque `object://` reference through the Gateway internal object-storage route and applies the registered size and content-hash checks before profiling. The worker remains disabled when that route is not configured.
 
 It does not yet claim completion of geospatial file formats, the object-storage reader used by the profiling worker, Authorization Policy Registry, the Ingestion Runtime implementation, or the complete Trusted Human Surface.

@@ -10,7 +10,7 @@ import org.springframework.web.client.RestClient;
 @Component
 @ConditionalOnProperty(name="ouf.onboarding.object-store.gateway-base-url")
 public class GatewayManagedFileObjectStore implements ManagedFileObjectStore {
-  private static final long ABSOLUTE_MAX_BYTES=52_428_800;
+  private static final long ABSOLUTE_MAX_BYTES=10L*1024*1024;
   private final RestClient client;private final String readPath;
 
   public GatewayManagedFileObjectStore(RestClient.Builder builder,@Value("${ouf.onboarding.object-store.gateway-base-url}") String baseUrl,@Value("${ouf.onboarding.object-store.read-path:/internal/object-storage/v1/content}") String readPath){this.client=builder.baseUrl(baseUrl).build();this.readPath=readPath;}

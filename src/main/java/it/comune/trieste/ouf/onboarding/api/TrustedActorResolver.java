@@ -4,6 +4,7 @@ import it.comune.trieste.ouf.onboarding.application.OnboardingService;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import jakarta.servlet.http.HttpServletRequest;
 import java.security.Principal;
+import java.util.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
@@ -17,7 +18,8 @@ public class TrustedActorResolver {
     else if(request.isUserInRole("OUF_AI_AGENT"))type="AI_AGENT";
     else if(request.isUserInRole("OUF_SERVICE"))type="SERVICE";
     else throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_ACTOR_ROLE_REQUIRED","The validated principal has no supported OUF actor role");
-    return new OnboardingService.Actor(principal.getName(),type);
+    Object authorized=request.getAttribute("ouf.authorizedCapabilities");Set<String> capabilities=new LinkedHashSet<>();if(authorized instanceof Collection<?> values)values.stream().map(String::valueOf).forEach(capabilities::add);
+    return new OnboardingService.Actor(principal.getName(),type,capabilities);
   }
 
   public String authenticationContextRef(HttpServletRequest request){
