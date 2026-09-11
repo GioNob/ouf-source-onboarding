@@ -50,7 +50,7 @@ public class OnboardingService {
     Map<String,Object> v=version(sourceId,versionId);if(!"IN_REVIEW".equals(v.get("state")))throw invalid("Version must be IN_REVIEW");
     UUID id=UUID.randomUUID();Instant expires=Instant.now().plus(challengeTtl);
     db.sql("insert into ouf_onboarding.approval_challenge(challenge_id,onboarding_version_id,source_id,configuration_hash,status,expires_at) values(:c,:v,:s,:h,'CREATED',:e)")
-      .param("c",id).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).param("e",expires).update();
+      .param("c",id).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).param("e",OffsetDateTime.ofInstant(expires,ZoneOffset.UTC)).update();
     audit(sourceId,versionId,correlation,actor,"APPROVAL_CHALLENGE_CREATED",Map.of("challengeId",id.toString()));
     return db.sql("select challenge_id,onboarding_version_id,source_id,configuration_hash,status,expires_at,created_at from ouf_onboarding.approval_challenge where challenge_id=:i").param("i",id).query().singleRow();
   }
