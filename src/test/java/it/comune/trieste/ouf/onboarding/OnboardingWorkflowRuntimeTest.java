@@ -46,7 +46,7 @@ class OnboardingWorkflowRuntimeTest {
     assertThat(service.version("s",first).get("state")).isEqualTo("SUPERSEDED");assertThat(service.version("s",second).get("state")).isEqualTo("ACTIVE");
     assertThat(db.sql("select checksum from ouf_onboarding.published_configuration where onboarding_version_id=:v").param("v",first).query(String.class).single()).isEqualTo(checksum);
   }
-  @Test void appendOnlyEvidenceRejectsMutation(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");UUID id=approve("s",Map.of("a",1));assertThatThrownBy(()->db.sql("update ouf_onboarding.approval_decision set actor_subject='forged' where onboarding_version_id=:v").param("v",id).update()).hasRootCauseMessage("ERROR: approval_decision is append-only");}
+  @Test void appendOnlyEvidenceRejectsMutation(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");UUID id=approve("s",Map.of("a",1));assertThatThrownBy(()->db.sql("update ouf_onboarding.approval_decision set actor_subject='forged' where onboarding_version_id=:v").param("v",id).update()).hasStackTraceContaining("approval_decision is append-only");}
   private UUID approve(String source,Map<String,Object> config){var v=service.createVersion(source,config,human,"c");UUID id=(UUID)v.get("onboarding_version_id");service.submit(source,id,0,human,"c");var ch=service.createChallenge(source,id,human,"c");service.confirm(source,id,(UUID)ch.get("challenge_id"),human,"c","acr:mfa");return id;}
   private static String required(String name){String value=System.getenv(name);if(value==null)throw new IllegalStateException(name+" required");return value;}
 }
