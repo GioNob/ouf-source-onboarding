@@ -11,7 +11,8 @@ This first executable increment contains the PostgreSQL 17 source/version workfl
 - HUMAN_USER-only confirmation and activation;
 - executable validation engine with typed findings and append-only validation evidence;
 - persistent and idempotent technical-discovery queue with lease recovery and materialized source types/fields/states;
+- mapping workspace for field classification, eligibility, semantic/property mappings and governed DRAFT generation;
 - append-only approval evidence and audit;
 - atomic ACTIVE bundle switch with historical bundle retention.
 
-It does not yet claim completion of mapping authoring, managed-file onboarding, Authorization Policy Registry, or the complete Trusted Human Surface.
+It does not yet claim completion of managed-file onboarding, Authorization Policy Registry, or the complete Trusted Human Surface.
