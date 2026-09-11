@@ -25,7 +25,7 @@ public class ConfigurationValidator {
       requireText(ex,"profileId","/extractionProfile/profileId",out); requireText(ex,"version","/extractionProfile/version",out); requireText(ex,"sourceId","/extractionProfile/sourceId",out);
       requireObject(ex,"selection","/extractionProfile/selection",out); requireObject(ex,"projection","/extractionProfile/projection",out); requireObject(ex,"sync","/extractionProfile/sync",out);
       if(ex.get("sourceId") instanceof String s && !sourceId.equals(s)) error(out,"ONB_SOURCE_BINDING_MISMATCH","/extractionProfile/sourceId","sourceId does not match the onboarding source");
-      object(ex,"runtime").ifPresent(runtime->{Object credential=runtime.get("credentialRef");if(credential instanceof String s&&!s.startsWith("secret://"))error(out,"ONB_SECRET_REF_INVALID","/extractionProfile/runtime/credentialRef","credentialRef must use secret:// and never contain a plaintext credential");});
+      object(ex,"runtime").ifPresent(runtime->{Object credential=runtime.get("credentialRef");if(credential instanceof String s&&!(s.startsWith("secret://")||s.startsWith("workload://")))error(out,"ONB_SECRET_REF_INVALID","/extractionProfile/runtime/credentialRef","credentialRef must use secret:// or workload:// and never contain a plaintext credential");});
     });
     object(configuration,"semanticMapping").ifPresent(mapping->{
       requireText(mapping,"mappingId","/semanticMapping/mappingId",out); requireObject(mapping,"sourceType","/semanticMapping/sourceType",out);
