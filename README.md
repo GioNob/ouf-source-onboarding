@@ -15,6 +15,7 @@ This first executable increment contains the PostgreSQL 17 source/version workfl
 - managed CSV/XLSX asset registration and bounded deterministic profiling without storing file blobs in PostgreSQL;
 - initial managed-file ingestion request created atomically with its onboarding draft and required before activation;
 - governed fixed-interval PULL schedules, overlap prevention and idempotent dispatch intents for Ingestion Runtime;
+- lease-based runtime handoff with claim, heartbeat, retry, terminal failure/quarantine and idempotent completion;
 - append-only approval evidence and audit;
 - atomic ACTIVE bundle switch with historical bundle retention.
 
