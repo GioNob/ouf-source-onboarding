@@ -13,10 +13,26 @@ This first executable increment contains the PostgreSQL 17 source/version workfl
 - persistent and idempotent technical-discovery queue with lease recovery and materialized source types/fields/states;
 - mapping workspace for field classification, eligibility, semantic/property mappings and governed DRAFT generation;
 - managed CSV/XLSX asset registration and bounded deterministic profiling without storing file blobs in PostgreSQL;
-- initial managed-file ingestion request created atomically with its onboarding draft and required before activation;
-- governed fixed-interval PULL schedules, overlap prevention and idempotent dispatch intents for Ingestion Runtime;
-- lease-based runtime handoff with claim, heartbeat, retry, terminal failure/quarantine and idempotent completion;
+- asynchronous, idempotent managed-file profiling jobs owned by the Onboarding control plane;
+- managed-file DRAFT generation with immutable `assetId`, `fileProfileId`, `stagingRef`, and content hash references in the runtime bundle;
+- an `INGESTION-COMPAT` attestation gate that checks consumer acceptance without waiting for data ingestion;
 - append-only approval evidence and audit;
 - atomic ACTIVE bundle switch with historical bundle retention.
 
-It does not yet claim completion of geospatial file formats, a cron-expression engine, Authorization Policy Registry, or the complete Trusted Human Surface. Onboarding emits ingestion intent; it does not execute the ETL runtime.
+Source Onboarding never owns polling, scheduling, runtime leases, ETL, or ingestion outcomes. `pollInterval` is authored here as configuration only. Ingestion Runtime consumes the exact ACTIVE bundle and owns both recurring PULL execution and the one-time ingestion of a managed CSV/XLSX file.
+
+## Conversational managed-file flow
+
+The intended MCP/agent experience is: “I want to add this CSV as an object source; each row is one object.” The agent orchestrates these capabilities:
+
+1. upload the attachment through the Gateway/object-storage capability and obtain `stagingRef`, content hash, media type, size, and retention reference;
+2. register the staged asset with `POST /api/onboarding/v1/managed-files`;
+3. request asynchronous profiling with `POST /api/onboarding/v1/managed-files/{assetId}/profile` and poll the returned job resource;
+4. present inferred columns, types, candidate keys, and the proposed “one row = one object” mapping to the human;
+5. create the governed DRAFT with `POST /api/onboarding/v1/managed-files/{assetId}/create-onboarding?profileId=...`;
+6. submit, approve, attest `INGESTION-COMPAT`, and activate the immutable bundle;
+7. let Ingestion Runtime observe the ACTIVE bundle, read the staged file once, create one canonical object per data row, and persist runtime lineage/watermarks outside this module.
+
+The AI agent may propose and drive the workflow, but approval and activation remain human-only. Request identity is derived from a validated server principal and trusted role mapping; actor identity headers are not accepted.
+
+It does not yet claim completion of geospatial file formats, the object-storage reader used by the profiling worker, Authorization Policy Registry, the Ingestion Runtime implementation, or the complete Trusted Human Surface.
