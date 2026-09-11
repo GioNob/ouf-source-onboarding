@@ -1,0 +1,22 @@
+name: Optional live source smoke
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/live-source-smoke.sh'
+      - 'fixtures/sources/world-bank-italy-population.json'
+      - '.github/workflows/live-source-smoke.yml'
+jobs:
+  world-bank:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe real public source
+        run: bash scripts/live-source-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-source-smoke-${{ github.run_id }}
+          path: evidence/live-source-smoke.json
+          if-no-files-found: warn

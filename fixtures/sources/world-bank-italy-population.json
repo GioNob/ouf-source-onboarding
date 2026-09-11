@@ -1,0 +1,11 @@
+{
+  "sourceId": "world-bank",
+  "bindingId": "population",
+  "owner": "World Bank",
+  "protocol": "REST",
+  "routeRef": "gateway://southbound/world-bank",
+  "upstreamProbe": "https://api.worldbank.org/v2/country/ITA/indicator/SP.POP.TOTL?format=json&per_page=3",
+  "credentialRef": "workload://public-anonymous",
+  "expectedType": "indicator-observation",
+  "expectedFields": ["countryiso3code", "date", "value", "indicator.id"]
+}
