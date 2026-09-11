@@ -1,0 +1,47 @@
+name: Source Onboarding module CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  java21-postgresql17:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: ouf_onboarding
+          POSTGRES_USER: ouf_onboarding
+          POSTGRES_PASSWORD: ci-only-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ouf_onboarding -d ouf_onboarding"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      OUF_ONB_DB_URL: jdbc:postgresql://127.0.0.1:5432/ouf_onboarding
+      OUF_ONB_DB_USER: ouf_onboarding
+      OUF_ONB_DB_PASSWORD: ci-only-password
+      MAVEN_OPTS: -Dmaven.wagon.http.connectionTimeout=10000 -Dmaven.wagon.http.readTimeout=30000 -Djava.net.preferIPv4Stack=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Compile, test and package
+        run: timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
+      - name: Build non-root container
+        run: |
+          docker build -t ouf-source-onboarding:${{ github.sha }} .
+          test "$(docker image inspect ouf-source-onboarding:${{ github.sha }} --format '{{.Config.User}}')" = "10003:10003"
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-onboarding-evidence-${{ github.run_id }}
+          path: target/surefire-reports/
+          if-no-files-found: warn
