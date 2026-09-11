@@ -6,7 +6,7 @@ import java.util.*;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
-@RestController @RequestMapping("/api/ths/v1/approval-challenges")
+@RestController @RequestMapping("/api/trusted-human/v1/approval-challenges")
 public class TrustedHumanApi {
   private final OnboardingService onboarding;private final TrustedActorResolver actors;
   public TrustedHumanApi(OnboardingService onboarding,TrustedActorResolver actors){this.onboarding=onboarding;this.actors=actors;}

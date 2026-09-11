@@ -1,42 +1,121 @@
 openapi: 3.1.0
 info:
-  title: OUF Trusted Human Approval Surface API
-  version: 1.0.0
-  description: Direct HUMAN_USER-only surface. It must never be projected into MCP tools, resources, prompts or results.
+  title: OUF Trusted Human Surface API
+  version: 1.1.0
+  description: HUMAN_USER-only Trusted Approval and Protected Operations workspaces. None of these operations may be projected into MCP.
 x-ouf-mcp-exposed: false
-security:
-  - bearerAuth: []
+security: [{bearerAuth: []}]
 paths:
-  /api/ths/v1/approval-challenges/{challengeId}:
+  /api/trusted-human/v1/approval-challenges/{challengeId}:
     get:
       operationId: getTrustedApprovalCard
       parameters: [{$ref: '#/components/parameters/ChallengeId'}]
-      responses:
-        '200': {description: Exact frozen configuration, hash, version and changed sections}
-  /api/ths/v1/approval-challenges/{challengeId}/confirm:
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/approval-challenges/{challengeId}/confirm:
     post:
       operationId: confirmTrustedApproval
       parameters: [{$ref: '#/components/parameters/ChallengeId'}]
-      responses:
-        '200': {description: Approval recorded}
-  /api/ths/v1/approval-challenges/{challengeId}/reject:
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/approval-challenges/{challengeId}/reject:
     post:
       operationId: rejectTrustedApproval
       parameters: [{$ref: '#/components/parameters/ChallengeId'}]
-      responses:
-        '200': {description: Rejection recorded}
-  /api/ths/v1/approval-challenges/{challengeId}/activate:
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/approval-challenges/{challengeId}/activate:
     post:
       operationId: activateTrustedApproval
       parameters: [{$ref: '#/components/parameters/ChallengeId'}]
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/logs/search:
+    post:
+      operationId: searchProtectedLogs
+      requestBody: {$ref: '#/components/requestBodies/LogSearch'}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/logs/{logRef}:
+    get:
+      operationId: readProtectedLog
+      parameters:
+        - {name: logRef, in: path, required: true, schema: {type: string, maxLength: 300}}
+        - {$ref: '#/components/parameters/Purpose'}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/logs/aggregate:
+    post:
+      operationId: aggregateProtectedLogs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/LogSearchRequest'}
+                - {type: object, required: [dimension], properties: {dimension: {type: string, enum: [service, severity, eventType, actorType]}}}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/logs/correlate:
+    post:
+      operationId: correlateProtectedLogs
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LogCorrelationRequest'}}}}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/log-exports:
+    post:
+      operationId: createProtectedLogExport
+      requestBody: {$ref: '#/components/requestBodies/LogSearch'}
+      responses: {'202': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/log-exports/{exportId}:
+    get:
+      operationId: readProtectedLogExport
+      parameters: [{$ref: '#/components/parameters/ExportId'}, {$ref: '#/components/parameters/Purpose'}]
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/log-exports/{exportId}/download:
+    post:
+      operationId: downloadProtectedLogExport
+      parameters: [{$ref: '#/components/parameters/ExportId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PurposeRequest'}}}}
       responses:
-        '200': {description: Exact approved bundle activated after compatibility and drift gates}
+        '200': {description: Governed expiring JSON export, content: {application/json: {schema: {type: string, contentMediaType: application/json}}}}
+        default: {$ref: '#/components/responses/Problem'}
 components:
   parameters:
-    ChallengeId:
-      name: challengeId
-      in: path
-      required: true
-      schema: {type: string, format: uuid}
+    ChallengeId: {name: challengeId, in: path, required: true, schema: {type: string, format: uuid}}
+    ExportId: {name: exportId, in: path, required: true, schema: {type: string, format: uuid}}
+    Purpose: {name: purpose, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 500}}
+  requestBodies:
+    LogSearch: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LogSearchRequest'}}}}
+  schemas:
+    LogSearchRequest:
+      type: object
+      required: [from, to, purpose]
+      additionalProperties: false
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        service: {type: string, maxLength: 160}
+        severity: {type: string, enum: [TRACE, DEBUG, INFO, WARN, ERROR]}
+        correlationId: {type: string, maxLength: 200}
+        eventType: {type: string, maxLength: 200}
+        limit: {type: integer, minimum: 1, maximum: 200, default: 50}
+        cursor: {type: string, maxLength: 500}
+        purpose: {type: string, minLength: 1, maxLength: 500}
+    LogCorrelationRequest:
+      type: object
+      required: [key, value, from, to, purpose]
+      additionalProperties: false
+      properties:
+        key: {type: string, enum: [correlationId]}
+        value: {type: string, minLength: 1, maxLength: 200}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        limit: {type: integer, minimum: 1, maximum: 200, default: 50}
+        purpose: {type: string, minLength: 1, maxLength: 500}
+    PurposeRequest:
+      type: object
+      required: [purpose]
+      additionalProperties: false
+      properties: {purpose: {type: string, minLength: 1, maxLength: 500}}
+    Problem:
+      type: object
+      properties: {title: {type: string}, status: {type: integer}, detail: {type: string}, code: {type: string}, correlationId: {type: string}}
+  responses:
+    JsonResponse: {description: Successful trusted-human operation, content: {application/json: {schema: {type: object}}}}
+    Problem: {description: Problem Details, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}

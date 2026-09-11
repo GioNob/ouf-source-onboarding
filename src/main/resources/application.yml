@@ -2,8 +2,8 @@ spring:
   application.name: ouf-source-onboarding
   datasource:
     url: ${OUF_ONB_DB_URL:jdbc:postgresql://127.0.0.1:5432/ouf_onboarding}
-    username: ${OUF_ONB_DB_USER:ouf_onboarding}
-    password: ${OUF_ONB_DB_PASSWORD:ouf_onboarding}
+    username: ${OUF_ONB_DB_USER}
+    password: ${OUF_ONB_DB_PASSWORD}
   flyway:
     schemas: ouf_onboarding
     default-schema: ouf_onboarding
@@ -19,3 +19,8 @@ ouf:
       lease: ${OUF_ONB_PROFILE_WORKER_LEASE:PT2M}
       retry-delay: ${OUF_ONB_PROFILE_RETRY_DELAY:PT30S}
       poll-delay-ms: ${OUF_ONB_PROFILE_POLL_DELAY_MS:1000}
+    log-export-worker:
+      id: ${OUF_ONB_LOG_EXPORT_WORKER_ID:ths-log-export}
+      lease: ${OUF_ONB_LOG_EXPORT_WORKER_LEASE:PT2M}
+      retention: ${OUF_ONB_LOG_EXPORT_RETENTION:PT1H}
+      poll-delay-ms: ${OUF_ONB_LOG_EXPORT_POLL_DELAY_MS:1000}
