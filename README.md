@@ -13,7 +13,9 @@ This first executable increment contains the PostgreSQL 17 source/version workfl
 - persistent and idempotent technical-discovery queue with lease recovery and materialized source types/fields/states;
 - mapping workspace for field classification, eligibility, semantic/property mappings and governed DRAFT generation;
 - managed CSV/XLSX asset registration and bounded deterministic profiling without storing file blobs in PostgreSQL;
+- initial managed-file ingestion request created atomically with its onboarding draft and required before activation;
+- governed fixed-interval PULL schedules, overlap prevention and idempotent dispatch intents for Ingestion Runtime;
 - append-only approval evidence and audit;
 - atomic ACTIVE bundle switch with historical bundle retention.
 
-It does not yet claim completion of geospatial file formats, Authorization Policy Registry, or the complete Trusted Human Surface.
+It does not yet claim completion of geospatial file formats, a cron-expression engine, Authorization Policy Registry, or the complete Trusted Human Surface. Onboarding emits ingestion intent; it does not execute the ETL runtime.

@@ -20,6 +20,8 @@ public class ConfigurationValidator {
       requireEnum(sync,"bootstrap",Set.of("FULL_SNAPSHOT"),"/syncProfile/bootstrap",out);
       requireEnum(sync,"incremental",Set.of("CHANGE_TOKEN","LAST_MODIFIED","MONOTONIC_ID","SNAPSHOT_DIFF","NONE"),"/syncProfile/incremental",out);
       Object page=sync.get("pageSize"); if(page instanceof Number n && (n.longValue()<1||n.longValue()>10000)) error(out,"ONB_PAGE_SIZE_INVALID","/syncProfile/pageSize","pageSize must be between 1 and 10000");
+      if(sync.get("pollInterval") instanceof String value)try{long seconds=java.time.Duration.parse(value).toSeconds();if(seconds<60||seconds>2_678_400)error(out,"ONB_POLL_INTERVAL_INVALID","/syncProfile/pollInterval","pollInterval must be between PT1M and P31D");}catch(Exception e){error(out,"ONB_POLL_INTERVAL_INVALID","/syncProfile/pollInterval","pollInterval must be an ISO-8601 duration");}
+      if(sync.get("timezone") instanceof String value)try{java.time.ZoneId.of(value);}catch(Exception e){error(out,"ONB_TIMEZONE_INVALID","/syncProfile/timezone","timezone must be an IANA zone identifier");}
     });
     object(configuration,"extractionProfile").ifPresent(ex->{
       requireText(ex,"profileId","/extractionProfile/profileId",out); requireText(ex,"version","/extractionProfile/version",out); requireText(ex,"sourceId","/extractionProfile/sourceId",out);

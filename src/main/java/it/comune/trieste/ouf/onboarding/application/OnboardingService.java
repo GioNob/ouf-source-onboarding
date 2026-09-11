@@ -12,8 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class OnboardingService {
-  private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ConfigurationValidator validator; private final Duration challengeTtl;
-  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl){this.db=db;this.json=json;this.hashes=hashes;this.validator=validator;this.challengeTtl=challengeTtl;}
+  private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ConfigurationValidator validator; private final Duration challengeTtl; private final PullSchedulerService scheduler;
+  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl,PullSchedulerService scheduler){this.db=db;this.json=json;this.hashes=hashes;this.validator=validator;this.challengeTtl=challengeTtl;this.scheduler=scheduler;}
 
   @Transactional public Map<String,Object> createSource(String id,String name,String kind,String mode,String owner,Map<String,Object> metadata,Actor actor,String correlation){
     if("INTERNAL_MANAGED".equals(kind)&&!"MANAGED".equals(mode))throw bad("ONB_SOURCE_MODE_INVALID","INTERNAL_MANAGED requires MANAGED acquisition");
@@ -78,13 +78,14 @@ public class OnboardingService {
 
   @Transactional public Map<String,Object> activate(String sourceId,UUID versionId,Actor actor,String correlation){
     if(!"HUMAN_USER".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_HUMAN_ACTIVATION_REQUIRED","Activation requires a HUMAN_USER identity");
-    Map<String,Object> v=version(sourceId,versionId);if(!"APPROVED".equals(v.get("state")))throw invalid("Version must be APPROVED");
+    Map<String,Object> v=version(sourceId,versionId);if(!"APPROVED".equals(v.get("state")))throw invalid("Version must be APPROVED");Map<String,Object> src=source(sourceId);if("MANAGED".equals(src.get("acquisition_mode"))){long pending=db.sql("select count(*) from ouf_onboarding.managed_file_ingestion where onboarding_version_id=:v and state<>'SUCCEEDED'").param("v",versionId).query(Long.class).single();if(pending>0)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_INITIAL_INGESTION_REQUIRED","Managed-file initial ingestion must succeed before activation");}
     Map<String,Object> bundle=new LinkedHashMap<>();bundle.put("bundleVersion",v.get("version"));bundle.put("source",source(sourceId));bundle.put("configuration",v.get("configuration"));bundle.put("effectiveFrom",Instant.now().toString());String checksum=hashes.of(bundle);bundle.put("checksum",checksum);
     db.sql("update ouf_onboarding.published_configuration set active=false where source_id=:s and active=true").param("s",sourceId).update();
     db.sql("update ouf_onboarding.onboarding_version set state='SUPERSEDED',lock_version=lock_version+1,updated_at=transaction_timestamp() where source_id=:s and state='ACTIVE'").param("s",sourceId).update();
     db.sql("insert into ouf_onboarding.published_configuration(publication_id,source_id,onboarding_version_id,bundle_version,bundle,checksum,active,effective_from) values(:p,:s,:v,:n,cast(:b as jsonb),:h,true,transaction_timestamp())")
       .param("p",UUID.randomUUID()).param("s",sourceId).param("v",versionId).param("n",v.get("version")).param("b",write(bundle)).param("h",checksum).update();
     db.sql("update ouf_onboarding.onboarding_version set state='ACTIVE',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and state='APPROVED'").param("v",versionId).update();
+    @SuppressWarnings("unchecked") Map<String,Object> configuration=(Map<String,Object>)v.get("configuration");@SuppressWarnings("unchecked") Map<String,Object> sync=(Map<String,Object>)configuration.get("syncProfile");if("PULL".equals(src.get("acquisition_mode"))&&sync!=null&&sync.get("pollInterval") instanceof String interval){String timezone=Objects.toString(sync.getOrDefault("timezone","UTC"));int timeout=((Number)sync.getOrDefault("timeoutSeconds",300)).intValue(),max=((Number)sync.getOrDefault("maxAttempts",5)).intValue();Duration duration=Duration.parse(interval);scheduler.materialize(sourceId,versionId,duration,timezone,timeout,max,Instant.now().plus(duration));}
     audit(sourceId,versionId,correlation,actor,"VERSION_ACTIVATED",Map.of("checksum",checksum));return activeBundle(sourceId);
   }
   public Map<String,Object> activeBundle(String sourceId){return jsonRow(db.sql("select publication_id,source_id,onboarding_version_id,bundle_version,bundle::text bundle,checksum,effective_from from ouf_onboarding.published_configuration where source_id=:s and active=true").param("s",sourceId).query().listOfRows().stream().findFirst().orElseThrow(()->missing("active bundle")),"bundle");}
