@@ -16,7 +16,8 @@ class OnboardingWorkflowRuntimeTest {
   @Autowired OnboardingService service; @Autowired JdbcClient db;
   OnboardingService.Actor human=new OnboardingService.Actor("human:test","HUMAN_USER");
   OnboardingService.Actor agent=new OnboardingService.Actor("agent:test","AI_AGENT");
-  @BeforeEach void clean(){db.sql("truncate table ouf_onboarding.audit_event,ouf_onboarding.approval_decision,ouf_onboarding.approval_challenge,ouf_onboarding.published_configuration,ouf_onboarding.onboarding_version,ouf_onboarding.source restart identity cascade").update();}
+  OnboardingService.Actor ingestion=new OnboardingService.Actor("service:ingestion","SERVICE");
+  @BeforeEach void clean(){db.sql("truncate table ouf_onboarding.audit_event,ouf_onboarding.consumer_compatibility_attestation,ouf_onboarding.approval_decision,ouf_onboarding.approval_challenge,ouf_onboarding.published_configuration,ouf_onboarding.onboarding_version,ouf_onboarding.source restart identity cascade").update();}
 
   @Test void fullHumanGovernedActivationIsAtomicAndAudited(){
     service.createSource("suap-test","SUAP test","EXTERNAL_API","PULL","Comune di Trieste",Map.of("openData",true),human,"c-1");
@@ -27,10 +28,12 @@ class OnboardingWorkflowRuntimeTest {
     var challenge=service.createChallenge("suap-test",version,agent,"c-4");
     assertThatThrownBy(()->service.confirm("suap-test",version,(UUID)challenge.get("challenge_id"),agent,"c-5","acr:agent")).hasMessageContaining("HUMAN_USER");
     var approved=service.confirm("suap-test",version,(UUID)challenge.get("challenge_id"),human,"c-6","acr:mfa");assertThat(approved.get("state")).isEqualTo("APPROVED");
+    assertThatThrownBy(()->service.activate("suap-test",version,human,"c-7")).hasMessageContaining("Ingestion Runtime");
+    service.attestIngestionCompatibility("suap-test",version,true,"rc3 bundle and extraction profile accepted",ingestion,"c-7");
     var publication=service.activate("suap-test",version,human,"c-7");assertThat(publication.get("checksum").toString()).startsWith("sha256:");
     assertThat(service.version("suap-test",version).get("state")).isEqualTo("ACTIVE");
     assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration where source_id='suap-test' and active").query(Long.class).single()).isEqualTo(1);
-    assertThat(db.sql("select event_type from ouf_onboarding.audit_event order by created_at").query(String.class).list()).containsExactly("SOURCE_CREATED","ONBOARDING_VERSION_CREATED","VERSION_VALIDATED","VERSION_SUBMITTED","APPROVAL_CHALLENGE_CREATED","VERSION_APPROVED","VERSION_ACTIVATED");
+    assertThat(db.sql("select event_type from ouf_onboarding.audit_event order by created_at").query(String.class).list()).containsExactly("SOURCE_CREATED","ONBOARDING_VERSION_CREATED","VERSION_VALIDATED","VERSION_SUBMITTED","APPROVAL_CHALLENGE_CREATED","VERSION_APPROVED","INGESTION_COMPAT_ATTESTED","VERSION_ACTIVATED");
   }
 
   @Test void staleEtagAndChallengeReplayFailClosed(){
@@ -49,7 +52,7 @@ class OnboardingWorkflowRuntimeTest {
   @Test void appendOnlyEvidenceRejectsMutation(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");UUID id=approve("s",Map.of("a",1));assertThatThrownBy(()->db.sql("update ouf_onboarding.approval_decision set actor_subject='forged' where onboarding_version_id=:v").param("v",id).update()).hasStackTraceContaining("approval_decision is append-only");}
   @Test void validationFindingsArePersistedAndBlockSubmit(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");var draft=service.createVersion("s",Map.of(),human,"c");UUID id=(UUID)draft.get("onboarding_version_id");var validation=service.validate("s",id,human,"validation-correlation");assertThat(validation.get("result")).isEqualTo("FAIL");assertThat((Long)validation.get("errorCount")).isGreaterThan(0);assertThatThrownBy(()->service.submit("s",id,0,human,"c")).hasMessageContaining("blocking validation errors");assertThat(db.sql("select count(*) from ouf_onboarding.validation_run where onboarding_version_id=:v").param("v",id).query(Long.class).single()).isEqualTo(1);}
   @Test void validationEvidenceIsAppendOnly(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");var draft=service.createVersion("s",validConfiguration("s",1),human,"c");UUID id=(UUID)draft.get("onboarding_version_id");service.validate("s",id,human,"c");assertThatThrownBy(()->db.sql("delete from ouf_onboarding.validation_run where onboarding_version_id=:v").param("v",id).update()).hasStackTraceContaining("validation_run is append-only");}
-  private UUID approve(String source,Map<String,Object> config){var v=service.createVersion(source,validConfiguration(source,config.getOrDefault("revision",1)),human,"c");UUID id=(UUID)v.get("onboarding_version_id");service.submit(source,id,0,human,"c");var ch=service.createChallenge(source,id,human,"c");service.confirm(source,id,(UUID)ch.get("challenge_id"),human,"c","acr:mfa");return id;}
+  private UUID approve(String source,Map<String,Object> config){var v=service.createVersion(source,validConfiguration(source,config.getOrDefault("revision",1)),human,"c");UUID id=(UUID)v.get("onboarding_version_id");service.submit(source,id,0,human,"c");var ch=service.createChallenge(source,id,human,"c");service.confirm(source,id,(UUID)ch.get("challenge_id"),human,"c","acr:mfa");service.attestIngestionCompatibility(source,id,true,"accepted",ingestion,"c");return id;}
   private static Map<String,Object> validConfiguration(String source,Object revision){return Map.of(
     "syncProfile",Map.of("bootstrap","FULL_SNAPSHOT","incremental","CHANGE_TOKEN","pageSize",500),
     "extractionProfile",Map.of("profileId","ep-"+source,"version",String.valueOf(revision),"sourceId",source,"selection",Map.of("types",List.of("TYPE")),"projection",Map.of("TYPE",List.of("id")),"sync",Map.of("bootstrap","FULL_SNAPSHOT","incremental","CHANGE_TOKEN"),"runtime",Map.of("credentialRef","secret://"+source)),

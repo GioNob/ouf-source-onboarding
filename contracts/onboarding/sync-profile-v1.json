@@ -36,22 +36,7 @@
       "type": [
         "string",
         "null"
-      ],
-      "description": "ISO-8601 polling interval between PT1M and P31D. Materialized by Onboarding when a PULL bundle becomes ACTIVE."
-    },
-    "timezone": {
-      "type": ["string", "null"],
-      "default": "UTC"
-    },
-    "timeoutSeconds": {
-      "type": ["integer", "null"],
-      "minimum": 1,
-      "maximum": 3600
-    },
-    "maxAttempts": {
-      "type": ["integer", "null"],
-      "minimum": 1,
-      "maximum": 10
+      ]
     },
     "watermarkRef": {
       "type": [
@@ -97,5 +82,5 @@
     "Ingestion Runtime v1.2",
     "Urban API Gateway v1.2"
   ],
-  "x-ouf-scope-control": "Onboarding owns governed schedule materialization and dispatch intent. Ingestion Runtime owns acquisition execution; Gateway owns no scheduler."
+  "x-ouf-scope-control": "No scheduler implementation, cron engine or broker is defined by this schema."
 }
