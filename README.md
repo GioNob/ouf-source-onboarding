@@ -18,6 +18,11 @@ This first executable increment contains the PostgreSQL 17 source/version workfl
 - an `INGESTION-COMPAT` attestation gate that checks consumer acceptance without waiting for data ingestion;
 - append-only approval evidence and audit;
 - atomic ACTIVE bundle switch with historical bundle retention.
+- immutable technical `SourceRuntimeProfile`, `SourceSchemaBinding`, and `RouteBinding` projections for Gateway consumption;
+- explicit historical bundle lookup without fallback to the current version;
+- schema-surveillance issues with a fail-closed activation gate for BREAKING/UNKNOWN drift;
+- strict DELTA_PATCH logical-contract validation;
+- a direct HUMAN_USER THS backend surface for exact frozen context, confirm, reject, and activate, explicitly excluded from MCP.
 
 Source Onboarding never owns polling, scheduling, runtime leases, ETL, or ingestion outcomes. `pollInterval` is authored here as configuration only. Ingestion Runtime consumes the exact ACTIVE bundle and owns both recurring PULL execution and the one-time ingestion of a managed CSV/XLSX file.
 
@@ -39,4 +44,4 @@ Authentication, principal normalization, tenant/resource authorization and polic
 
 The machine-readable MCP-facing surface is defined in `openapi/onboarding-v1.yaml`. To run the in-process profiling worker, configure `ouf.onboarding.object-store.gateway-base-url`; the adapter reads the opaque `object://` reference through the Gateway internal object-storage route and applies the registered size and content-hash checks before profiling. The worker remains disabled when that route is not configured.
 
-It does not yet claim completion of geospatial file formats, the object-storage reader used by the profiling worker, Authorization Policy Registry, the Ingestion Runtime implementation, or the complete Trusted Human Surface.
+It does not yet claim completion of geospatial file formats, Authorization Policy Registry, the Ingestion Runtime implementation, or a production browser shell for the Trusted Human Surface. The THS backend contract is executable, but production session/CSRF/CSP/step-up controls remain part of the Authorization/Gateway-bound deployment slice.

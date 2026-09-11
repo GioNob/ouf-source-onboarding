@@ -1,0 +1,42 @@
+openapi: 3.1.0
+info:
+  title: OUF Trusted Human Approval Surface API
+  version: 1.0.0
+  description: Direct HUMAN_USER-only surface. It must never be projected into MCP tools, resources, prompts or results.
+x-ouf-mcp-exposed: false
+security:
+  - bearerAuth: []
+paths:
+  /api/ths/v1/approval-challenges/{challengeId}:
+    get:
+      operationId: getTrustedApprovalCard
+      parameters: [{$ref: '#/components/parameters/ChallengeId'}]
+      responses:
+        '200': {description: Exact frozen configuration, hash, version and changed sections}
+  /api/ths/v1/approval-challenges/{challengeId}/confirm:
+    post:
+      operationId: confirmTrustedApproval
+      parameters: [{$ref: '#/components/parameters/ChallengeId'}]
+      responses:
+        '200': {description: Approval recorded}
+  /api/ths/v1/approval-challenges/{challengeId}/reject:
+    post:
+      operationId: rejectTrustedApproval
+      parameters: [{$ref: '#/components/parameters/ChallengeId'}]
+      responses:
+        '200': {description: Rejection recorded}
+  /api/ths/v1/approval-challenges/{challengeId}/activate:
+    post:
+      operationId: activateTrustedApproval
+      parameters: [{$ref: '#/components/parameters/ChallengeId'}]
+      responses:
+        '200': {description: Exact approved bundle activated after compatibility and drift gates}
+components:
+  parameters:
+    ChallengeId:
+      name: challengeId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}

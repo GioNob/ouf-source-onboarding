@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.onboarding.api;
 
 import it.comune.trieste.ouf.onboarding.application.OnboardingService;
+import it.comune.trieste.ouf.onboarding.application.RuntimeProjectionService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.net.URI;
@@ -11,7 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController @RequestMapping("/api/onboarding/v1")
 public class OnboardingApi {
-  private final OnboardingService service; private final TrustedActorResolver actors; public OnboardingApi(OnboardingService service,TrustedActorResolver actors){this.service=service;this.actors=actors;}
+  private final OnboardingService service; private final RuntimeProjectionService projections; private final TrustedActorResolver actors; public OnboardingApi(OnboardingService service,RuntimeProjectionService projections,TrustedActorResolver actors){this.service=service;this.projections=projections;this.actors=actors;}
   public record SourceRequest(@NotBlank String sourceId,@NotBlank String name,@NotBlank String sourceKind,@NotBlank String acquisitionMode,@NotBlank String owner,Map<String,Object> metadata){}
   public record VersionRequest(Map<String,Object> configuration){}
   public record CompatibilityRequest(boolean compatible,@NotBlank String detail){}
@@ -29,6 +30,9 @@ public class OnboardingApi {
   @PostMapping("/sources/{sourceId}/onboarding-versions/{versionId}/activate") Map<String,Object> activate(@PathVariable String sourceId,@PathVariable UUID versionId,@RequestHeader HttpHeaders h,HttpServletRequest request){return service.activate(sourceId,versionId,actors.actor(request),correlation(h));}
   @PostMapping("/sources/{sourceId}/onboarding-versions/{versionId}/compatibility/ingestion-runtime") ResponseEntity<Map<String,Object>> attestCompatibility(@PathVariable String sourceId,@PathVariable UUID versionId,@Valid @RequestBody CompatibilityRequest body,@RequestHeader HttpHeaders h,HttpServletRequest request){return ResponseEntity.status(HttpStatus.CREATED).body(service.attestIngestionCompatibility(sourceId,versionId,body.compatible(),body.detail(),actors.actor(request),correlation(h)));}
   @GetMapping("/runtime/sources/{sourceId}/active-bundle") Map<String,Object> active(@PathVariable String sourceId){return service.activeBundle(sourceId);}
+  @GetMapping("/runtime/sources/{sourceId}/bundle-history") List<Map<String,Object>> history(@PathVariable String sourceId){return service.bundleHistory(sourceId);}
+  @GetMapping("/runtime/sources/{sourceId}/bundles/{versionId}") Map<String,Object> historical(@PathVariable String sourceId,@PathVariable UUID versionId){return service.historicalBundle(sourceId,versionId);}
+  @GetMapping("/runtime/sources/{sourceId}/publications/{publicationId}/gateway-projections") List<Map<String,Object>> projections(@PathVariable String sourceId,@PathVariable UUID publicationId){return projections.projections(sourceId,publicationId);}
 
   private static String correlation(HttpHeaders h){return Optional.ofNullable(h.getFirst("X-Correlation-ID")).filter(x->!x.isBlank()).orElseGet(()->UUID.randomUUID().toString());}
   private static String etag(String kind,Object lock){return "W/\""+kind+":"+lock+"\"";}
