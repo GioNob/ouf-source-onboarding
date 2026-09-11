@@ -21,7 +21,7 @@ public class OnboardingService {
       .param("i",id).param("n",name).param("k",kind).param("m",mode).param("o",owner).param("x",write(metadata)).update();
     audit(id,null,correlation,actor,"SOURCE_CREATED",Map.of("sourceKind",kind)); return source(id);
   }
-  public Map<String,Object> source(String id){return jsonRow(db.sql("select source_id,name,source_kind,acquisition_mode,status,owner_ref,metadata::text metadata,lock_version,created_at,updated_at from ouf_onboarding.source where source_id=:i").param("i",id).query().optional().orElseThrow(()->missing("source")),"metadata");}
+  public Map<String,Object> source(String id){return jsonRow(db.sql("select source_id,name,source_kind,acquisition_mode,status,owner_ref,metadata::text metadata,lock_version,created_at,updated_at from ouf_onboarding.source where source_id=:i").param("i",id).query().listOfRows().stream().findFirst().orElseThrow(()->missing("source")),"metadata");}
   public List<Map<String,Object>> sources(){return db.sql("select source_id,name,source_kind,acquisition_mode,status,owner_ref,metadata::text metadata,lock_version,created_at,updated_at from ouf_onboarding.source order by source_id").query().listOfRows().stream().map(x->jsonRow(x,"metadata")).toList();}
 
   @Transactional public Map<String,Object> createVersion(String sourceId,Map<String,Object> configuration,Actor actor,String correlation){
@@ -31,7 +31,7 @@ public class OnboardingService {
       .param("i",id).param("s",sourceId).param("v",version).param("c",write(configuration)).update();
     audit(sourceId,id,correlation,actor,"ONBOARDING_VERSION_CREATED",Map.of("version",version)); return version(sourceId,id);
   }
-  public Map<String,Object> version(String sourceId,UUID id){return jsonRow(db.sql("select onboarding_version_id,source_id,version,state,lock_version,configuration::text configuration,configuration_hash,frozen_at,created_at,updated_at from ouf_onboarding.onboarding_version where source_id=:s and onboarding_version_id=:i").param("s",sourceId).param("i",id).query().optional().orElseThrow(()->missing("version")),"configuration");}
+  public Map<String,Object> version(String sourceId,UUID id){return jsonRow(db.sql("select onboarding_version_id,source_id,version,state,lock_version,configuration::text configuration,configuration_hash,frozen_at,created_at,updated_at from ouf_onboarding.onboarding_version where source_id=:s and onboarding_version_id=:i").param("s",sourceId).param("i",id).query().listOfRows().stream().findFirst().orElseThrow(()->missing("version")),"configuration");}
 
   @Transactional public Map<String,Object> patchVersion(String sourceId,UUID id,long expected,Map<String,Object> configuration,Actor actor,String correlation){
     int rows=db.sql("update ouf_onboarding.onboarding_version set configuration=cast(:c as jsonb),lock_version=lock_version+1,updated_at=transaction_timestamp() where source_id=:s and onboarding_version_id=:i and state='DRAFT' and lock_version=:l")
@@ -79,7 +79,7 @@ public class OnboardingService {
     db.sql("update ouf_onboarding.onboarding_version set state='ACTIVE',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and state='APPROVED'").param("v",versionId).update();
     audit(sourceId,versionId,correlation,actor,"VERSION_ACTIVATED",Map.of("checksum",checksum));return activeBundle(sourceId);
   }
-  public Map<String,Object> activeBundle(String sourceId){return jsonRow(db.sql("select publication_id,source_id,onboarding_version_id,bundle_version,bundle::text bundle,checksum,effective_from from ouf_onboarding.published_configuration where source_id=:s and active=true").param("s",sourceId).query().optional().orElseThrow(()->missing("active bundle")),"bundle");}
+  public Map<String,Object> activeBundle(String sourceId){return jsonRow(db.sql("select publication_id,source_id,onboarding_version_id,bundle_version,bundle::text bundle,checksum,effective_from from ouf_onboarding.published_configuration where source_id=:s and active=true").param("s",sourceId).query().listOfRows().stream().findFirst().orElseThrow(()->missing("active bundle")),"bundle");}
 
   private void audit(String source,UUID version,String correlation,Actor actor,String event,Object payload){db.sql("insert into ouf_onboarding.audit_event(audit_event_id,source_id,onboarding_version_id,correlation_id,actor_subject,actor_type,event_type,payload_summary) values(:i,:s,:v,:c,:a,:t,:e,cast(:p as jsonb))").param("i",UUID.randomUUID()).param("s",source).param("v",version).param("c",correlation).param("a",actor.subject()).param("t",actor.type()).param("e",event).param("p",write(payload)).update();}
   private String write(Object value){try{return json.writeValueAsString(value==null?Map.of():value);}catch(Exception e){throw bad("ONB_JSON_INVALID",e.getMessage());}}
