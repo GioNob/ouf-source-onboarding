@@ -1,0 +1,278 @@
+openapi: 3.1.0
+info:
+  title: OUF Source Onboarding API
+  version: 1.0.0
+  description: Managed-file onboarding control-plane capabilities. Runtime ingestion is explicitly outside this API.
+servers:
+  - url: /api/onboarding/v1
+security:
+  - bearerAuth: []
+paths:
+  /managed-files:
+    post:
+      operationId: registerManagedFile
+      summary: Register a file already uploaded to governed staging
+      x-ouf-mcp-capability: ouf.managed-source.file.upload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterManagedFileRequest'
+      responses:
+        '201':
+          description: ManagedFileAsset registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedFileAsset'
+        default:
+          $ref: '#/components/responses/Problem'
+  /managed-files/{assetId}/profile:
+    post:
+      operationId: requestManagedFileProfile
+      summary: Queue deterministic profiling
+      x-ouf-mcp-capability: ouf.managed-source.file.profile
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '202':
+          description: Profiling job accepted
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileProfileJob'
+        default:
+          $ref: '#/components/responses/Problem'
+  /managed-files/{assetId}/profile-jobs/{jobId}:
+    get:
+      operationId: getManagedFileProfileJob
+      summary: Get profiling job state
+      x-ouf-mcp-capability: ouf.managed-source.file.profile
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current profiling job state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileProfileJob'
+        default:
+          $ref: '#/components/responses/Problem'
+  /managed-files/{assetId}/profiles/{profileId}:
+    get:
+      operationId: getManagedFileProfile
+      summary: Get immutable technical profile
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - $ref: '#/components/parameters/ProfileId'
+      responses:
+        '200':
+          description: Immutable FileProfile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileProfile'
+        default:
+          $ref: '#/components/responses/Problem'
+  /managed-files/{assetId}/profiles/{profileId}/preview:
+    get:
+      operationId: previewManagedFileOnboarding
+      summary: Preview schema, redacted sample, candidate keys and row-object proposal
+      x-ouf-mcp-capability: ouf.managed-source.preview
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - $ref: '#/components/parameters/ProfileId'
+      responses:
+        '200':
+          description: Governed preview safe for an agent or UI
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedFilePreview'
+        default:
+          $ref: '#/components/responses/Problem'
+  /managed-files/{assetId}/create-onboarding:
+    post:
+      operationId: createManagedFileOnboarding
+      summary: Create an INTERNAL_MANAGED source and DRAFT configuration
+      x-ouf-mcp-capability: ouf.managed-source.onboarding.create
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - name: profileId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateManagedFileOnboardingRequest'
+      responses:
+        '201':
+          description: Governed onboarding DRAFT created; no ingestion has started
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: '#/components/responses/Problem'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    AssetId:
+      name: assetId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ProfileId:
+      name: profileId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Problem:
+      description: RFC 9457 problem response
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            required: [title, status, detail]
+            properties:
+              title: {type: string}
+              status: {type: integer}
+              detail: {type: string}
+              code: {type: string}
+              correlationId: {type: string}
+  schemas:
+    RegisterManagedFileRequest:
+      type: object
+      required: [stagingRef, contentHash, mediaType, sizeBytes, retentionRef]
+      properties:
+        sourceId: {type: [string, 'null']}
+        stagingRef: {type: string, pattern: '^object://'}
+        contentHash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        mediaType:
+          type: string
+          enum: [text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet]
+        sizeBytes: {type: integer, minimum: 1, maximum: 52428800}
+        retentionRef: {type: string, minLength: 1}
+    ManagedFileAsset:
+      type: object
+      required: [asset_id, staging_ref, content_hash, media_type, size_bytes, status]
+      properties:
+        asset_id: {type: string, format: uuid}
+        source_id: {type: [string, 'null']}
+        staging_ref: {type: string}
+        content_hash: {type: string}
+        media_type: {type: string}
+        size_bytes: {type: integer}
+        status: {type: string, enum: [STAGED, PROFILED, QUARANTINED]}
+      additionalProperties: true
+    FileProfileJob:
+      type: object
+      required: [job_id, asset_id, state, attempts]
+      properties:
+        job_id: {type: string, format: uuid}
+        asset_id: {type: string, format: uuid}
+        state: {type: string, enum: [READY, RUNNING, RETRY_WAIT, SUCCEEDED, FAILED, CANCELLED]}
+        attempts: {type: integer, minimum: 0}
+        profile_id: {type: [string, 'null'], format: uuid}
+        error_code: {type: [string, 'null']}
+      additionalProperties: true
+    ColumnProfile:
+      type: object
+      required: [name, dataType, nullable, distinctValues]
+      properties:
+        name: {type: string}
+        dataType: {type: string, enum: [STRING, LONG, DECIMAL, BOOLEAN, DATE]}
+        nullable: {type: boolean}
+        distinctValues: {type: integer, minimum: 0}
+    FileProfile:
+      type: object
+      required: [profile_id, asset_id, version, format, inferred_schema, candidate_keys, redacted_sample]
+      properties:
+        profile_id: {type: string, format: uuid}
+        asset_id: {type: string, format: uuid}
+        version: {type: integer, minimum: 1}
+        format: {type: string, enum: [CSV, XLSX]}
+        metadata: {type: object, additionalProperties: true}
+        inferred_schema:
+          type: array
+          items: {$ref: '#/components/schemas/ColumnProfile'}
+        candidate_keys:
+          type: array
+          items: {type: string}
+          uniqueItems: true
+        redacted_sample:
+          type: array
+          maxItems: 5
+          items: {type: object, additionalProperties: {type: string}}
+        sample_ref: {type: string}
+      additionalProperties: true
+    ManagedFilePreview:
+      type: object
+      required: [assetId, profileId, columns, candidateKeys, redactedSample, recordModel, identityProposal, proposalStatus]
+      properties:
+        assetId: {type: string, format: uuid}
+        profileId: {type: string, format: uuid}
+        columns:
+          type: array
+          items: {$ref: '#/components/schemas/ColumnProfile'}
+        candidateKeys:
+          type: array
+          items: {type: string}
+        redactedSample:
+          type: array
+          maxItems: 5
+          items: {type: object, additionalProperties: {type: string}}
+        recordModel: {const: ONE_ROW_ONE_SOURCE_OBJECT}
+        identityProposal: {type: object, additionalProperties: true}
+        proposalStatus: {const: PENDING_HUMAN_REVIEW}
+      additionalProperties: true
+    CreateManagedFileOnboardingRequest:
+      type: object
+      required: [sourceId, name, owner, targetClassIri, semanticRefs]
+      properties:
+        sourceId: {type: string, minLength: 1}
+        name: {type: string, minLength: 1}
+        owner: {type: string, minLength: 1}
+        targetClassIri: {type: string, minLength: 1}
+        semanticRefs:
+          type: array
+          minItems: 1
+          items: {type: string}
+        sourceObjectKeyFields:
+          type: array
+          items: {type: string}
+          uniqueItems: true
+      additionalProperties: false

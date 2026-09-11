@@ -11,4 +11,11 @@ spring:
 management:
   endpoints.web.exposure.include: health,info
   endpoint.health.probes.enabled: true
-ouf.onboarding.approval-challenge-ttl: PT10M
+ouf:
+  onboarding:
+    approval-challenge-ttl: PT10M
+    profile-worker:
+      id: ${OUF_ONB_PROFILE_WORKER_ID:onboarding-profiler}
+      lease: ${OUF_ONB_PROFILE_WORKER_LEASE:PT2M}
+      retry-delay: ${OUF_ONB_PROFILE_RETRY_DELAY:PT30S}
+      poll-delay-ms: ${OUF_ONB_PROFILE_POLL_DELAY_MS:1000}
