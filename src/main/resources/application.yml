@@ -9,7 +9,7 @@ spring:
     default-schema: ouf_onboarding
     create-schemas: true
 management:
-  endpoints.web.exposure.include: health,info
+  endpoints.web.exposure.include: health,info,metrics,prometheus
   endpoint.health.probes.enabled: true
 ouf:
   onboarding:

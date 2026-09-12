@@ -8,6 +8,33 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /sources:
+    get:
+      operationId: listSources
+      x-ouf-mcp-capability: ouf.source.list
+      parameters: [{name: after, in: query, required: false, schema: {type: string}}, {name: limit, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}]
+      responses: {'200': {description: Cursor-ordered source page}, default: {$ref: '#/components/responses/Problem'}}
+    post:
+      operationId: createSource
+      x-ouf-mcp-capability: ouf.source.create
+      responses: {'201': {description: Source created}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}:
+    get:
+      operationId: getSource
+      x-ouf-mcp-capability: ouf.source.get
+      parameters: [{$ref: '#/components/parameters/SourceId'}]
+      responses: {'200': {description: Source detail}, default: {$ref: '#/components/responses/Problem'}}
+    patch:
+      operationId: updateSource
+      x-ouf-mcp-capability: ouf.source.update
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {name: If-Match, in: header, required: true, schema: {type: string}}]
+      responses: {'200': {description: Mutable source metadata updated}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions:
+    post:
+      operationId: createOnboardingVersion
+      x-ouf-mcp-capability: ouf.source-onboarding.version.create
+      parameters: [{$ref: '#/components/parameters/SourceId'}]
+      responses: {'201': {description: DRAFT created}, default: {$ref: '#/components/responses/Problem'}}
   /managed-files:
     post:
       operationId: registerManagedFile
@@ -149,6 +176,58 @@ paths:
       responses:
         '200': {description: Current immutable or draft version state}
         default: {$ref: '#/components/responses/Problem'}
+    put:
+      operationId: updateOnboardingDraft
+      x-ouf-mcp-capability: ouf.source-onboarding.version.update
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}, {name: If-Match, in: header, required: true, schema: {type: string}}]
+      responses: {'200': {description: DRAFT updated}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions/{versionId}/clone:
+    post:
+      operationId: cloneOnboardingVersion
+      x-ouf-mcp-capability: ouf.source-onboarding.version.clone
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
+      responses: {'201': {description: DRAFT cloned from an immutable version}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions/{versionId}/diff:
+    get:
+      operationId: diffOnboardingVersion
+      x-ouf-mcp-capability: ouf.source-onboarding.version.diff
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
+      responses: {'200': {description: Structured diff against parent or latest active version}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions/{versionId}/extraction-profile/build:
+    post:
+      operationId: buildExtractionProfile
+      x-ouf-mcp-capability: ouf.source-onboarding.extraction-profile.build
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
+      responses: {'200': {description: Deterministic extraction profile projection}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions/{versionId}/semantic-gaps:
+    get:
+      operationId: listSemanticGaps
+      x-ouf-mcp-capability: ouf.source-onboarding.semantic-gap.read
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
+      responses: {'200': {description: Semantic gaps for the DRAFT}, default: {$ref: '#/components/responses/Problem'}}
+    post:
+      operationId: createSemanticGap
+      x-ouf-mcp-capability: ouf.source-onboarding.semantic-gap.create
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
+      responses: {'201': {description: Semantic gap registered}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions/{versionId}/semantic-gaps/{gapId}/search:
+    post:
+      operationId: requestSemanticDiscovery
+      x-ouf-mcp-capability: ouf.semantic.discovery.request
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}, {$ref: '#/components/parameters/GapId'}]
+      responses: {'202': {description: Semantic Registry handoff recorded}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions/{versionId}/semantic-gaps/{gapId}/candidates:
+    post:
+      operationId: reportSemanticCandidates
+      x-ouf-internal-capability: ouf.semantic.discovery.result.report
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}, {$ref: '#/components/parameters/GapId'}]
+      responses: {'200': {description: Registry-owned candidates recorded}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions/{versionId}/semantic-gaps/{gapId}/select-candidate:
+    post:
+      operationId: selectSemanticCandidate
+      x-ouf-mcp-capability: ouf.source-onboarding.semantic-candidate.select
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}, {$ref: '#/components/parameters/GapId'}]
+      responses: {'200': {description: Candidate selected without semantic adoption}, default: {$ref: '#/components/responses/Problem'}}
   /sources/{sourceId}/onboarding-versions/{versionId}/submit:
     post:
       operationId: submitOnboardingVersion
@@ -216,6 +295,11 @@ components:
       schema: {type: string, minLength: 1}
     VersionId:
       name: versionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    GapId:
+      name: gapId
       in: path
       required: true
       schema: {type: string, format: uuid}

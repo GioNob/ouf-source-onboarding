@@ -23,6 +23,9 @@ This first executable increment contains the PostgreSQL 17 source/version workfl
 - schema-surveillance issues with a fail-closed activation gate for BREAKING/UNKNOWN drift;
 - strict DELTA_PATCH logical-contract validation;
 - a direct HUMAN_USER THS backend surface for exact frozen context, confirm, reject, and activate, explicitly excluded from MCP.
+- a distinct `/api/trusted-human/v1` Protected Operations backend for typed log search/read, deterministic aggregate/correlation, server-side redaction, access audit, and governed asynchronous export/download;
+- source update/list pagination, version clone/diff, explicit extraction-profile build, and a semantic-gap/candidate workflow that preserves Semantic Registry authority;
+- Prometheus operational gauges for active sources, pending reviews, job backlog, and terminal job failures.
 
 Source Onboarding never owns polling, scheduling, runtime leases, ETL, or ingestion outcomes. `pollInterval` is authored here as configuration only. Ingestion Runtime consumes the exact ACTIVE bundle and owns both recurring PULL execution and the one-time ingestion of a managed CSV/XLSX file.
 
@@ -42,6 +45,6 @@ The AI agent may propose and drive the workflow, but approval and activation rem
 
 Authentication, principal normalization, tenant/resource authorization and policy decisions are owned by the OUF Authorization module. Onboarding consumes only the trusted server principal, roles, authentication-context reference and `ouf.authorizedCapabilities` request context produced by that integration; it does not validate JWTs or own IAM policy. Domain guards remain fail-closed, including the dedicated `ouf.ingestion.configuration.attest` capability required for compatibility attestation.
 
-The machine-readable MCP-facing surface is defined in `openapi/onboarding-v1.yaml`. To run the in-process profiling worker, configure `ouf.onboarding.object-store.gateway-base-url`; the adapter reads the opaque `object://` reference through the Gateway internal object-storage route and applies the registered size and content-hash checks before profiling. The worker remains disabled when that route is not configured.
+The machine-readable MCP-facing surface is defined in `openapi/onboarding-v1.yaml`; the non-MCP trusted-human contract is `openapi/ths-v1.yaml`. Protected log operations require HUMAN_USER plus Authorization-owned capabilities and a trusted authorization context on every request. The built-in typed adapter exposes the module's append-only audit stream; production environments add the shared log-store adapter behind the same interface. To run the in-process profiling worker, configure `ouf.onboarding.object-store.gateway-base-url`; the adapter reads the opaque `object://` reference through the Gateway internal object-storage route and applies the registered size and content-hash checks before profiling. The worker remains disabled when that route is not configured.
 
-It does not yet claim completion of geospatial file formats, Authorization Policy Registry, the Ingestion Runtime implementation, or a production browser shell for the Trusted Human Surface. The THS backend contract is executable, but production session/CSRF/CSP/step-up controls remain part of the Authorization/Gateway-bound deployment slice.
+It does not claim ownership of geospatial runtime ingestion, Authorization Policy Registry, the Ingestion Runtime implementation, the shared log store, or a production browser shell. Production IAM/session/CSRF/CSP/step-up controls and concrete Gateway/log-store/object-store routes remain environment bindings owned by Authorization, Gateway and platform operations.
