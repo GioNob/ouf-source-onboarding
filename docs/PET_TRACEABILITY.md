@@ -24,6 +24,10 @@ Status is evidence-based: **IMPLEMENTED** requires executable code plus tests or
 | Schema surveillance and activation gate | IMPLEMENTED | V10, `SchemaSurveillanceService` | blocking/resolution test |
 | Semantic gap and candidate selection | IMPLEMENTED | V12, `SemanticGapService` | `SemanticGapRuntimeTest` |
 | Semantic adoption/publication authority | DELEGATED — Semantic Model/Registry | service capability-gated candidate callback | cross-module E2E |
+| Schema-only object-type inspection and field extraction/access classification | IMPLEMENTED | V14, `DiscoveryService`, `MappingService`, managed-file field decisions | discovery, mapping and managed-file runtime tests |
+| Ontology and controlled-vocabulary assignment | IMPLEMENTED | pinned type semantic refs plus property-level vocabulary id/version/value-map references | mapping and managed-file runtime tests; Registry lookup remains cross-module |
+| Relationship resolution policy including `QUARANTINE_RELATION` | IMPLEMENTED (CONTROL PLANE) | V4 draft persistence, mapping list API and publication in immutable bundle | `MappingRuntimeTest` |
+| Relationship-instance quarantine for `NO_MATCH`/`MULTIPLE_MATCHES` | DELEGATED — Object Resolution/Ingestion Runtime | Onboarding publishes `onNoMatch`/`onMultipleMatches`; it never sees or resolves runtime instances | cross-module E2E required |
 | rc3 frozen contract compatibility | IMPLEMENTED | pinned contract copies and SHA manifest | `verify-contract-freeze.sh` in CI |
 | Metrics and health probes | IMPLEMENTED | Actuator/Prometheus and `OnboardingMetrics` | application context and CI package |
 | Production backup/restore, SLO alerting and NetworkPolicy | DELEGATED — platform operations | module exposes health/metrics | deployment acceptance/runbook exercise |

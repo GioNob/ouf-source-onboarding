@@ -267,6 +267,42 @@ paths:
                   trustedApprovalRef: {type: string, pattern: '^ths://'}
                 additionalProperties: true
         default: {$ref: '#/components/responses/Problem'}
+  /sources/{sourceId}/types:
+    get:
+      operationId: listDiscoveredObjectTypes
+      x-ouf-mcp-capability: source.discovery.type.list
+      parameters: [{$ref: '#/components/parameters/SourceId'}]
+      responses: {'200': {description: Discovered object types and schema references}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/types/{typeCode}/fields:
+    get:
+      operationId: listDiscoveredTypeFields
+      x-ouf-mcp-capability: source.discovery.schema.read
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {name: typeCode, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: SCHEMA_ONLY field metadata without instances}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/types/{typeCode}/mapping:
+    get:
+      operationId: readObjectTypeMappingWorkspace
+      x-ouf-mcp-capability: source.mapping.read
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {name: typeCode, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Incremental mapping workspace}, default: {$ref: '#/components/responses/Problem'}}
+    post:
+      operationId: initializeObjectTypeMappingWorkspace
+      x-ouf-mcp-capability: source.mapping.initialize
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {name: typeCode, in: path, required: true, schema: {type: string}}]
+      responses: {'201': {description: Idempotently initialized workspace}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/types/{typeCode}/mapping/fields/{fieldName}:
+    put:
+      operationId: configureObjectTypeField
+      x-ouf-mcp-capability: source.field.mapping.configure
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {name: typeCode, in: path, required: true, schema: {type: string}}, {name: fieldName, in: path, required: true, schema: {type: string}}, {name: If-Match, in: header, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/FieldMappingDecision'}}}}
+      responses: {'200': {description: Extraction, access and semantic field decision persisted and audited}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/types/{typeCode}/mapping/relationships:
+    get:
+      operationId: listRelationshipMappings
+      x-ouf-mcp-capability: source.relationship.mapping.list
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {name: typeCode, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Relationship mapping and runtime resolution policies}, default: {$ref: '#/components/responses/Problem'}}
 components:
   securitySchemes:
     bearerAuth:
@@ -426,4 +462,32 @@ components:
           type: array
           items: {type: string}
           uniqueItems: true
+        fields:
+          type: array
+          items: {$ref: '#/components/schemas/FieldDecision'}
+      additionalProperties: false
+    FieldDecision:
+      type: object
+      required: [fieldName, extractionDecision, dataAccessLabel]
+      properties:
+        fieldName: {type: string, minLength: 1}
+        extractionDecision: {type: string, enum: [INCLUDE, EXCLUDE]}
+        dataAccessLabel: {type: string, enum: [OPEN, ANONYMOUS, PERSONAL, SENSITIVE, RESTRICTED]}
+        targetPropertyIri: {type: [string, 'null']}
+        transform: {type: [string, 'null']}
+        vocabularyId: {type: [string, 'null']}
+        vocabularyVersion: {type: [string, 'null']}
+        valueMapRef: {type: [string, 'null']}
+      additionalProperties: false
+    FieldMappingDecision:
+      type: object
+      required: [extractionDecision, dataAccessLabel]
+      properties:
+        extractionDecision: {type: string, enum: [INCLUDE, EXCLUDE]}
+        dataAccessLabel: {type: string, enum: [OPEN, ANONYMOUS, PERSONAL, SENSITIVE, RESTRICTED]}
+        targetPropertyIri: {type: [string, 'null']}
+        transform: {type: [string, 'null']}
+        vocabularyId: {type: [string, 'null']}
+        vocabularyVersion: {type: [string, 'null']}
+        valueMapRef: {type: [string, 'null']}
       additionalProperties: false

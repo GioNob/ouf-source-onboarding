@@ -26,7 +26,7 @@ public class PublishedBundleCompiler {
     List<String> semanticRefs=listOfStrings(semantic.get("semanticRefs"));out.put("semanticRefs",semanticRefs);out.put("semanticMapping",semantic);
     Map<String,Object> sourceType=object(semantic,"sourceType");String typeCode=text(sourceType,"typeCode");
     String schemaRef=Objects.toString(template.get("schemaRef"),"onboarding://sources/"+sourceId+"/schemas/"+typeCode);
-    out.put("objectTypes",List.of(Map.of("typeCode",typeCode,"schemaRef",schemaRef,"semanticMappingRef","onboarding://semantic-mappings/"+text(semantic,"mappingId"))));
+    Map<String,Object> objectType=new LinkedHashMap<>();objectType.put("typeCode",typeCode);objectType.put("schemaRef",schemaRef);objectType.put("semanticMappingRef","onboarding://semantic-mappings/"+text(semantic,"mappingId"));if(configuration.get("relationshipMappings") instanceof List<?> relationships)objectType.put("relationshipMappingRefs",relationships.stream().filter(Map.class::isInstance).map(Map.class::cast).map(m->String.valueOf(m.get("mappingId"))).toList());out.put("objectTypes",List.of(objectType));
     out.put("createdFromOnboardingVersion",versionId.toString());out.put("effectiveFrom",Instant.now().toString());out.put("activatedAt",Instant.now().toString());
     out.put("configurationHash",configurationHash);out.put("status","ACTIVE");
     out.put("checksum",hashes.of(out));validate(out);return Collections.unmodifiableMap(out);
