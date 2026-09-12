@@ -18,6 +18,7 @@ Status is evidence-based: **IMPLEMENTED** requires executable code plus tests or
 | IAM, tenant/resource authorization and policy decisions | DELEGATED — Authorization | trusted principal, capabilities and authorization-context consumer | integration/E2E suite |
 | Gateway token validation, rate limiting and governed routing | DELEGATED — Urban API Gateway | opaque route/object references | integration/E2E suite |
 | Managed CSV/XLSX staging, profiling and one-row/one-object configuration | IMPLEMENTED | V5/V7–V9, managed-file services | managed-file tests |
+| Managed-file intake quarantine and remediation | IMPLEMENTED | V13, `ManagedFileService`, human-only quarantine API | runtime and THS contract tests |
 | One-time file ingestion and recurring PULL execution | DELEGATED — Ingestion Runtime | immutable ACTIVE bundle and compatibility attestation | cross-module E2E |
 | Runtime projections for Gateway | IMPLEMENTED | V10, `RuntimeProjectionService` | workflow projection test |
 | Schema surveillance and activation gate | IMPLEMENTED | V10, `SchemaSurveillanceService` | blocking/resolution test |

@@ -6,6 +6,26 @@ info:
 x-ouf-mcp-exposed: false
 security: [{bearerAuth: []}]
 paths:
+  /api/trusted-human/v1/managed-file-quarantine:
+    get:
+      operationId: searchManagedFileQuarantine
+      parameters: [{name: state, in: query, required: false, schema: {type: string, enum: [OPEN, RELEASED, REJECTED], default: OPEN}}]
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/managed-file-quarantine/{id}:
+    get:
+      operationId: readManagedFileQuarantine
+      parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/managed-file-quarantine/{id}/release:
+    post:
+      operationId: releaseManagedFileQuarantine
+      parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/managed-file-quarantine/{id}/reject:
+    post:
+      operationId: rejectManagedFileQuarantine
+      parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
   /api/trusted-human/v1/approval-challenges/{challengeId}:
     get:
       operationId: getTrustedApprovalCard

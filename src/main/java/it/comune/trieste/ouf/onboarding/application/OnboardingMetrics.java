@@ -13,6 +13,7 @@ public class OnboardingMetrics implements MeterBinder {
     Gauge.builder("ouf_onboarding_pending_reviews",this,x->count("select count(*) from ouf_onboarding.onboarding_version where state='IN_REVIEW'")).description("Versions waiting for human review").register(registry);
     Gauge.builder("ouf_onboarding_job_backlog",this,x->count("select (select count(*) from ouf_onboarding.file_profile_job where state in ('READY','RETRY_WAIT'))+(select count(*) from ouf_onboarding.protected_log_export_job where state in ('READY','RETRY_WAIT'))")).description("Ready or retry-wait onboarding jobs").register(registry);
     Gauge.builder("ouf_onboarding_failed_jobs",this,x->count("select (select count(*) from ouf_onboarding.file_profile_job where state='FAILED')+(select count(*) from ouf_onboarding.protected_log_export_job where state='FAILED')")).description("Terminally failed onboarding jobs").register(registry);
+    Gauge.builder("ouf_onboarding_managed_file_quarantine_open",this,x->count("select count(*) from ouf_onboarding.managed_file_quarantine where state='OPEN'")).description("Managed-file intake items awaiting governed remediation").register(registry);
   }
   private double count(String sql){try{return db.sql(sql).query(Long.class).single().doubleValue();}catch(Exception ignored){return Double.NaN;}}
 }
