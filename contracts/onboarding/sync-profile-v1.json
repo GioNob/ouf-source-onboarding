@@ -11,76 +11,37 @@
   "properties": {
     "bootstrap": {
       "type": "string",
-      "enum": [
-        "FULL_SNAPSHOT"
-      ]
+      "enum": ["FULL_SNAPSHOT"]
     },
     "incremental": {
       "type": "string",
-      "enum": [
-        "CHANGE_TOKEN",
-        "LAST_MODIFIED",
-        "MONOTONIC_ID",
-        "SNAPSHOT_DIFF",
-        "NONE"
-      ]
+      "enum": ["CHANGE_TOKEN", "LAST_MODIFIED", "MONOTONIC_ID", "SNAPSHOT_DIFF", "NONE"]
     },
-    "pageSize": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "minimum": 1
-    },
-    "pollInterval": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "watermarkRef": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "changeTokenRef": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "retryPolicyRef": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "checkpointing": {
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "deletionDetection": {
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "concurrencyLimits": {
-      "type": [
-        "object",
-        "null"
-      ]
+    "pageSize": {"type": ["integer", "null"], "minimum": 1},
+    "pollInterval": {"type": ["string", "null"]},
+    "watermarkRef": {"type": ["string", "null"]},
+    "changeTokenRef": {"type": ["string", "null"]},
+    "retryPolicyRef": {"type": ["string", "null"]},
+    "checkpointing": {"type": ["object", "null"]},
+    "deletionDetection": {"type": ["object", "null"]},
+    "concurrencyLimits": {"type": ["object", "null"]},
+    "operationalPolicy": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "timeZone": {"type": "string", "minLength": 1, "maxLength": 64},
+        "misfireToleranceSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "sourceTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+        "maxRetryAttempts": {"type": "integer", "minimum": 0, "maximum": 100},
+        "maxRetryElapsedSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "incidentDedupWindowSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "operationalVisibilityClass": {"type": "string", "enum": ["PUBLIC_OPERATIONAL", "TENANT_OPERATIONAL", "RESTRICTED_OPERATIONAL", "SECURITY_SENSITIVE"]},
+        "operationalRetentionDays": {"type": "integer", "minimum": 30, "maximum": 3650}
+      }
     }
   },
   "additionalProperties": true,
   "x-ouf-status": "field-level-reconciled-draft",
-  "x-ouf-source-basis": [
-    "Source Onboarding & Configuration v1.4 (v1.3 cross-module contract sections)",
-    "Ingestion Runtime v1.2",
-    "Urban API Gateway v1.2"
-  ],
-  "x-ouf-scope-control": "No scheduler implementation, cron engine or broker is defined by this schema."
+  "x-ouf-source-basis": ["Source Onboarding & Configuration v1.6", "Ingestion Runtime v1.3", "Urban API Gateway v1.4", "Cross-Module Alignment Matrix v1.6"],
+  "x-ouf-scope-control": "No scheduler implementation, cron engine or broker is defined by this schema. operationalPolicy supplies governed thresholds consumed by Ingestion; runtime must not invent them."
 }
