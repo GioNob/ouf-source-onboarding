@@ -1,4 +1,4 @@
-package it.comune.trieste.ouf.onboarding.authorization;
+package it.comune.trieste.ouf.authorization;
 
 import java.util.Map;
 

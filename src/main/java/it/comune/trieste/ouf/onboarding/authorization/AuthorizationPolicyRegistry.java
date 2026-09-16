@@ -1,8 +1,9 @@
 package it.comune.trieste.ouf.onboarding.authorization;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicy.AuthorizationDecision;
-import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicy.PolicyBundle;
+import it.comune.trieste.ouf.authorization.*;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy.AuthorizationDecision;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy.PolicyBundle;
 import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
 import java.sql.Timestamp;
 import java.time.Instant;

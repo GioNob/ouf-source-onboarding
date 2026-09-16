@@ -35,7 +35,9 @@ jobs:
       - name: Verify frozen rc3 contract pin
         run: sh scripts/verify-contract-freeze.sh
       - name: Compile, test and package
-        run: timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
       - name: Build non-root container
         run: |
           docker build -t ouf-source-onboarding:${{ github.sha }} .

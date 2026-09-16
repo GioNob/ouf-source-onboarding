@@ -1,6 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
-import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicy.PolicyBundle;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy.PolicyBundle;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicyRegistry;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import jakarta.servlet.http.HttpServletRequest;
