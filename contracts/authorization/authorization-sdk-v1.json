@@ -13,7 +13,7 @@
       "properties": {
         "subjectId": {"type": "string", "minLength": 1},
         "tenantId": {"type": "string", "minLength": 1},
-        "actorType": {"enum": ["HUMAN", "SERVICE"]},
+        "actorType": {"enum": ["HUMAN", "SERVICE", "AI_AGENT"]},
         "servicePrincipalId": {"type": ["string", "null"]},
         "authenticationContextRef": {"type": "string", "minLength": 1},
         "issuer": {"type": "string", "minLength": 1},
