@@ -38,6 +38,11 @@ jobs:
         run: |
           bash scripts/install-authorization-sdk.sh
           timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
+      - name: Verify shared SDK production packaging
+        run: |
+          jar tf target/source-onboarding-*.jar > target/sdk-packaging.txt
+          grep -q 'BOOT-INF/lib/authorization-sdk-1.0.0.jar' target/sdk-packaging.txt
+          if grep -q 'authorization-sdk-1.0.0-tests.jar' target/sdk-packaging.txt; then exit 1; fi
       - name: Build non-root container
         run: |
           docker build -t ouf-source-onboarding:${{ github.sha }} .
@@ -47,5 +52,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: source-onboarding-evidence-${{ github.run_id }}
-          path: target/surefire-reports/
+          path: |
+            target/surefire-reports/
+            authorization-sdk/target/surefire-reports/
+            authorization-sdk/SOURCE_SHA256SUMS
+            target/sdk-packaging.txt
           if-no-files-found: warn
