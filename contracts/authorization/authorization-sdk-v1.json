@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ouf:authorization:sdk:v1",
+  "title": "OUF Authorization SDK Contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["principal", "resource", "capabilityId", "operation"],
+  "properties": {
+    "principal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "tenantId", "actorType", "authenticationContextRef", "issuer", "audience", "scopes"],
+      "properties": {
+        "subjectId": {"type": "string", "minLength": 1},
+        "tenantId": {"type": "string", "minLength": 1},
+        "actorType": {"enum": ["HUMAN", "SERVICE", "AI_AGENT"]},
+        "servicePrincipalId": {"type": ["string", "null"]},
+        "authenticationContextRef": {"type": "string", "minLength": 1},
+        "issuer": {"type": "string", "minLength": 1},
+        "audience": {"type": "string", "minLength": 1},
+        "scopes": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resourceType", "tenantId", "attributes"],
+      "properties": {
+        "resourceType": {"type": "string", "minLength": 1},
+        "resourceId": {"type": ["string", "null"]},
+        "tenantId": {"type": "string", "minLength": 1},
+        "organizationId": {"type": ["string", "null"]},
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        }
+      }
+    },
+    "capabilityId": {"type": "string", "minLength": 1},
+    "operation": {"type": "string", "minLength": 1}
+  },
+  "x-ouf-decision": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["allowed", "decisionCode", "decisionRef", "bundleId", "bundleVersion"],
+    "properties": {
+      "allowed": {"type": "boolean"},
+      "decisionCode": {"type": "string", "minLength": 1},
+      "decisionRef": {"type": "string", "minLength": 1},
+      "bundleId": {"type": "string", "minLength": 1},
+      "bundleVersion": {"type": "integer", "minimum": 1}
+    }
+  },
+  "x-ouf-integration-gate": {
+    "scenarioNeutral": true,
+    "external": ["issuer", "jwks", "audience", "claimMapping", "serviceIdentityProvisioning", "rotation", "revocation"]
+  }
+}
