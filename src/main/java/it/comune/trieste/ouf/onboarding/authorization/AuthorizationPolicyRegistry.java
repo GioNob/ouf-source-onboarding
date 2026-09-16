@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicy.AuthorizationDecision;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicy.PolicyBundle;
 import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -37,7 +38,7 @@ public class AuthorizationPolicyRegistry {
           """)
           .param("id", bundle.bundleId())
           .param("version", bundle.version())
-          .param("publishedAt", bundle.publishedAt())
+          .param("publishedAt", Timestamp.from(bundle.publishedAt()))
           .param("publishedBy", publishedBy)
           .param("hash", hash)
           .param("payload", payload)
@@ -122,7 +123,7 @@ public class AuthorizationPolicyRegistry {
         .param("allowed", decision.allowed())
         .param("decisionCode", decision.decisionCode())
         .param("authenticationContextRef", principal.authenticationContextRef())
-        .param("decidedAt", now)
+        .param("decidedAt", Timestamp.from(now))
         .update();
     return decision;
   }
