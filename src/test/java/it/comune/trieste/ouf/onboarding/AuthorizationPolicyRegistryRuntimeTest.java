@@ -2,10 +2,10 @@ package it.comune.trieste.ouf.onboarding;
 
 import static org.assertj.core.api.Assertions.*;
 
-import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicy;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicyRegistry;
-import it.comune.trieste.ouf.onboarding.authorization.PrincipalContext;
-import it.comune.trieste.ouf.onboarding.authorization.ResourceContext;
+import it.comune.trieste.ouf.authorization.PrincipalContext;
+import it.comune.trieste.ouf.authorization.ResourceContext;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
