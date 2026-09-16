@@ -24,12 +24,16 @@
     "resource": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tenantId"],
+      "required": ["resourceType", "tenantId", "attributes"],
       "properties": {
+        "resourceType": {"type": "string", "minLength": 1},
+        "resourceId": {"type": ["string", "null"]},
         "tenantId": {"type": "string", "minLength": 1},
         "organizationId": {"type": ["string", "null"]},
-        "resourceType": {"type": ["string", "null"]},
-        "resourceId": {"type": ["string", "null"]}
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        }
       }
     },
     "capabilityId": {"type": "string", "minLength": 1},
