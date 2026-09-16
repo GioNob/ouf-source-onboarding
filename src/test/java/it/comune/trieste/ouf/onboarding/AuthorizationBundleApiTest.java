@@ -1,10 +1,8 @@
-package it.comune.trieste.ouf.onboarding;
+package it.comune.trieste.ouf.onboarding.api;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import it.comune.trieste.ouf.onboarding.api.AuthorizationBundleApi;
-import it.comune.trieste.ouf.onboarding.api.TrustedActorResolver;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicy.PolicyBundle;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicyRegistry;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
