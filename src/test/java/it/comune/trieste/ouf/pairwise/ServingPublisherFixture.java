@@ -18,6 +18,7 @@ import org.springframework.context.annotation.*;
 public class ServingPublisherFixture {
  public static void main(String[] args){SpringApplication.run(new Class<?>[]{OnboardingApplication.class,Fixture.class},args);}
  @Configuration(proxyBeanMethods=false) public static class Fixture {
+  @Bean ManagedFormatsPublisherFixture managedFormatsPublisher(OnboardingService service,ManagedFileService files,CanonicalHash hashes){return new ManagedFormatsPublisherFixture(service,files,hashes);}
   @Bean GeoPackagePublisherFixture geoPackagePublisher(OnboardingService service,ManagedFileService files,CanonicalHash hashes){return new GeoPackagePublisherFixture(service,files,hashes);}
   @Bean R2cControl r2cControl(OnboardingService service){return new R2cControl(service);}
   @Bean FilterRegistrationBean<Filter> fixtureIdentity(){
@@ -26,7 +27,8 @@ public class ServingPublisherFixture {
    Filter filter=(input,output,chain)->{var request=(HttpServletRequest)input;var response=(HttpServletResponse)output;String header=request.getHeader("Authorization");if(header==null||!MessageDigest.isEqual(expected,header.getBytes(StandardCharsets.UTF_8))){response.sendError(401);return;}if(!request.getMethod().equals("GET")||!request.getRequestURI().startsWith("/api/onboarding/v1/runtime/publications")){response.sendError(403);return;}request.getServletContext().setAttribute(ServletAuthorization.RUNTIME,runtime);chain.doFilter(new HttpServletRequestWrapper(request){@Override public Principal getUserPrincipal(){return TestAuthorization.principal("pairwise-ingestion","SERVICE",caps);}},response);};
    var registration=new FilterRegistrationBean<>(filter);registration.addUrlPatterns("/api/*");registration.setOrder(-100);return registration;
   }
-  @Bean ApplicationRunner seed(OnboardingService onboarding,ManagedFileService files,CanonicalHash hashes,GeoPackagePublisherFixture gpkg){return args->{
+  @Bean ApplicationRunner seed(OnboardingService onboarding,ManagedFileService files,CanonicalHash hashes,GeoPackagePublisherFixture gpkg,ManagedFormatsPublisherFixture formats){return args->{
+   if(System.getenv("OUF_R2F_INPUT_DIR")!=null){formats.seed();return;}
    if(System.getenv("OUF_R2E_INPUT")!=null){gpkg.seed();return;}
    var human=new OnboardingService.Actor("fixture-human","HUMAN_USER");
    byte[] csv="id,name,secret\n1,Alpha,classified-file\n".getBytes(StandardCharsets.UTF_8);UUID asset=(UUID)files.register(null,"object://r2b/input.csv",hashes.ofBytes(csv),"text/csv",csv.length,"fixture-human","retention://30d").get("asset_id");UUID profile=(UUID)files.profile(asset,csv,"object://r2b/profile.json").get("profile_id");
