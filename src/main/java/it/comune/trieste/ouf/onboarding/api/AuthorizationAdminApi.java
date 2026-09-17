@@ -16,8 +16,7 @@ public class AuthorizationAdminApi {
  private AuthorizationAdminService.Actor actor(HttpServletRequest r,boolean write){
   try{
    if(service.bootstrapOpen()){
-    if(!(r.getUserPrincipal() instanceof TrustedPrincipal trusted))throw new SecurityException("TRUSTED_PRINCIPAL_REQUIRED");
-    var p=trusted.context();
+    var p=ServletAuthorization.principal(r).context();
     if(p.actorType()!=PrincipalContext.ActorType.HUMAN)throw new SecurityException("HUMAN_REQUIRED");
     if(!p.scopes().contains("authorization.bootstrap"))throw new SecurityException("AUTH_BOOTSTRAP_SCOPE_REQUIRED");
     if(write&&!Boolean.TRUE.equals(r.getAttribute("ouf.csrfValidated")))throw new SecurityException("AUTH_CSRF_REQUIRED");
