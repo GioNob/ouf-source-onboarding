@@ -17,7 +17,7 @@ import org.springframework.test.context.DynamicPropertySource;
 @SpringBootTest
 class ManagedFileRuntimeTest {
   @DynamicPropertySource static void properties(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->required("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->required("OUF_ONB_DB_PASSWORD"));}
-  @Autowired ManagedFileService files; @Autowired ManagedFileProfiler profiler; @Autowired OnboardingService onboarding; @Autowired CanonicalHash hashes; @Autowired JdbcClient db;
+  @Autowired SemanticGapService gaps; @Autowired ManagedFileService files; @Autowired ManagedFileProfiler profiler; @Autowired OnboardingService onboarding; @Autowired CanonicalHash hashes; @Autowired JdbcClient db;
   OnboardingService.Actor human=new OnboardingService.Actor("human:test","HUMAN_USER");OnboardingService.Actor ingestion=new OnboardingService.Actor("service:ingestion","SERVICE",Set.of("ouf.ingestion.configuration.attest"));
   @BeforeEach void clean(){db.sql("truncate table ouf_onboarding.audit_event,ouf_onboarding.consumer_compatibility_attestation,ouf_onboarding.approval_decision,ouf_onboarding.approval_challenge,ouf_onboarding.published_configuration,ouf_onboarding.file_profile_job,ouf_onboarding.onboarding_version,ouf_onboarding.file_profile,ouf_onboarding.managed_file_asset,ouf_onboarding.source restart identity cascade").update();}
   @Test @SuppressWarnings("unchecked") void accessTableWithoutGeometryCreatesDraftWithCompositeKeysAndRelationshipEvidence(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory)throws Exception{
@@ -31,6 +31,25 @@ class ManagedFileRuntimeTest {
       var config=(Map<String,Object>)draft.get("configuration");
       assertThat((Map<String,Object>)config.get("sourceObjectIdentityPolicy")).containsEntry("sourceFields",List.of("DISTRICT","CODE"));
       assertThat(String.valueOf(config.get("sourceSchemaEvidence"))).contains("asset_children","PENDING_HUMAN_REVIEW","ASSET_CODE");
+      UUID version=(UUID)draft.get("onboarding_version_id");
+      assertThatThrownBy(()->gaps.proposeAccessSchema(filename,version,human)).hasMessageContaining("capability");
+      var proposer=new OnboardingService.Actor("human:test","HUMAN_USER",Set.of("ouf.source-onboarding.semantic-gap.create"));
+      var proposals=gaps.proposeAccessSchema(filename,version,proposer);
+      assertThat(proposals).hasSize(2);
+      assertThat(gaps.proposeAccessSchema(filename,version,proposer).stream().map(x->x.get("gap_id")).toList()).containsExactlyElementsOf(proposals.stream().map(x->x.get("gap_id")).toList());
+      var relation=proposals.stream().filter(x->String.valueOf(x.get("source_evidence")).contains("RELATIONSHIP")).findFirst().orElseThrow();
+      assertThat(relation).containsEntry("state","OPEN");
+      assertThat(String.valueOf(relation.get("source_evidence"))).contains("DISTRICT", "ASSET_CODE", "PROPOSAL_ONLY", "profile://managed-files/");
+      UUID gap=(UUID)relation.get("gap_id");
+      gaps.requestSearch(filename,version,gap,"semantic-discovery://access/"+gap);
+      var registry=new OnboardingService.Actor("service:semantic","SERVICE",Set.of("ouf.semantic.discovery.result.report"));
+      var candidate=gaps.recordCandidates(filename,version,gap,List.of(Map.of("semanticRef","core@1","status","ADOPTED","evidence",Map.of("predicate","https://example.org/belongsTo","domain","Child","range","Asset","direction","REFERENCING_TO_REFERENCED"))),registry);
+      UUID candidateId=(UUID)((Map<?,?>)((List<?>)candidate.get("candidates")).getFirst()).get("candidate_id");
+      assertThat(gaps.select(filename,version,gap,candidateId)).containsEntry("state","SELECTED");
+      assertThat(gaps.recordCandidates(filename,version,gap,List.of(Map.of("semanticRef","core@1","status","PUBLISHED")),registry)).containsEntry("state","RESOLVED");
+      assertThat(onboarding.version(filename,version)).containsEntry("state","DRAFT");
+      db.sql("update ouf_onboarding.onboarding_version set state='IN_REVIEW' where onboarding_version_id=:v").param("v",version).update();
+      assertThatThrownBy(()->gaps.proposeAccessSchema(filename,version,proposer)).hasMessageContaining("DRAFT");
       assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
     }
   }

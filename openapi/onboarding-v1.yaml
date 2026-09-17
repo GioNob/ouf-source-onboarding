@@ -210,6 +210,13 @@ paths:
       x-ouf-mcp-capability: ouf.source-onboarding.semantic-gap.create
       parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
       responses: {'201': {description: Semantic gap registered}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions/{versionId}/semantic-gaps/from-access-schema:
+    post:
+      operationId: proposeAccessSchemaSemantics
+      x-ouf-mcp-capability: ouf.source-onboarding.semantic-gap.create
+      description: Open idempotent proposals from the pinned Access profile, including composite keys and FK direction evidence. No semantic adoption or publication.
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
+      responses: {'200': {description: Schema proposals with source evidence}, default: {$ref: '#/components/responses/Problem'}}
   /sources/{sourceId}/onboarding-versions/{versionId}/semantic-gaps/{gapId}/search:
     post:
       operationId: requestSemanticDiscovery
