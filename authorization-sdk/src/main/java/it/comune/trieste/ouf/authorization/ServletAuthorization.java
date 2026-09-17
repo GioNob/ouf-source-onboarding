@@ -14,14 +14,14 @@ public final class ServletAuthorization {
     public Context(PrincipalContext principal,Set<String> capabilities,String decisionRef,LocalAuthorization.PolicySnapshot snapshot){this(principal,capabilities,decisionRef,snapshot,Map.of());}
     public Context{decisions=Map.copyOf(decisions);}
   }
-  private static TrustedPrincipal trustedPrincipal(HttpServletRequest request){
+  public static TrustedPrincipal principal(HttpServletRequest request){
     Object bound=request.getAttribute(TRUSTED_PRINCIPAL);
     if(bound instanceof TrustedPrincipal trusted)return trusted;
     if(request.getUserPrincipal() instanceof TrustedPrincipal trusted)return trusted;
     throw new SecurityException("TRUSTED_PRINCIPAL_REQUIRED");
   }
   public static Context resolve(HttpServletRequest request) {
-    var trusted=trustedPrincipal(request);
+    var trusted=principal(request);
     Object runtime=request.getServletContext().getAttribute(RUNTIME);
     if(!(runtime instanceof LocalAuthorization engine))throw new SecurityException("NO_POLICY_BUNDLE");
     var principal=trusted.context();
