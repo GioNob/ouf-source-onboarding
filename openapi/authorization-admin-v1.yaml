@@ -491,54 +491,82 @@
           "effect": {
             "enum": [
               "ALLOW",
-              "DENY"
+              "DENY",
+              null
             ]
           },
           "externalRoleRef": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "minLength": 1
           },
           "resourceType": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "minLength": 1
           },
           "resourceId": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "minLength": 1
           },
           "resourceAttributes": {
-            "type": "object",
+            "type": [
+              "object",
+              "null"
+            ],
             "additionalProperties": {
               "type": "string"
             }
           },
           "allowedDataLabels": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "string",
               "minLength": 1
             }
           },
           "allowedDetailLevels": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "string",
               "minLength": 1
             }
           },
           "requiredAcr": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "minLength": 1
           },
           "requiredAmr": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "string",
               "minLength": 1
             }
           },
           "maxAuthenticationAgeSeconds": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "minimum": 1,
             "maximum": 86400
           }
@@ -588,7 +616,14 @@
             "format": "date-time"
           },
           "constraints": {
-            "$ref": "#/components/schemas/GrantConstraints"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GrantConstraints"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
