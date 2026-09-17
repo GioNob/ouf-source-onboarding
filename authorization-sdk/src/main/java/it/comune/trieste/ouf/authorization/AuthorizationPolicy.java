@@ -61,6 +61,7 @@ public final class AuthorizationPolicy {
             String requiredAcr,Set<String> requiredAmr,Long maxAuthenticationAgeSeconds) {
         public GrantConstraints {
             effect=effect==null?"ALLOW":effect;
+            for(String value:new String[]{externalRoleRef,resourceType,resourceId,requiredAcr})if(value!=null&&value.isBlank())throw new IllegalArgumentException("blank constraint");
             if(!Set.of("ALLOW","DENY").contains(effect))throw new IllegalArgumentException("invalid grant effect");
             resourceAttributes=resourceAttributes==null?Map.of():Map.copyOf(resourceAttributes);
             allowedDataLabels=allowedDataLabels==null?Set.of():Set.copyOf(allowedDataLabels);
@@ -135,12 +136,17 @@ public final class AuthorizationPolicy {
         if (descriptor == null) return deny("CAPABILITY_NOT_DECLARED", ref, bundle);
         if (!descriptor.allowedActors().contains(principal.actorType())) return deny("ACTOR_NOT_ALLOWED", ref, bundle);
         if (!principal.scopes().contains(descriptor.requiredScope())) return deny("SCOPE_MISSING", ref, bundle);
+        String label=resource.attributes().get("dataAccessLabel"),detail=resource.attributes().get("detailLevel");
+        if("true".equals(resource.attributes().get("requiresDataAccessLabel"))&&(label==null||label.isBlank()))return deny("DATA_LABEL_REQUIRED",ref,bundle);
+        if("SECURITY_SENSITIVE".equals(detail)&&principal.actorType()!=PrincipalContext.ActorType.HUMAN)return deny("HUMAN_REQUIRED",ref,bundle);
         boolean allow=false;
         for(var grant:bundle.grants()){
             if(!grant.capabilityId().equals(capabilityId)||!grant.appliesTo(principal,resource,now))continue;
             var constraints=grant.constraints();
             if(constraints!=null&&!constraints.matches(principal,resource,now))continue;
             if(constraints!=null&&"DENY".equals(constraints.effect()))return deny("EXPLICIT_DENY",ref,bundle);
+            if(label!=null&&!Set.of("OPEN","ANONYMOUS").contains(label)&&(constraints==null||!constraints.allowedDataLabels().contains(label)))continue;
+            if(detail!=null&&!"PUBLIC_OPERATIONAL".equals(detail)&&(constraints==null||!constraints.allowedDetailLevels().contains(detail)))continue;
             allow=true;
         }
         if(!allow)return deny("NO_APPLICABLE_GRANT",ref,bundle);
