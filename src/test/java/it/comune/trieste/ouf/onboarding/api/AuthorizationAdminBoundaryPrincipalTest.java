@@ -24,7 +24,7 @@ class AuthorizationAdminBoundaryPrincipalTest {
     request.setAttribute(
         ServletAuthorization.TRUSTED_PRINCIPAL,
         TestAuthorization.principal("human:admin", "HUMAN", Set.of("authorization.bootstrap")));
-    request.setAttribute("ouf.csrfValidated", Boolean.TRUE);
+    TrustedWriteProof.markStatelessBearer(request);
     var response = new MockHttpServletResponse();
     var chain = new MockFilterChain();
 
