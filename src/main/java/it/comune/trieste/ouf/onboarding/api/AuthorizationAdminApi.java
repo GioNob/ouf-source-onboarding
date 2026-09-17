@@ -19,11 +19,11 @@ public class AuthorizationAdminApi {
     var p=ServletAuthorization.principal(r).context();
     if(p.actorType()!=PrincipalContext.ActorType.HUMAN)throw new SecurityException("HUMAN_REQUIRED");
     if(!p.scopes().contains("authorization.bootstrap"))throw new SecurityException("AUTH_BOOTSTRAP_SCOPE_REQUIRED");
-    if(write&&!Boolean.TRUE.equals(r.getAttribute("ouf.csrfValidated")))throw new SecurityException("AUTH_CSRF_REQUIRED");
+    if(write)TrustedWriteProof.require(r);
     return new AuthorizationAdminService.Actor(p.subjectId(),p.tenantId(),p.actorType().name(),"bootstrap:iam",UUID.randomUUID().toString());
    }
    var c=ServletAuthorization.require(r,"authorization.policy.admin",true);
-   if(write&&!Boolean.TRUE.equals(r.getAttribute("ouf.csrfValidated")))throw new SecurityException("AUTH_CSRF_REQUIRED");
+   if(write)TrustedWriteProof.require(r);
    return new AuthorizationAdminService.Actor(c.principal().subjectId(),c.principal().tenantId(),c.principal().actorType().name(),c.decisionRef(),UUID.randomUUID().toString());
   }catch(SecurityException e){throw new ResponseStatusException(HttpStatus.FORBIDDEN,e.getMessage());}
  }
