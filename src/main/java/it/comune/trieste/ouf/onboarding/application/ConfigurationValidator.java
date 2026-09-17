@@ -47,9 +47,34 @@ public class ConfigurationValidator {
       if("PROPERTY_EVENTS".equals(mode))requireText(profile,"eventContractRef","/changeRepresentationProfile/eventContractRef",out);
       if("DELTA_PATCH".equals(mode)){Optional<Map<String,Object>> delta=object(configuration,"deltaPatchContract");if(delta.isEmpty())delta=object(configuration,"bundle").flatMap(b->object(b,"deltaPatchContract"));if(delta.isEmpty())error(out,"ONB_DELTA_CONTRACT_REQUIRED","/deltaPatchContract","DELTA_PATCH requires a compiled logical contract");else validateDelta(delta.get(),out);}
     });
+    validateGeoPackageAndRelationships(configuration,out);
     spatial(configuration).ifPresent(profile->validateSpatial(profile,out));
     if(out.isEmpty()) out.add(new Finding("INFO","ONB_CONFIGURATION_VALID","/","Configuration satisfies the executable onboarding validation profile"));
     return new Result(List.copyOf(out));
+  }
+
+  private static void validateGeoPackageAndRelationships(Map<String,Object> configuration,List<Finding> out){
+    var runtime=object(configuration,"extractionProfile").flatMap(ex->object(ex,"runtime")).orElse(Map.of());
+    var execution=object(runtime,"execution").orElse(Map.of());var udp=object(runtime,"udp").orElse(Map.of());
+    if("INTERNAL_MANAGED_GEOPACKAGE".equals(execution.get("acquisitionMode"))){
+      String path="/extractionProfile/runtime";
+      for(String key:List.of("layer","sourceCrs","geometryColumn"))if(!(runtime.get(key) instanceof String value)||value.isBlank()||!Objects.equals(value,execution.get(key)))error(out,"ONB_GPKG_PROFILE_MISMATCH",path+"/"+key,"Execution must retain the approved GeoPackage layer, CRS and geometry column");
+      var keys=object(configuration,"sourceObjectIdentityPolicy").orElse(Map.of()).get("sourceFields");
+      if(!(keys instanceof List<?> list)||list.isEmpty()||list.contains("$managedRowOrdinal")||list.contains(runtime.get("geometryColumn")))error(out,"ONB_GPKG_STABLE_KEY_REQUIRED","/sourceObjectIdentityPolicy","GeoPackage requires explicit stable feature keys");
+      var geometry=object(udp,"spatial").flatMap(sp->object(sp,"geometry")).orElse(Map.of());
+      if(!Objects.equals(runtime.get("sourceCrs"),geometry.get("expectedSourceCrs"))||geometry.isEmpty())error(out,"ONB_GPKG_CRS_POLICY_REQUIRED",path+"/udp/spatial","GeoPackage requires its approved source CRS and governed spatial profile");
+    }
+    if(udp.containsKey("relationships")){
+      var profile=object(udp,"relationships").orElse(Map.of());String path="/extractionProfile/runtime/udp/relationships";requireText(profile,"policyRef",path+"/policyRef",out);
+      if(!(profile.get("relationships") instanceof List<?> rules)||rules.isEmpty()||rules.size()>64){error(out,"ONB_RELATION_RULES_REQUIRED",path,"Require 1..64 governed relationship rules");return;}
+      var unique=new HashSet<Object>();
+      for(Object raw:rules){if(!(raw instanceof Map<?,?> rule)){error(out,"ONB_RELATION_RULE_INVALID",path,"Relationship must be an object");continue;}
+        if(!unique.add(rule.get("relationIri"))||!"CANONICAL_KEY".equals(rule.get("resolutionStrategy"))||!"QUARANTINE_RELATION".equals(rule.get("onNoMatch")))error(out,"ONB_RELATION_RULE_INVALID",path,"R2e requires unique relations, explicit key matching and quarantine on no match");
+        for(String key:List.of("sourceField","relationIri","targetCanonicalType","targetPropertyIri","accessLabel"))if(!(rule.get(key) instanceof String value)||value.isBlank())error(out,"ONB_RELATION_RULE_INVALID",path+"/"+key,"Required relationship field missing");
+        boolean label=configuration.get("dataAccessPolicies") instanceof List<?> policies&&policies.stream().anyMatch(p->p instanceof Map<?,?> policy&&"RELATIONSHIP".equals(policy.get("scope"))&&Objects.equals(rule.get("relationIri"),policy.get("target"))&&Objects.equals(rule.get("accessLabel"),policy.get("label")));
+        if(!label)error(out,"ONB_RELATION_LABEL_REQUIRED",path,"Relationship label must be approved explicitly");
+      }
+    }
   }
 
   public static Optional<Map<String,Object>> spatial(Map<String,Object> configuration){
