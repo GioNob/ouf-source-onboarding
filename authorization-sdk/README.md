@@ -1,7 +1,7 @@
 # Shared Authorization SDK 1.1.0
 
 Normative authority: Reality Baseline 1.7, Authorization PET 1.5 §§109.2–3,
-109.5–8, Matrix 1.7. Coordinates: `it.comune.trieste.ouf:authorization-sdk:1.1.0`.
+109.5–8, Matrix 1.7. Coordinates: `it.comune.trieste.ouf:authorization-sdk:1.2.0`.
 Canonical source ownership stays here in the Authorization control-plane repository.
 The source bundle is mirrored byte-for-byte in Java consumers under `vendor/` with
 source commit and SHA-256 manifest. CI builds and installs the same Maven artifact;
