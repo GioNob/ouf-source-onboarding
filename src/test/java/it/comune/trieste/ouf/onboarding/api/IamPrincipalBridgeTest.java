@@ -51,7 +51,7 @@ class IamPrincipalBridgeTest {
         request, new MockHttpServletResponse(), new MockFilterChain());
 
     assertThat(request.getAttribute(ServletAuthorization.TRUSTED_PRINCIPAL)).isSameAs(trusted);
-    assertThat(request.getAttribute("ouf.csrfValidated")).isNull();
+    assertThat(request.getAttribute(TrustedWriteProof.STATELESS_BEARER_WRITE)).isNull();
     var resolved = ServletAuthorization.require(request, "authorization.bundle.read", false);
     assertThat(resolved.principal().subjectId()).isEqualTo("workload:ouf-mcp-server");
   }
@@ -71,7 +71,7 @@ class IamPrincipalBridgeTest {
         request, new MockHttpServletResponse(), new MockFilterChain());
 
     assertThat(request.getAttribute(ServletAuthorization.TRUSTED_PRINCIPAL)).isSameAs(trusted);
-    assertThat(request.getAttribute("ouf.csrfValidated")).isEqualTo(Boolean.TRUE);
+    assertThat(request.getAttribute(TrustedWriteProof.STATELESS_BEARER_WRITE)).isEqualTo(Boolean.TRUE);
   }
 
   @Test
@@ -84,6 +84,6 @@ class IamPrincipalBridgeTest {
         request, new MockHttpServletResponse(), new MockFilterChain());
 
     assertThat(request.getAttribute(ServletAuthorization.TRUSTED_PRINCIPAL)).isNull();
-    assertThat(request.getAttribute("ouf.csrfValidated")).isNull();
+    assertThat(request.getAttribute(TrustedWriteProof.STATELESS_BEARER_WRITE)).isNull();
   }
 }
