@@ -6,6 +6,8 @@
   <properties><java.version>21</java.version><testcontainers.version>1.21.3</testcontainers.version></properties>
   <repositories><repository><id>osgeo-release</id><url>https://repo.osgeo.org/repository/release/</url><snapshots><enabled>false</enabled></snapshots></repository></repositories>
   <dependencies>
+    <!-- GeoTools transitive Jackson 3: GHSA-r7wm-3cxj-wff9 fixed in 3.1.4. -->
+    <dependency><groupId>tools.jackson.core</groupId><artifactId>jackson-core</artifactId><version>3.1.4</version></dependency>
     <dependency><groupId>org.geotools</groupId><artifactId>gt-geojson</artifactId><version>35.0</version></dependency>
     <dependency><groupId>org.geotools</groupId><artifactId>gt-epsg-hsql</artifactId><version>35.0</version></dependency>
     <dependency><groupId>org.geotools</groupId><artifactId>gt-shapefile</artifactId><version>35.0</version></dependency>

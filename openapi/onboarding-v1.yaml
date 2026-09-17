@@ -411,7 +411,7 @@ components:
         profile_id: {type: string, format: uuid}
         asset_id: {type: string, format: uuid}
         version: {type: integer, minimum: 1}
-        format: {type: string, enum: [CSV, XLSX]}
+        format: {type: string, enum: [CSV, XLSX, GEOPACKAGE, SHAPEFILE, ACCESS]}
         metadata: {type: object, additionalProperties: true}
         inferred_schema:
           type: array

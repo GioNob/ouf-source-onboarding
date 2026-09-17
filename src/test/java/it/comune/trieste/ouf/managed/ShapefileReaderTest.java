@@ -18,6 +18,17 @@ class ShapefileReaderTest {
       assertEquals("Point",((Map<?,?>)envelope.get("geoJson")).get("type"));
     }
   }
+  @Test void preservesPolygonInteriorRing() throws Exception {
+    var files=fixture();double[][] points={{0,0},{0,4},{4,4},{4,0},{0,0},{1,1},{3,1},{3,3},{1,3},{1,1}};
+    var shp=ByteBuffer.allocate(320);header(shp,5);shp.order(ByteOrder.BIG_ENDIAN).position(100);shp.putInt(1).putInt(106);shp.order(ByteOrder.LITTLE_ENDIAN).putInt(5).putDouble(0).putDouble(0).putDouble(4).putDouble(4).putInt(2).putInt(10).putInt(0).putInt(5);
+    for(var point:points)shp.putDouble(point[0]).putDouble(point[1]);
+    var shx=ByteBuffer.allocate(108);header(shx,5);shx.order(ByteOrder.BIG_ENDIAN).position(100);shx.putInt(50).putInt(106);files.put("assets.shp",shp.array());files.put("assets.shx",shx.array());
+    try(var reader=new ShapefileReader(zip(files))){
+      var layer=reader.layers().getFirst();var envelope=(Map<?,?>)layer.rows().getFirst().get(layer.geometryColumn());var geo=(Map<?,?>)envelope.get("geoJson");
+      var coordinates=(List<?>)geo.get("coordinates");var rings="MultiPolygon".equals(geo.get("type"))?(List<?>)coordinates.getFirst():coordinates;
+      assertEquals(2,rings.size());assertEquals(5,((List<?>)rings.get(1)).size());
+    }
+  }
   @Test void rejectsMissingComponentsAndTraversal() throws Exception {
     var files=fixture();files.remove("assets.prj");assertThrows(IllegalArgumentException.class,()->new ShapefileReader(zip(files)));
     assertThrows(IllegalArgumentException.class,()->new ShapefileReader(zip(Map.of("../assets.shp",new byte[1]))));
