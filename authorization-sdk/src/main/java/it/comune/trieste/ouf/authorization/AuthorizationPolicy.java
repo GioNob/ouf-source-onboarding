@@ -18,7 +18,7 @@ public final class AuthorizationPolicy {
             capabilityId = require(capabilityId, "capabilityId");
             operation = require(operation, "operation");
             requiredScope = require(requiredScope, "requiredScope");
-            allowedActors = allowedActors == null ? Set.of() : Set.copyOf(allowedActors);
+            allowedActors = allowedActors == null ? Set.of() : java.util.Collections.unmodifiableSet(new java.util.TreeSet<>(allowedActors));
         }
     }
 
@@ -63,10 +63,10 @@ public final class AuthorizationPolicy {
             effect=effect==null?"ALLOW":effect;
             for(String value:new String[]{externalRoleRef,resourceType,resourceId,requiredAcr})if(value!=null&&value.isBlank())throw new IllegalArgumentException("blank constraint");
             if(!Set.of("ALLOW","DENY").contains(effect))throw new IllegalArgumentException("invalid grant effect");
-            resourceAttributes=resourceAttributes==null?Map.of():Map.copyOf(resourceAttributes);
-            allowedDataLabels=allowedDataLabels==null?Set.of():Set.copyOf(allowedDataLabels);
-            allowedDetailLevels=allowedDetailLevels==null?Set.of():Set.copyOf(allowedDetailLevels);
-            requiredAmr=requiredAmr==null?Set.of():Set.copyOf(requiredAmr);
+            resourceAttributes=resourceAttributes==null?Map.of():java.util.Collections.unmodifiableMap(new java.util.TreeMap<>(resourceAttributes));
+            allowedDataLabels=allowedDataLabels==null?Set.of():java.util.Collections.unmodifiableSet(new java.util.TreeSet<>(allowedDataLabels));
+            allowedDetailLevels=allowedDetailLevels==null?Set.of():java.util.Collections.unmodifiableSet(new java.util.TreeSet<>(allowedDetailLevels));
+            requiredAmr=requiredAmr==null?Set.of():java.util.Collections.unmodifiableSet(new java.util.TreeSet<>(requiredAmr));
             if(resourceAttributes.size()>64||allowedDataLabels.size()>64||allowedDetailLevels.size()>16||requiredAmr.size()>32)throw new IllegalArgumentException("policy constraints limit");
             if(maxAuthenticationAgeSeconds!=null&&(maxAuthenticationAgeSeconds<1||maxAuthenticationAgeSeconds>86400))throw new IllegalArgumentException("authentication freshness limit");
         }

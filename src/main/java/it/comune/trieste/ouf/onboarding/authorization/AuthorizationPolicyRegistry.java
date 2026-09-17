@@ -135,7 +135,7 @@ public class AuthorizationPolicyRegistry {
         .param("tenant", tenantId).query(Long.class).single();
   }
 
-  public String transportHash(PolicyBundle bundle){try{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.writeValueAsBytes(bundle)));}catch(Exception e){throw new IllegalStateException(e);}}
+  public String transportHash(PolicyBundle bundle){try{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.writer().without(com.fasterxml.jackson.databind.SerializationFeature.INDENT_OUTPUT).writeValueAsBytes(bundle)));}catch(Exception e){throw new IllegalStateException(e);}}
 
   public Map<String, Object> activeMetadata() {
     return active().<Map<String, Object>>map(a -> Map.of(
