@@ -1,6 +1,9 @@
 package it.comune.trieste.ouf.onboarding.api;
 
+import it.comune.trieste.ouf.authorization.PrincipalContext;
 import it.comune.trieste.ouf.authorization.ServletAuthorization;
+import it.comune.trieste.ouf.authorization.TrustedPrincipal;
+import it.comune.trieste.ouf.onboarding.authorization.AuthorizationAdminService;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import java.io.*;
@@ -12,9 +15,19 @@ import org.springframework.web.filter.OncePerRequestFilter;
 /** Authentication adapters must establish principal and validated CSRF before this boundary. */
 @Component @Order(Ordered.LOWEST_PRECEDENCE-10)
 public class AuthorizationAdminBoundary extends OncePerRequestFilter {
+ private final AuthorizationAdminService service;
+ public AuthorizationAdminBoundary(AuthorizationAdminService service){this.service=service;}
  @Override protected boolean shouldNotFilter(HttpServletRequest r){return !r.getRequestURI().startsWith(r.getContextPath()+"/api/trusted-human/v1/authorization");}
  @Override protected void doFilterInternal(HttpServletRequest r,HttpServletResponse response,FilterChain chain)throws ServletException,IOException {
-  try {ServletAuthorization.require(r,"authorization.policy.admin",true);
+  try {
+   if(service.bootstrapOpen()){
+    if(!(r.getUserPrincipal() instanceof TrustedPrincipal trusted))throw new SecurityException("TRUSTED_PRINCIPAL_REQUIRED");
+    var principal=trusted.context();
+    if(principal.actorType()!=PrincipalContext.ActorType.HUMAN)throw new SecurityException("HUMAN_REQUIRED");
+    if(!principal.scopes().contains("authorization.bootstrap"))throw new SecurityException("AUTH_BOOTSTRAP_SCOPE_REQUIRED");
+   } else {
+    ServletAuthorization.require(r,"authorization.policy.admin",true);
+   }
    if(!"GET".equals(r.getMethod())&&!"HEAD".equals(r.getMethod())&&!Boolean.TRUE.equals(r.getAttribute("ouf.csrfValidated")))throw new SecurityException("AUTH_CSRF_REQUIRED");
   }catch(SecurityException e){response.sendError(403,"Authorization administration denied");return;}
   final int maximum=5*1024*1024;
