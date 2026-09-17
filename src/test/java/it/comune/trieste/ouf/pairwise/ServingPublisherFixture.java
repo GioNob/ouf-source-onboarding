@@ -26,13 +26,13 @@ public class ServingPublisherFixture {
   }
   @Bean ApplicationRunner seed(OnboardingService onboarding,ManagedFileService files,CanonicalHash hashes){return args->{
    var human=new OnboardingService.Actor("fixture-human","HUMAN_USER");
-   byte[] csv="id,name\n1,Alpha\n".getBytes(StandardCharsets.UTF_8);UUID asset=(UUID)files.register(null,"object://r2b/input.csv",hashes.ofBytes(csv),"text/csv",csv.length,"fixture-human","retention://30d").get("asset_id");UUID profile=(UUID)files.profile(asset,csv,"object://r2b/profile.json").get("profile_id");
-   var draft=files.onboard(asset,profile,"r2b-file","R2b file","platform","https://example.org/Object",List.of("core@1"),List.of("id"),List.of(field("id"),field("name")),human,"r2b");
+   byte[] csv="id,name,secret\n1,Alpha,classified-file\n".getBytes(StandardCharsets.UTF_8);UUID asset=(UUID)files.register(null,"object://r2b/input.csv",hashes.ofBytes(csv),"text/csv",csv.length,"fixture-human","retention://30d").get("asset_id");UUID profile=(UUID)files.profile(asset,csv,"object://r2b/profile.json").get("profile_id");
+   var draft=files.onboard(asset,profile,"r2b-file","R2b file","platform","https://example.org/Object",List.of("core@1"),List.of("id"),List.of(field("id"),field("name"),field("secret")),human,"r2b");
    @SuppressWarnings("unchecked")var config=new LinkedHashMap<>((Map<String,Object>)draft.get("configuration"));config.put("semanticReferenceBindings",bindings());enrich(config,true,csv.length);UUID version=(UUID)draft.get("onboarding_version_id");onboarding.patchVersion("r2b-file",version,0,config,human,"r2b");activate(onboarding,"r2b-file",version,1,human);
    onboarding.createSource("r2b-pull","R2b pull","EXTERNAL_API","PULL","platform",Map.of(),human,"r2b");var pull=onboarding.createVersion("r2b-pull",pullExecution(),human,"r2b");activate(onboarding,"r2b-pull",(UUID)pull.get("onboarding_version_id"),0,human);
   };}
  }
- private static ManagedFileService.FieldDecision field(String name){return new ManagedFileService.FieldDecision(name,"INCLUDE","OPEN","https://example.org/"+name,"IDENTITY",null,null,null);}
+ private static ManagedFileService.FieldDecision field(String name){return new ManagedFileService.FieldDecision(name,"INCLUDE",name.equals("secret")?"RESTRICTED":"OPEN","https://example.org/"+name,"IDENTITY",null,null,null);}
  @SuppressWarnings("unchecked") private static void enrich(Map<String,Object> config,boolean managed,int size){
   var semantic=new LinkedHashMap<>((Map<String,Object>)config.get("semanticMapping"));semantic.put("targetClasses",List.of(Map.of("ontologyId","core","ontologyVersion","1","classIri",managed?"https://example.org/R2bFile":"https://example.org/R2bPull")));config.put("semanticMapping",semantic);
   var extraction=new LinkedHashMap<>((Map<String,Object>)config.get("extractionProfile"));
@@ -43,16 +43,16 @@ public class ServingPublisherFixture {
   execution.put("semanticPublicationSetRef","00000000-0000-0000-0000-000000000002");execution.put("adapterProfileRef",managed?"adapter://managed-tabular/1":"adapter://rest-json/1");execution.put("observationPolicy","ACQUISITION_TIME");
   if(managed){execution.put("expectedSize",size);execution.put("maxRows",1000);execution.put("maxColumns",20);execution.put("maxCellChars",1024);}else{execution.put("itemsPointer","/items");execution.put("pageSize",100);execution.put("maxPages",2);execution.put("maxRecords",100);execution.put("maxPageBytes",10000);}
   runtime.put("execution",execution);
-  var properties=List.of("id","name").stream().map(name->Map.<String,Object>of("sourceField","https://example.org/"+name,"propertyIri","https://example.org/"+name,"datatype","http://www.w3.org/2001/XMLSchema#string","accessLabel","OPEN","authorityOrder",List.of(managed?"r2b-file":"r2b-pull"))).toList();
+  var properties=List.of("id","name","secret").stream().map(name->Map.<String,Object>of("sourceField","https://example.org/"+name,"propertyIri","https://example.org/"+name,"datatype","http://www.w3.org/2001/XMLSchema#string","accessLabel",name.equals("secret")?"RESTRICTED":"OPEN","authorityOrder",List.of(managed?"r2b-file":"r2b-pull"))).toList();
   runtime.put("udp",Map.of("resolution",Map.of("strategyId","r2b-approved-key","strategyVersion","1","policyRef","policy://r2b-resolution/1","canonicalType",managed?"https://example.org/R2bFile":"https://example.org/R2bPull","canonicalKeyProperty","https://example.org/id","matchProperty","https://example.org/id"),"materialization",Map.of("policyRef","policy://r2b-authority/1","properties",properties,"checkpointInterval",1,"bitemporalProperties",List.of())));
   extraction.put("runtime",runtime);config.put("extractionProfile",extraction);
  }
  @SuppressWarnings("unchecked") private static Map<String,Object> pullExecution(){
   var config=new LinkedHashMap<>(pull());var semantic=new LinkedHashMap<>((Map<String,Object>)config.get("semanticMapping"));
-  semantic.put("propertyMappings",List.of("id","name").stream().map(name->Map.of("sourceField",name,"targetPropertyIri","https://example.org/"+name,"transform","IDENTITY")).toList());config.put("semanticMapping",semantic);
+  semantic.put("propertyMappings",List.of("id","name","secret").stream().map(name->Map.of("sourceField",name,"targetPropertyIri","https://example.org/"+name,"transform","IDENTITY")).toList());config.put("semanticMapping",semantic);
   config.put("sourceObjectIdentityPolicy",Map.of("strategy","NATIVE_KEY","sourceFields",List.of("id"),"normalizationRuleRef","normalization://native-key/1"));config.put("changeRepresentationProfile",Map.of("mode","FULL_SNAPSHOT"));
-  config.put("dataAccessPolicies",List.of("id","name").stream().map(name->Map.of("target","https://example.org/"+name,"label","OPEN","scope","PROPERTY")).toList());
-  var extraction=new LinkedHashMap<>((Map<String,Object>)config.get("extractionProfile"));extraction.put("projection",Map.of("TYPE",List.of("id","name")));config.put("extractionProfile",extraction);enrich(config,false,0);return config;
+  config.put("dataAccessPolicies",List.of("id","name","secret").stream().map(name->Map.of("target","https://example.org/"+name,"label",name.equals("secret")?"RESTRICTED":"OPEN","scope","PROPERTY")).toList());
+  var extraction=new LinkedHashMap<>((Map<String,Object>)config.get("extractionProfile"));extraction.put("projection",Map.of("TYPE",List.of("id","name","secret")));config.put("extractionProfile",extraction);enrich(config,false,0);return config;
  }
  private static void activate(OnboardingService service,String source,UUID version,long lock,OnboardingService.Actor human){service.submit(source,version,lock,human,"r2b");var challenge=service.createChallenge(source,version,human,"r2b");service.confirm(source,version,(UUID)challenge.get("challenge_id"),human,"r2b","fixture:mfa");service.attestIngestionCompatibility(source,version,true,"R2b fixture exact runtime profile",new OnboardingService.Actor("fixture-ingestion","SERVICE",Set.of("ouf.ingestion.configuration.attest")),"r2b");service.activate(source,version,human,"r2b");}
  private static List<Map<String,Object>> bindings(){return List.of(Map.of("semanticId","core","semanticVersion","1","revisionId","00000000-0000-0000-0000-000000000001","publicationSetId","00000000-0000-0000-0000-000000000002"));}
