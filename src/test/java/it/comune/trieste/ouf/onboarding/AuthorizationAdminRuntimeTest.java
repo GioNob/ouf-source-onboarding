@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 @SpringBootTest @AutoConfigureMockMvc
 class AuthorizationAdminRuntimeTest {
  @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));}
+ @Autowired it.comune.trieste.ouf.onboarding.authorization.AuthorizationAdminService admin;
  @Autowired MockMvc http;@Autowired ObjectMapper json;@Autowired JdbcClient db;@Autowired AuthorizationPolicyRegistry registry;
  private final String root="/api/trusted-human/v1/authorization";
  @BeforeEach void clean(){db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle cascade").update();}
@@ -58,4 +59,23 @@ class AuthorizationAdminRuntimeTest {
   register();var raw=(com.fasterxml.jackson.databind.node.ObjectNode)json.valueToTree(policy(1));raw.put("unknownMandatoryCondition",true);
   http.perform(post(root+"/policies").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(raw))).andExpect(status().isBadRequest());
  }
+ @Test void concurrentPublishHasExactlyOneWinner()throws Exception{
+  register();var a=new it.comune.trieste.ouf.onboarding.authorization.AuthorizationAdminService.Actor("admin","tenant-a","HUMAN","fixture:1","concurrency");
+  var first=admin.create(policy(1),a);var second=admin.create(policy(2),a);
+  var start=new java.util.concurrent.CountDownLatch(1);
+  try(var pool=java.util.concurrent.Executors.newFixedThreadPool(2)){
+   var futures=new ArrayList<java.util.concurrent.Future<Boolean>>();
+   for(var draft:List.of(first,second))futures.add(pool.submit(()->{start.await();try{admin.publish(draft.id(),0,a);return true;}catch(it.comune.trieste.ouf.onboarding.domain.DomainFailure expected){return false;}}));
+   start.countDown();int winners=0;for(var future:futures)if(future.get(10,java.util.concurrent.TimeUnit.SECONDS))winners++;
+   assertThat(winners).isEqualTo(1);
+   assertThat(db.sql("select count(*) from ouf_authorization.admin_audit where action='PUBLISH_ACTIVATE'").query(Long.class).single()).isEqualTo(1);
+  }
+ }
+ @Test void activeTransportHashMatchesSerializedBundle()throws Exception{
+  register();String id=create(1).get("id").asText();http.perform(post(root+"/policies/"+id+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isOk());
+  byte[] raw=http.perform(get("/api/internal/v1/authorization/policy-bundle/active").with(r->{TestAuthorization.bind(r,"workload","SERVICE",Set.of("authorization.bundle.read"));return r;})).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
+  var node=json.readTree(raw);String actual=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.writeValueAsBytes(node.get("bundle"))));
+  assertThat(node.get("contentHash").asText()).isEqualTo(actual);
+ }
+
 }
