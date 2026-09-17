@@ -41,13 +41,13 @@ public class ManagedFormatsPublisherFixture {
   public void seed(){publish("shape");}
   @PostMapping("/fixture/r2f/{kind}") public Map<String,Object> publishSelected(@PathVariable String kind,@RequestHeader("Authorization") String auth) {
     human(auth);
-    if(!Set.of("assets","children","reload","gpkg","conflicts").contains(kind))throw new IllegalArgumentException("R2F_FIXTURE_KIND");
+    if(!Set.of("assets","children","reload","gpkg","conflicts","geometry").contains(kind))throw new IllegalArgumentException("R2F_FIXTURE_KIND");
     return "conflicts".equals(kind)?conflicts():publish(kind);
   }
   @SuppressWarnings("unchecked") private Map<String,Object> publish(String kind) {
     try {
-      boolean gpkg=kind.equals("gpkg"),shape=kind.equals("shape"),spatial=shape||gpkg, reload=kind.equals("reload"), child=kind.equals("children")||reload;
-      String source="r2f-"+(reload?"children":kind), filename=gpkg?"assets.gpkg":shape?"assets.zip":reload?"assets.accdb":"assets.mdb";
+      boolean gpkg=kind.equals("gpkg"),shape=kind.equals("shape")||kind.equals("geometry"),spatial=shape||gpkg, reload=kind.equals("reload"), child=kind.equals("children")||reload;
+      String source="r2f-"+(reload?"children":kind), filename=kind.equals("geometry")?"assets-shift.zip":gpkg?"assets.gpkg":shape?"assets.zip":reload?"assets.accdb":"assets.mdb";
       String media=gpkg?"application/geopackage+sqlite3":shape?"application/zip":"application/x-msaccess";
       byte[] bytes=Files.readAllBytes(Path.of(System.getenv("OUF_R2F_INPUT_DIR"),filename));
       String ref="object://r2f/"+filename;
@@ -89,7 +89,7 @@ public class ManagedFormatsPublisherFixture {
         var resolution=new LinkedHashMap<String,Object>(Map.of("strategyId",child?"CANONICAL_KEY":"COMPOSITE","strategyVersion","1","policyRef","policy://r2f-resolution/1","canonicalType",type,"canonicalKeyProperty",iri("ID"),"matchProperty",iri("ID")));
         if(!child)resolution.put("weighted",Map.of("signals",List.of(Map.of("property",iri("NAME"),"comparator","TEXT","weight",1)),"blockingProperties",List.of(iri("DISTRICT")),"maxCandidates",10,"highThreshold",.85,"reviewThreshold",.5,"minimumMargin",.1,"allowSpatialIdentity",false));
         var udp=new LinkedHashMap<String,Object>();udp.put("resolution",resolution);
-        udp.put("materialization",Map.of("policyRef","policy://r2f-authority/1","checkpointInterval",1,"bitemporalProperties",List.of(),"properties",fields.stream().filter(f->"INCLUDE".equals(f.extractionDecision())).map(f->Map.of("sourceField",f.targetPropertyIri(),"propertyIri",f.targetPropertyIri(),"datatype","http://www.w3.org/2001/XMLSchema#string","accessLabel","OPEN","authorityOrder",child?List.of(source):List.of("r2f-shape","r2f-assets"))).toList()));
+        udp.put("materialization",Map.of("policyRef",kind.equals("geometry")?"policy://r2f-authority/3":"policy://r2f-authority/1","checkpointInterval",1,"bitemporalProperties",List.of(),"properties",fields.stream().filter(f->"INCLUDE".equals(f.extractionDecision())).map(f->Map.of("sourceField",f.targetPropertyIri(),"propertyIri",f.targetPropertyIri(),"datatype","http://www.w3.org/2001/XMLSchema#string","accessLabel","OPEN","authorityOrder",kind.equals("geometry")?List.of():child?List.of(source):List.of("r2f-shape","r2f-assets"))).toList()));
         if(spatial)udp.put("spatial",Map.of("policyRef","policy://r2f-geometry/1","geometry",Map.of("sourceField",iri("geom"),"expectedSourceCrs","EPSG:4326","canonicalSrid",4326,"normalizationVersion","r2f-1","accessLabel","OPEN","crsPolicy",Map.of("sourceAxisOrder","XY","mismatchAction","REJECT")),"relationships",List.of()));
         if(child) {
           String relation=iri("belongsTo"),mapping="relationship://r2f-child-asset/1";

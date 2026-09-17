@@ -210,6 +210,22 @@ paths:
       x-ouf-mcp-capability: ouf.source-onboarding.semantic-gap.create
       parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
       responses: {'201': {description: Semantic gap registered}, default: {$ref: '#/components/responses/Problem'}}
+  /access-semantic-proposals:
+    post:
+      operationId: proposeAccessSchemaThroughGateway
+      x-ouf-mcp-capability: ouf.source-onboarding.semantic-gap.create
+      description: Bounded Gateway entry for idempotent proposals from a DRAFT's pinned Access profile. No adoption or publication.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId, versionId]
+              properties:
+                sourceId: {type: string, minLength: 1}
+                versionId: {type: string, format: uuid}
+      responses: {'200': {description: Schema proposals with immutable profile evidence}, default: {$ref: '#/components/responses/Problem'}}
   /sources/{sourceId}/onboarding-versions/{versionId}/semantic-gaps/from-access-schema:
     post:
       operationId: proposeAccessSchemaSemantics
