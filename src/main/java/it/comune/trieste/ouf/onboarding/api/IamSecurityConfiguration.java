@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.onboarding.api;
 
 import it.comune.trieste.ouf.authorization.PrincipalContext;
+import it.comune.trieste.ouf.authorization.ServletAuthorization;
 import it.comune.trieste.ouf.authorization.TrustedPrincipal;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -21,6 +22,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
@@ -102,7 +104,7 @@ public class IamSecurityConfiguration {
         .requestMatchers("/api/trusted-human/v1/authorization/**", "/api/internal/v1/authorization/policy-bundle/**").authenticated()
         .anyRequest().permitAll());
     http.oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(trustedJwtAuthenticationConverter)));
-    http.addFilterAfter(new TrustedBearerWriteMarkerFilter(), BearerTokenAuthenticationFilter.class);
+    http.addFilterAfter(new TrustedBearerPrincipalBridgeFilter(), BearerTokenAuthenticationFilter.class);
     return http.build();
   }
 
@@ -116,7 +118,9 @@ public class IamSecurityConfiguration {
     if (value == null) return Set.of();
     if (value instanceof String s) {
       if (s.isBlank()) return Set.of();
-      return Set.of(s.trim().split("\\s+"));
+      var result = new LinkedHashSet<String>();
+      for (String item : s.trim().split("\\s+")) if (!item.isBlank()) result.add(item);
+      return Set.copyOf(result);
     }
     if (value instanceof Collection<?> values) {
       var result = new LinkedHashSet<String>();
@@ -152,15 +156,19 @@ public class IamSecurityConfiguration {
     @Override public String getName() { return principal.getName(); }
   }
 
-  static final class TrustedBearerWriteMarkerFilter extends OncePerRequestFilter {
+  static final class TrustedBearerPrincipalBridgeFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
         throws ServletException, IOException {
-      String authorization = request.getHeader("Authorization");
-      if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)
-          && request.getUserPrincipal() instanceof TrustedPrincipal principal
-          && principal.context().actorType() == PrincipalContext.ActorType.HUMAN) {
-        request.setAttribute("ouf.csrfValidated", Boolean.TRUE);
+      var authentication = SecurityContextHolder.getContext().getAuthentication();
+      if (authentication != null && authentication.isAuthenticated()
+          && authentication.getPrincipal() instanceof TrustedPrincipal principal) {
+        request.setAttribute(ServletAuthorization.TRUSTED_PRINCIPAL, principal);
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)
+            && principal.context().actorType() == PrincipalContext.ActorType.HUMAN) {
+          request.setAttribute("ouf.csrfValidated", Boolean.TRUE);
+        }
       }
       chain.doFilter(request, response);
     }
