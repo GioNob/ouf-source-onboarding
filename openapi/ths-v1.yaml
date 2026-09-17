@@ -29,6 +29,7 @@ paths:
   /api/trusted-human/v1/approval-challenges/{challengeId}:
     get:
       operationId: getTrustedApprovalCard
+      description: Returns the frozen configuration and, for GIS profiles, spatialDecision and spatialDecisionFindings containing axes, CONVERT/REJECT, operations, accuracy, area, controls and resource versions. Human confirmation binds these fields through configuration_hash.
       parameters: [{$ref: '#/components/parameters/ChallengeId'}]
       responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
   /api/trusted-human/v1/approval-challenges/{challengeId}/confirm:
