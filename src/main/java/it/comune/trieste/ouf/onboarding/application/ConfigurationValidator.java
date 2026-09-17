@@ -21,6 +21,7 @@ public class ConfigurationValidator {
       requireEnum(sync,"incremental",Set.of("CHANGE_TOKEN","LAST_MODIFIED","MONOTONIC_ID","SNAPSHOT_DIFF","NONE"),"/syncProfile/incremental",out);
       Object page=sync.get("pageSize"); if(page instanceof Number n && (n.longValue()<1||n.longValue()>10000)) error(out,"ONB_PAGE_SIZE_INVALID","/syncProfile/pageSize","pageSize must be between 1 and 10000");
       if(sync.get("pollInterval") instanceof String value)try{long seconds=java.time.Duration.parse(value).toSeconds();if(seconds<60||seconds>2_678_400)error(out,"ONB_POLL_INTERVAL_INVALID","/syncProfile/pollInterval","pollInterval must be between PT1M and P31D");}catch(Exception e){error(out,"ONB_POLL_INTERVAL_INVALID","/syncProfile/pollInterval","pollInterval must be an ISO-8601 duration");}
+      if(sync.get("pollInterval")!=null)validateScheduledPolicy(sync,out);
     });
     object(configuration,"extractionProfile").ifPresent(ex->{
       requireText(ex,"profileId","/extractionProfile/profileId",out); requireText(ex,"version","/extractionProfile/version",out); requireText(ex,"sourceId","/extractionProfile/sourceId",out);
@@ -50,6 +51,16 @@ public class ConfigurationValidator {
     return new Result(List.copyOf(out));
   }
 
+  private static void validateScheduledPolicy(Map<String,Object> sync,List<Finding> out){
+    var policy=object(sync,"operationalPolicy");if(policy.isEmpty()){error(out,"ONB_OPERATIONAL_POLICY_REQUIRED","/syncProfile/operationalPolicy","Scheduled sources require an explicit bounded operational policy");return;}
+    var p=policy.orElseThrow();try{java.time.ZoneId.of(String.valueOf(p.get("timeZone")));}catch(Exception e){error(out,"ONB_TIMEZONE_INVALID","/syncProfile/operationalPolicy/timeZone","Explicit IANA timezone required");}
+    for(String key:List.of("misfireToleranceSeconds","sourceTimeoutSeconds","maxRetryAttempts","maxRetryElapsedSeconds","incidentDedupWindowSeconds","operationalRetentionDays")){
+      int min=key.equals("maxRetryAttempts")?0:key.equals("operationalRetentionDays")?30:1;int max=key.equals("sourceTimeoutSeconds")?300:key.equals("maxRetryAttempts")?100:key.equals("operationalRetentionDays")?3650:86400;
+      Object value=p.get(key);if(!(value instanceof Number n)||n.doubleValue()!=n.longValue()||n.longValue()<min||n.longValue()>max)error(out,"ONB_OPERATIONAL_POLICY_INVALID","/syncProfile/operationalPolicy/"+key,"Explicit bounded integer required");
+    }
+    requireEnum(p,"operationalVisibilityClass",Set.of("PUBLIC_OPERATIONAL","TENANT_OPERATIONAL","RESTRICTED_OPERATIONAL","SECURITY_SENSITIVE"),"/syncProfile/operationalPolicy/operationalVisibilityClass",out);
+    Object backoff=sync.get("retryBackoffSeconds");if(!(backoff instanceof Number n)||n.doubleValue()!=n.longValue()||n.longValue()<1||n.longValue()>86400)error(out,"ONB_RETRY_BACKOFF_REQUIRED","/syncProfile/retryBackoffSeconds","Explicit bounded retry backoff required");
+  }
   private static Optional<Map<String,Object>> object(Map<String,Object> parent,String key){Object value=parent.get(key);if(value instanceof Map<?,?> raw){Map<String,Object> copy=new LinkedHashMap<>();raw.forEach((k,v)->copy.put(String.valueOf(k),v));return Optional.of(copy);}return Optional.empty();}
   private static void requireObject(Map<String,Object> parent,String key,List<Finding> out){requireObject(parent,key,"/"+key,out);}
   private static void requireObject(Map<String,Object> parent,String key,String path,List<Finding> out){if(object(parent,key).isEmpty())error(out,"ONB_REQUIRED_OBJECT_MISSING",path,"Required object is missing");}
