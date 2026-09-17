@@ -22,6 +22,7 @@ public class AuthorizationAdminService {
  private String encode(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalArgumentException("AUTH_POLICY_INVALID",e);}}
  private PolicyBundle decode(String raw){try{return json.readValue(raw,PolicyBundle.class);}catch(Exception e){throw new IllegalArgumentException("AUTH_POLICY_INVALID",e);}}
  private String activeRef(){return registry.active().map(a->a.bundleId()+":"+a.version()).orElse("NONE");}
+ public boolean bootstrapOpen(){return registry.active().isEmpty();}
  private void audit(String action,String target,Actor actor){db.sql("insert into ouf_authorization.admin_audit values(:id,:a,:t,:s,:tenant,'HUMAN',:p,:c,transaction_timestamp())").param("id",UUID.randomUUID()).param("a",action).param("t",target).param("s",actor.subject()).param("tenant",actor.tenant()).param("p",actor.policyRef()).param("c",actor.correlation()).update();}
  @Transactional public void register(String owner,CapabilityDescriptor descriptor,Actor actor){
   if(owner==null||owner.isBlank())throw new IllegalArgumentException("ownerRef required");
