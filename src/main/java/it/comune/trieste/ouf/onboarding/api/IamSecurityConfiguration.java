@@ -102,6 +102,9 @@ public class IamSecurityConfiguration {
   SecurityFilterChain iamSecurityFilterChain(
       HttpSecurity http,
       Converter<Jwt, ? extends AbstractAuthenticationToken> trustedJwtAuthenticationConverter) throws Exception {
+    // These Authorization endpoints are stateless bearer APIs, not cookie/session APIs.
+    // Therefore CSRF is disabled and state-changing requests require the explicit
+    // server-side TrustedWriteProof established by the bearer authentication chain.
     http.csrf(csrf -> csrf.disable());
     http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
     http.authorizeHttpRequests(auth -> auth
@@ -171,7 +174,7 @@ public class IamSecurityConfiguration {
         String authorization = request.getHeader("Authorization");
         if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)
             && principal.context().actorType() == PrincipalContext.ActorType.HUMAN) {
-          request.setAttribute("ouf.csrfValidated", Boolean.TRUE);
+          TrustedWriteProof.markStatelessBearer(request);
         }
       }
       chain.doFilter(request, response);
