@@ -21,9 +21,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -125,9 +125,9 @@ class IamAuthorizationBootstrapIntegrationTest {
   }
 
   @Test
-  void decoderFailureReturns401() throws Exception {
+  void invalidBearerTokenReturns401() throws Exception {
     when(jwtDecoder.decode("invalid"))
-        .thenThrow(new JwtException("invalid token"));
+        .thenThrow(new BadJwtException("invalid token"));
 
     http.perform(post("/api/trusted-human/v1/authorization/capabilities")
         .header("Authorization", "Bearer invalid")
