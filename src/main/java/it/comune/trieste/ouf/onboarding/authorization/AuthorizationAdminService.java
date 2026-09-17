@@ -22,7 +22,9 @@ public class AuthorizationAdminService {
  private String encode(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalArgumentException("AUTH_POLICY_INVALID",e);}}
  private PolicyBundle decode(String raw){try{return json.readValue(raw,PolicyBundle.class);}catch(Exception e){throw new IllegalArgumentException("AUTH_POLICY_INVALID",e);}}
  private String activeRef(){return registry.active().map(a->a.bundleId()+":"+a.version()).orElse("NONE");}
- public boolean bootstrapOpen(){return registry.active().isEmpty();}
+ private boolean bootstrapCompleted(){return db.sql("select completed from ouf_authorization.bootstrap_latch where singleton_key=true").query(Boolean.class).single();}
+ public boolean bootstrapOpen(){return !bootstrapCompleted()&&registry.active().isEmpty();}
+ private void completeBootstrap(Actor actor){db.sql("update ouf_authorization.bootstrap_latch set completed=true,completed_at=transaction_timestamp(),completed_by=:subject where singleton_key=true and completed=false").param("subject",actor.subject()).update();}
  private void audit(String action,String target,Actor actor){db.sql("insert into ouf_authorization.admin_audit values(:id,:a,:t,:s,:tenant,'HUMAN',:p,:c,transaction_timestamp())").param("id",UUID.randomUUID()).param("a",action).param("t",target).param("s",actor.subject()).param("tenant",actor.tenant()).param("p",actor.policyRef()).param("c",actor.correlation()).update();}
  @Transactional public void register(String owner,CapabilityDescriptor descriptor,Actor actor){
   if(owner==null||owner.isBlank())throw new IllegalArgumentException("ownerRef required");
@@ -46,6 +48,7 @@ public class AuthorizationAdminService {
   if(!activeRef().equals(d.baseActiveRef()))throw failure(HttpStatus.CONFLICT,"AUTH_ACTIVE_CHANGED_REBASE_REQUIRED");validate(d.policy());
   var active=registry.active();if(active.isPresent()&&(!active.get().bundleId().equals(d.policy().bundleId())||d.policy().version()<=active.get().version()))throw failure(HttpStatus.CONFLICT,"AUTH_POLICY_VERSION_MUST_ADVANCE");
   var p=d.policy();registry.publishAndActivate(new PolicyBundle(p.bundleId(),p.version(),Instant.now(),p.capabilities(),p.grants()),actor.subject());
+  completeBootstrap(actor);
   runtime.refreshActive();
   db.sql("update ouf_authorization.policy_draft set state='PUBLISHED',revision=revision+1 where draft_id=:id").param("id",id).update();audit("PUBLISH_ACTIVATE",id.toString(),actor);return get(id);
  }
