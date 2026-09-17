@@ -22,7 +22,7 @@ public class PublishedBundleCompiler {
     copy(template,out,"sourceDefinitionRef","bindingRef","sourceRuntimeProfileRef");
     out.put("extractionProfileRef",Objects.toString(template.get("extractionProfileRef"),"onboarding://extraction-profiles/"+text(extraction,"profileId")+"/versions/"+extraction.get("version")));
     out.put("extractionProfile",extraction);out.put("syncProfile",object(configuration,"syncProfile"));
-    copy(configuration,out,"sourceObjectIdentityPolicy","temporalMapping","changeRepresentationProfile","deltaPatchContract","relationshipMappings","authorityPolicies","dataAccessPolicies");
+    copy(configuration,out,"sourceObjectIdentityPolicy","temporalMapping","changeRepresentationProfile","deltaPatchContract","relationshipMappings","authorityPolicies","dataAccessPolicies","semanticReferenceBindings");
     List<String> semanticRefs=listOfStrings(semantic.get("semanticRefs"));out.put("semanticRefs",semanticRefs);out.put("semanticMapping",semantic);
     Map<String,Object> sourceType=object(semantic,"sourceType");String typeCode=text(sourceType,"typeCode");
     String schemaRef=Objects.toString(template.get("schemaRef"),"onboarding://sources/"+sourceId+"/schemas/"+typeCode);
