@@ -18,7 +18,7 @@ import org.springframework.context.annotation.*;
 public class ServingPublisherFixture {
  public static void main(String[] args){SpringApplication.run(new Class<?>[]{OnboardingApplication.class,Fixture.class},args);}
  @Configuration(proxyBeanMethods=false) public static class Fixture {
-  @Bean ManagedFormatsPublisherFixture managedFormatsPublisher(OnboardingService service,ManagedFileService files,CanonicalHash hashes){return new ManagedFormatsPublisherFixture(service,files,hashes);}
+  @Bean ManagedFormatsPublisherFixture managedFormatsPublisher(OnboardingService service,ManagedFileService files,CanonicalHash hashes,SemanticGapService gaps){return new ManagedFormatsPublisherFixture(service,files,hashes,gaps);}
   @Bean GeoPackagePublisherFixture geoPackagePublisher(OnboardingService service,ManagedFileService files,CanonicalHash hashes){return new GeoPackagePublisherFixture(service,files,hashes);}
   @Bean R2cControl r2cControl(OnboardingService service){return new R2cControl(service);}
   @Bean FilterRegistrationBean<Filter> fixtureIdentity(){

@@ -28,7 +28,7 @@ public class SemanticGapService {
     java.util.regex.Matcher refMatch=java.util.regex.Pattern.compile("profile://managed-files/([0-9a-fA-F-]{36})/profiles/([0-9a-fA-F-]{36})").matcher(ref);
     if(!refMatch.matches())throw invalid("Pinned Access file profile required");
     UUID asset=UUID.fromString(refMatch.group(1)),profile=UUID.fromString(refMatch.group(2));
-    var stored=db.sql("select p.metadata::text metadata,a.content_hash from ouf_onboarding.file_profile p join ouf_onboarding.managed_file_asset a on a.asset_id=p.asset_id where p.asset_id=:a and p.profile_id=:p and p.format='ACCESS' and a.source_id=:s").param("a",asset).param("p",profile).param("s",sourceId).query().listOfRows().stream().findFirst().orElseThrow(()->invalid("Access profile does not belong to this source"));
+    var stored=db.sql("select p.metadata::text metadata,a.content_hash from ouf_onboarding.file_profile p join ouf_onboarding.managed_file_asset a on a.asset_id=p.asset_id where p.asset_id=:a and p.profile_id=:p and p.format='ACCESS' and (a.source_id=:s or exists(select 1 from ouf_onboarding.source owned where owned.source_id=:s and owned.metadata->>'managedFileAssetId'=a.asset_id::text))").param("a",asset).param("p",profile).param("s",sourceId).query().listOfRows().stream().findFirst().orElseThrow(()->invalid("Access profile does not belong to this source"));
     if(!Objects.equals(stored.get("content_hash"),evidence.get("contentHash")))throw invalid("Access profile content hash differs from draft");
     Map<String,Object> metadata=readMap(String.valueOf(stored.get("metadata")));
     String selected=String.valueOf(evidence.get("selectedTable"));
