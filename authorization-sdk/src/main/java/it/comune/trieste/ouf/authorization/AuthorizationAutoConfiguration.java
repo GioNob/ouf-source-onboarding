@@ -20,5 +20,13 @@ public class AuthorizationAutoConfiguration {
     }
     return runtime; // Missing bundle never authorizes a request; health reports not-ready.
   }
+  @Bean(destroyMethod="close")
+  @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name="ouf.authorization.registry-url")
+  ActiveBundleRefresher oufActiveBundleRefresher(LocalAuthorization runtime,Environment env){
+    long interval=env.getProperty("ouf.authorization.refresh-seconds",Long.class,30L);
+    long stale=env.getProperty("ouf.authorization.max-staleness-seconds",Long.class,300L);
+    if(interval>=stale)throw new IllegalArgumentException("refresh interval must be below max staleness");
+    return new ActiveBundleRefresher(runtime,java.net.URI.create(env.getRequiredProperty("ouf.authorization.registry-url")),Path.of(env.getRequiredProperty("ouf.authorization.registry-token-file")),Duration.ofSeconds(interval));
+  }
   @Bean ServletContextInitializer oufAuthorizationContext(LocalAuthorization runtime){return context->context.setAttribute(ServletAuthorization.RUNTIME,runtime);}
 }

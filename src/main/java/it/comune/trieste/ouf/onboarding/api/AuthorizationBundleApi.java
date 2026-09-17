@@ -35,12 +35,14 @@ public class AuthorizationBundleApi {
         "AUTH_POLICY_BUNDLE_UNAVAILABLE",
         "No active Authorization policy bundle is available"));
     PolicyBundle bundle = registry.load(pointer.bundleId(), pointer.version());
-    return new ActivePolicyBundleView(pointer.bundleId(), pointer.version(), pointer.activatedAt(), bundle);
+    return new ActivePolicyBundleView(pointer.bundleId(), pointer.version(), pointer.activatedAt(), bundle, registry.transportHash(bundle));
   }
 
   public record ActivePolicyBundleView(
       String bundleId,
       long bundleVersion,
       Instant activatedAt,
-      PolicyBundle bundle) {}
+      PolicyBundle bundle, String contentHash) {
+    public ActivePolicyBundleView(String bundleId,long bundleVersion,Instant activatedAt,PolicyBundle bundle){this(bundleId,bundleVersion,activatedAt,bundle,null);}
+  }
 }

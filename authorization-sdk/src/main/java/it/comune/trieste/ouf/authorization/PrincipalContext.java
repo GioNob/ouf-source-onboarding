@@ -11,8 +11,13 @@ public record PrincipalContext(
         String authenticationContextRef,
         String issuer,
         String audience,
-        Set<String> scopes) {
+        Set<String> scopes,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) IdentityClaims claims) {
 
+    public PrincipalContext(String subjectId,String tenantId,ActorType actorType,String servicePrincipalId,String authenticationContextRef,String issuer,String audience,Set<String> scopes){this(subjectId,tenantId,actorType,servicePrincipalId,authenticationContextRef,issuer,audience,scopes,null);}
+    public record IdentityClaims(Set<String> externalRoleRefs,String acr,Set<String> amr,java.time.Instant authenticatedAt){
+      public IdentityClaims{externalRoleRefs=externalRoleRefs==null?Set.of():Set.copyOf(externalRoleRefs);amr=amr==null?Set.of():Set.copyOf(amr);if(externalRoleRefs.size()>256||amr.size()>32)throw new IllegalArgumentException("identity claims limit");}
+    }
     public PrincipalContext {
         subjectId = require(subjectId, "subjectId");
         tenantId = require(tenantId, "tenantId");

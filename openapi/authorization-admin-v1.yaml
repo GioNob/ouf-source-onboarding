@@ -1,0 +1,643 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OUF Authorization administration",
+    "version": "1.0.0",
+    "description": "PET Authorization 1.5 sections 109.1-109.7. Platform policy administration via trusted HUMAN channel. No MCP exposure. Authentication and CSRF validation must be established by the deployment trusted adapter; headers are never authority."
+  },
+  "security": [
+    {
+      "trustedHuman": []
+    }
+  ],
+  "paths": {
+    "/api/trusted-human/v1/authorization/capabilities": {
+      "get": {
+        "operationId": "get_capabilities",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Success. Draft responses include the current quoted revision in ETag."
+          },
+          "400": {
+            "description": "Malformed or unsupported policy condition"
+          },
+          "403": {
+            "description": "Missing trusted HUMAN principal, capability or validated CSRF context"
+          },
+          "409": {
+            "description": "Immutable capability, active bundle conflict or non-editable draft"
+          },
+          "412": {
+            "description": "Stale ETag"
+          },
+          "428": {
+            "description": "If-Match required"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_capabilities",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "201": {
+            "description": "Success. Draft responses include the current quoted revision in ETag."
+          },
+          "400": {
+            "description": "Malformed or unsupported policy condition"
+          },
+          "403": {
+            "description": "Missing trusted HUMAN principal, capability or validated CSRF context"
+          },
+          "409": {
+            "description": "Immutable capability, active bundle conflict or non-editable draft"
+          },
+          "412": {
+            "description": "Stale ETag"
+          },
+          "428": {
+            "description": "If-Match required"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Registration"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/trusted-human/v1/authorization/policies": {
+      "post": {
+        "operationId": "post_policies",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Success. Draft responses include the current quoted revision in ETag."
+          },
+          "400": {
+            "description": "Malformed or unsupported policy condition"
+          },
+          "403": {
+            "description": "Missing trusted HUMAN principal, capability or validated CSRF context"
+          },
+          "409": {
+            "description": "Immutable capability, active bundle conflict or non-editable draft"
+          },
+          "412": {
+            "description": "Stale ETag"
+          },
+          "428": {
+            "description": "If-Match required"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyBundle"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/trusted-human/v1/authorization/policies/{id}": {
+      "get": {
+        "operationId": "get_policies_id",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Success. Draft responses include the current quoted revision in ETag."
+          },
+          "400": {
+            "description": "Malformed or unsupported policy condition"
+          },
+          "403": {
+            "description": "Missing trusted HUMAN principal, capability or validated CSRF context"
+          },
+          "409": {
+            "description": "Immutable capability, active bundle conflict or non-editable draft"
+          },
+          "412": {
+            "description": "Stale ETag"
+          },
+          "428": {
+            "description": "If-Match required"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "put": {
+        "operationId": "put_policies_id",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Success. Draft responses include the current quoted revision in ETag."
+          },
+          "400": {
+            "description": "Malformed or unsupported policy condition"
+          },
+          "403": {
+            "description": "Missing trusted HUMAN principal, capability or validated CSRF context"
+          },
+          "409": {
+            "description": "Immutable capability, active bundle conflict or non-editable draft"
+          },
+          "412": {
+            "description": "Stale ETag"
+          },
+          "428": {
+            "description": "If-Match required"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyBundle"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_policies_id",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Success. Draft responses include the current quoted revision in ETag."
+          },
+          "400": {
+            "description": "Malformed or unsupported policy condition"
+          },
+          "403": {
+            "description": "Missing trusted HUMAN principal, capability or validated CSRF context"
+          },
+          "409": {
+            "description": "Immutable capability, active bundle conflict or non-editable draft"
+          },
+          "412": {
+            "description": "Stale ETag"
+          },
+          "428": {
+            "description": "If-Match required"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/trusted-human/v1/authorization/policies/{id}/grants/{grantId}": {
+      "put": {
+        "operationId": "put_policies_id_grants_grantId",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Success. Draft responses include the current quoted revision in ETag."
+          },
+          "400": {
+            "description": "Malformed or unsupported policy condition"
+          },
+          "403": {
+            "description": "Missing trusted HUMAN principal, capability or validated CSRF context"
+          },
+          "409": {
+            "description": "Immutable capability, active bundle conflict or non-editable draft"
+          },
+          "412": {
+            "description": "Stale ETag"
+          },
+          "428": {
+            "description": "If-Match required"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "grantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Grant"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_policies_id_grants_grantId",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Success. Draft responses include the current quoted revision in ETag."
+          },
+          "400": {
+            "description": "Malformed or unsupported policy condition"
+          },
+          "403": {
+            "description": "Missing trusted HUMAN principal, capability or validated CSRF context"
+          },
+          "409": {
+            "description": "Immutable capability, active bundle conflict or non-editable draft"
+          },
+          "412": {
+            "description": "Stale ETag"
+          },
+          "428": {
+            "description": "If-Match required"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "grantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/trusted-human/v1/authorization/policies/{id}:publish": {
+      "post": {
+        "operationId": "post_policies_id_publish",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Success. Draft responses include the current quoted revision in ETag."
+          },
+          "400": {
+            "description": "Malformed or unsupported policy condition"
+          },
+          "403": {
+            "description": "Missing trusted HUMAN principal, capability or validated CSRF context"
+          },
+          "409": {
+            "description": "Immutable capability, active bundle conflict or non-editable draft"
+          },
+          "412": {
+            "description": "Stale ETag"
+          },
+          "428": {
+            "description": "If-Match required"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "trustedHuman": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Validated by the trusted authentication adapter and bound as TrustedPrincipal; mutations also require server-validated CSRF context."
+      }
+    },
+    "schemas": {
+      "CapabilityDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "capabilityId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "requiredScope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "allowedActors": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "enum": [
+                "HUMAN",
+                "SERVICE",
+                "AI_AGENT"
+              ]
+            }
+          }
+        },
+        "required": [
+          "capabilityId",
+          "operation",
+          "requiredScope",
+          "allowedActors"
+        ]
+      },
+      "Registration": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ownerRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "descriptor": {
+            "$ref": "#/components/schemas/CapabilityDescriptor"
+          }
+        },
+        "required": [
+          "ownerRef",
+          "descriptor"
+        ]
+      },
+      "GrantConstraints": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "effect": {
+            "enum": [
+              "ALLOW",
+              "DENY"
+            ]
+          },
+          "externalRoleRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resourceType": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resourceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resourceAttributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "allowedDataLabels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "allowedDetailLevels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "requiredAcr": {
+            "type": "string",
+            "minLength": 1
+          },
+          "requiredAmr": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "maxAuthenticationAgeSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          }
+        },
+        "required": []
+      },
+      "Grant": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "grantId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capabilityId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tenantId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "subjectId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "servicePrincipalId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "organizationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validUntil": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "constraints": {
+            "$ref": "#/components/schemas/GrantConstraints"
+          }
+        },
+        "required": [
+          "grantId",
+          "capabilityId",
+          "tenantId",
+          "validFrom",
+          "validUntil"
+        ]
+      },
+      "PolicyBundle": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bundleId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "capabilities": {
+            "type": "array",
+            "maxItems": 10000,
+            "items": {
+              "$ref": "#/components/schemas/CapabilityDescriptor"
+            }
+          },
+          "grants": {
+            "type": "array",
+            "maxItems": 10000,
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            }
+          }
+        },
+        "required": [
+          "bundleId",
+          "version",
+          "publishedAt",
+          "capabilities",
+          "grants"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,61 @@
+package it.comune.trieste.ouf.onboarding;
+
+import static org.assertj.core.api.Assertions.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import it.comune.trieste.ouf.authorization.*;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
+import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicyRegistry;
+import com.fasterxml.jackson.databind.*;
+import java.time.Instant;
+import java.util.*;
+import org.junit.jupiter.api.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.*;
+import org.springframework.test.web.servlet.*;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+
+@SpringBootTest @AutoConfigureMockMvc
+class AuthorizationAdminRuntimeTest {
+ @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));}
+ @Autowired MockMvc http;@Autowired ObjectMapper json;@Autowired JdbcClient db;@Autowired AuthorizationPolicyRegistry registry;
+ private final String root="/api/trusted-human/v1/authorization";
+ @BeforeEach void clean(){db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle cascade").update();}
+ private RequestPostProcessor actor(String type,boolean csrf){return r->{TestAuthorization.bind(r,"admin",type,Set.of("authorization.policy.admin"));r.setAttribute("ouf.csrfValidated",csrf);return r;};}
+ private CapabilityDescriptor cap(){return new CapabilityDescriptor("data.read","READ","data.read",Set.of(PrincipalContext.ActorType.HUMAN));}
+ private PolicyBundle policy(long version){var now=Instant.now();return new PolicyBundle("admin-test",version,now,List.of(cap()),List.of(new Grant("g1","data.read","tenant-a","reader",null,null,now.minusSeconds(60),now.plusSeconds(3600))));}
+ private void register()throws Exception{http.perform(post(root+"/capabilities").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("ownerRef","udp","descriptor",cap())))).andExpect(status().isCreated());}
+ private JsonNode create(long version)throws Exception{return json.readTree(http.perform(post(root+"/policies").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(policy(version)))).andExpect(status().isOk()).andExpect(header().string("ETag","\"0\"")).andReturn().getResponse().getContentAsByteArray());}
+ @Test void adminPublishAndRevocationAreVersionedAuditedAndImmutable()throws Exception{
+  register();var draft=create(1);String id=draft.get("id").asText();
+  http.perform(post(root+"/policies/"+id+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isOk());
+  var runtime=new LocalAuthorization(java.time.Clock.systemUTC(),java.time.Duration.ofMinutes(5));TestAuthorization.install(runtime,registry.load("admin-test",1));var pinned=runtime.currentSnapshot();
+  var p=new PrincipalContext("reader","tenant-a",PrincipalContext.ActorType.HUMAN,null,"auth","issuer","aud",Set.of("data.read"));var resource=new ResourceContext("object","42","tenant-a",null,Map.of());assertThat(runtime.evaluate(p,resource,"data.read","READ").allowed()).isTrue();
+  var next=create(2);String nextId=next.get("id").asText();
+  http.perform(delete(root+"/policies/"+nextId+"/grants/g1").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isOk()).andExpect(header().string("ETag","\"1\""));
+  http.perform(post(root+"/policies/"+nextId+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isPreconditionFailed());
+  http.perform(post(root+"/policies/"+nextId+":publish").with(actor("HUMAN",true)).header("If-Match","\"1\"")).andExpect(status().isOk());
+  TestAuthorization.install(runtime,registry.load("admin-test",2));assertThat(runtime.evaluate(p,resource,"data.read","READ").allowed()).isFalse();assertThat(runtime.evaluate(pinned,p,resource,"data.read","READ").allowed()).isTrue();
+  assertThat(db.sql("select count(*) from ouf_authorization.admin_audit").query(Long.class).single()).isGreaterThanOrEqualTo(6);
+  assertThatThrownBy(()->db.sql("delete from ouf_authorization.admin_audit").update()).hasStackTraceContaining("append-only");
+ }
+ @Test void machineCsrfAndMissingEtagCannotWrite()throws Exception{
+  for(String type:List.of("SERVICE","AI_AGENT"))http.perform(post(root+"/policies").with(actor(type,true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(policy(1)))).andExpect(status().isForbidden());
+  http.perform(post(root+"/policies").with(actor("HUMAN",false)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(policy(1)))).andExpect(status().isForbidden());
+  register();String id=create(1).get("id").asText();http.perform(delete(root+"/policies/"+id).with(actor("HUMAN",true))).andExpect(status().isPreconditionRequired());
+ }
+ @Test void capabilityRepurposeAndStaleActiveBaseAreRejected()throws Exception{
+  register();http.perform(post(root+"/capabilities").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("ownerRef","other","descriptor",cap())))).andExpect(status().isConflict());
+  String first=create(1).get("id").asText(),second=create(2).get("id").asText();
+  http.perform(post(root+"/policies/"+first+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isOk());
+  http.perform(post(root+"/policies/"+second+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isConflict());
+ }
+ @Test void unknownPolicyConditionFailsClosed()throws Exception{
+  register();var raw=(com.fasterxml.jackson.databind.node.ObjectNode)json.valueToTree(policy(1));raw.put("unknownMandatoryCondition",true);
+  http.perform(post(root+"/policies").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(raw))).andExpect(status().isBadRequest());
+ }
+}

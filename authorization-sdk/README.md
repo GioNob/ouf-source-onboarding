@@ -1,7 +1,7 @@
-# Shared Authorization SDK 1.0.0
+# Shared Authorization SDK 1.1.0
 
 Normative authority: Reality Baseline 1.7, Authorization PET 1.5 §§109.2–3,
-109.5–8, Matrix 1.7. Coordinates: `it.comune.trieste.ouf:authorization-sdk:1.0.0`.
+109.5–8, Matrix 1.7. Coordinates: `it.comune.trieste.ouf:authorization-sdk:1.1.0`.
 Canonical source ownership stays here in the Authorization control-plane repository.
 The source bundle is mirrored byte-for-byte in Java consumers under `vendor/` with
 source commit and SHA-256 manifest. CI builds and installs the same Maven artifact;
@@ -38,3 +38,5 @@ Public same-major API changes must be additive. Payload JSON and historical
 PolicyBundle/PrincipalContext fields are preserved; the Java package is now the
 common `it.comune.trieste.ouf.authorization`, and in-repository consumers migrate
 in this tranche. No previously published SDK artifact coordinates are replaced.
+
+R1b: optional trusted role/assurance claims and grant constraints, explicit DENY precedence, resource/detail decision metadata, HTTPS background refresh with SHA-256 and bounded staleness. See owner docs/AUTHORIZATION_R1B.md. Unknown policy fields fail closed.

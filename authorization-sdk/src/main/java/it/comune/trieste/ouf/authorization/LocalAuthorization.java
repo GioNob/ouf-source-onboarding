@@ -56,6 +56,7 @@ public final class LocalAuthorization {
       lastError=null;return new BundleRefreshResult(true,"INSTALLED");
     }catch(Exception e){lastError=e instanceof IllegalArgumentException?e.getMessage():"BUNDLE_LOAD_FAILED";return new BundleRefreshResult(false,lastError);}
   }
+  public void refreshFailure(String code){lastError=code;}
   public PolicySnapshot currentSnapshot(){var p=active.get();requireFresh(p);return p;}
   public void requireFresh(PolicySnapshot p){
     if(p==null)throw new SecurityException("NO_POLICY_BUNDLE");
