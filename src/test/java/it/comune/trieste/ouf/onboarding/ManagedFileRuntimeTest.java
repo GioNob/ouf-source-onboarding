@@ -20,6 +20,20 @@ class ManagedFileRuntimeTest {
   @Autowired ManagedFileService files; @Autowired ManagedFileProfiler profiler; @Autowired OnboardingService onboarding; @Autowired CanonicalHash hashes; @Autowired JdbcClient db;
   OnboardingService.Actor human=new OnboardingService.Actor("human:test","HUMAN_USER");OnboardingService.Actor ingestion=new OnboardingService.Actor("service:ingestion","SERVICE",Set.of("ouf.ingestion.configuration.attest"));
   @BeforeEach void clean(){db.sql("truncate table ouf_onboarding.audit_event,ouf_onboarding.consumer_compatibility_attestation,ouf_onboarding.approval_decision,ouf_onboarding.approval_challenge,ouf_onboarding.published_configuration,ouf_onboarding.file_profile_job,ouf_onboarding.onboarding_version,ouf_onboarding.file_profile,ouf_onboarding.managed_file_asset,ouf_onboarding.source restart identity cascade").update();}
+  @Test @SuppressWarnings("unchecked") void accessTableWithoutGeometryCreatesDraftWithCompositeKeysAndRelationshipEvidence(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory)throws Exception{
+    it.comune.trieste.ouf.pairwise.ManagedFormatsPublisherFixture.main(new String[]{directory.toString()});
+    for(String filename:List.of("assets.mdb","assets.accdb")){
+      byte[] bytes=java.nio.file.Files.readAllBytes(directory.resolve(filename));
+      UUID asset=(UUID)files.register(null,"object://staging/"+filename,hashes.ofBytes(bytes),"application/x-msaccess",bytes.length,"human:test","retention://30d").get("asset_id");
+      UUID profile=(UUID)files.profile(asset,bytes,"object://samples/"+filename).get("profile_id");
+      var fields=List.of("ID","CODE","NAME","DISTRICT").stream().map(n->new ManagedFileService.FieldDecision(n,"INCLUDE","OPEN","https://example.org/"+n,"IDENTITY",null,null,null)).toList();
+      var draft=files.onboard(asset,profile,filename,"Assets","Comune","https://example.org/Asset",List.of("core@1"),List.of("DISTRICT","CODE"),fields,"Assets",human,"r2f");
+      var config=(Map<String,Object>)draft.get("configuration");
+      assertThat((Map<String,Object>)config.get("sourceObjectIdentityPolicy")).containsEntry("sourceFields",List.of("DISTRICT","CODE"));
+      assertThat(String.valueOf(config.get("sourceSchemaEvidence"))).contains("asset_children","PENDING_HUMAN_REVIEW","ASSET_CODE");
+      assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
+    }
+  }
   @Test @SuppressWarnings("unchecked") void geoPackageRegistrationRequiresLayerAndStableKeys()throws Exception{
     byte[] bytes=getClass().getResourceAsStream("/geopackage/cameras.gpkg").readAllBytes();
     UUID asset=(UUID)files.register(null,"object://staging/cameras.gpkg",hashes.ofBytes(bytes),"application/geopackage+sqlite3",bytes.length,"human:test","retention://30d").get("asset_id");
