@@ -2,7 +2,6 @@ package it.comune.trieste.ouf.onboarding.api;
 
 import it.comune.trieste.ouf.authorization.PrincipalContext;
 import it.comune.trieste.ouf.authorization.ServletAuthorization;
-import it.comune.trieste.ouf.authorization.TrustedPrincipal;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationAdminService;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
@@ -12,7 +11,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/** Authentication adapters must establish principal and validated CSRF before this boundary. */
+/** Authentication adapters must establish a trusted principal and validated write proof before this boundary. */
 @Component @Order(Ordered.LOWEST_PRECEDENCE-10)
 public class AuthorizationAdminBoundary extends OncePerRequestFilter {
  private final AuthorizationAdminService service;
@@ -21,8 +20,7 @@ public class AuthorizationAdminBoundary extends OncePerRequestFilter {
  @Override protected void doFilterInternal(HttpServletRequest r,HttpServletResponse response,FilterChain chain)throws ServletException,IOException {
   try {
    if(service.bootstrapOpen()){
-    if(!(r.getUserPrincipal() instanceof TrustedPrincipal trusted))throw new SecurityException("TRUSTED_PRINCIPAL_REQUIRED");
-    var principal=trusted.context();
+    var principal=ServletAuthorization.principal(r).context();
     if(principal.actorType()!=PrincipalContext.ActorType.HUMAN)throw new SecurityException("HUMAN_REQUIRED");
     if(!principal.scopes().contains("authorization.bootstrap"))throw new SecurityException("AUTH_BOOTSTRAP_SCOPE_REQUIRED");
    } else {
