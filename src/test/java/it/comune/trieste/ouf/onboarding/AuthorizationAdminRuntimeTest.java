@@ -29,7 +29,7 @@ class AuthorizationAdminRuntimeTest {
  @MockBean AuthorizationRuntimeSynchronizer runtimeSynchronizer;
  private final String root="/api/trusted-human/v1/authorization";
  @BeforeEach void clean(){db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();}
- private RequestPostProcessor actor(String type,boolean csrf){return r->{var caps=registry.active().isEmpty()?Set.of("authorization.bootstrap"):Set.of("authorization.policy.admin");TestAuthorization.bind(r,"admin",type,caps);r.setAttribute("ouf.csrfValidated",csrf);return r;};}
+ private RequestPostProcessor actor(String type,boolean writeProof){return r->{var caps=registry.active().isEmpty()?Set.of("authorization.bootstrap"):Set.of("authorization.policy.admin");TestAuthorization.bind(r,"admin",type,caps);r.setAttribute("ouf.statelessBearerWriteValidated",writeProof);return r;};}
  private CapabilityDescriptor cap(){return new CapabilityDescriptor("data.read","READ","data.read",Set.of(PrincipalContext.ActorType.HUMAN));}
  private PolicyBundle policy(long version){var now=Instant.now();return new PolicyBundle("admin-test",version,now,List.of(cap()),List.of(new Grant("g1","data.read","tenant-a","reader",null,null,now.minusSeconds(60),now.plusSeconds(3600))));}
  private void register()throws Exception{http.perform(post(root+"/capabilities").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("ownerRef","udp","descriptor",cap())))).andExpect(status().isCreated());}
@@ -59,7 +59,7 @@ class AuthorizationAdminRuntimeTest {
   assertThatThrownBy(()->db.sql("update ouf_authorization.bootstrap_latch set completed=false,completed_at=null,completed_by=null where singleton_key=true").update()).hasStackTraceContaining("cannot be reopened");
   assertThatThrownBy(()->db.sql("delete from ouf_authorization.bootstrap_latch").update()).hasStackTraceContaining("cannot be deleted");
  }
- @Test void machineCsrfAndMissingEtagCannotWrite()throws Exception{
+ @Test void machineAndMissingTrustedWriteProofCannotWrite()throws Exception{
   for(String type:List.of("SERVICE","AI_AGENT"))http.perform(post(root+"/policies").with(actor(type,true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(policy(1)))).andExpect(status().isForbidden());
   http.perform(post(root+"/policies").with(actor("HUMAN",false)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(policy(1)))).andExpect(status().isForbidden());
   register();String id=create(1).get("id").asText();http.perform(delete(root+"/policies/"+id).with(actor("HUMAN",true))).andExpect(status().isPreconditionRequired());
