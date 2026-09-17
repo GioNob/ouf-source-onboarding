@@ -68,6 +68,7 @@ public final class AccessReader implements AutoCloseable {
       for (var column : info.columns()) if (projection.contains(column.name()) && !supported.contains(column.type())) throw invalid("COLUMN_TYPE_UNSUPPORTED");
       var rows = new ArrayList<Map<String,Object>>();
       var cursor = database.getTable(tableName).getDefaultCursor();
+      cursor.beforeFirst();
       Map<String,Object> row;
       while ((row = cursor.getNextRow(projection)) != null) {
         if (rows.size() >= MAX_ROWS) throw invalid("ROW_LIMIT");

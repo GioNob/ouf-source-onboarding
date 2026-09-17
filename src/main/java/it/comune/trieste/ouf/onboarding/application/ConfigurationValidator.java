@@ -62,7 +62,7 @@ public class ConfigurationValidator {
       Object keys=object(configuration,"sourceObjectIdentityPolicy").orElse(Map.of()).get("sourceFields");
       if(!(keys instanceof List<?> list)||list.isEmpty()||list.contains("$managedRowOrdinal"))error(out,"ONB_ACCESS_STABLE_KEY_REQUIRED",path,"Access requires approved stable key fields");
     }
-    if("INTERNAL_MANAGED_GEOPACKAGE".equals(execution.get("acquisitionMode"))){
+    if(Set.of("INTERNAL_MANAGED_GEOPACKAGE","INTERNAL_MANAGED_SHAPEFILE").contains(Objects.toString(execution.get("acquisitionMode"),""))){
       String path="/extractionProfile/runtime";
       for(String key:List.of("layer","sourceCrs","geometryColumn"))if(!(runtime.get(key) instanceof String value)||value.isBlank()||!Objects.equals(value,execution.get(key)))error(out,"ONB_GPKG_PROFILE_MISMATCH",path+"/"+key,"Execution must retain the approved GeoPackage layer, CRS and geometry column");
       var keys=object(configuration,"sourceObjectIdentityPolicy").orElse(Map.of()).get("sourceFields");
