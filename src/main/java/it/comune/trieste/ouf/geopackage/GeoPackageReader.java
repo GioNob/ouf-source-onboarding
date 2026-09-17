@@ -11,6 +11,7 @@ public final class GeoPackageReader implements AutoCloseable {
   public record Layer(String name,String geometryColumn,String geometryType,int srsId,String crs,List<Column> columns,String primaryKey) {}
   private final Path file;
   private Connection db;
+  private long deadline=System.nanoTime()+java.time.Duration.ofSeconds(5).toNanos();
   public GeoPackageReader(byte[] bytes) {
     if(bytes.length<100||bytes.length>10*1024*1024||!Arrays.equals(Arrays.copyOf(bytes,16),"SQLite format 3\0".getBytes(java.nio.charset.StandardCharsets.US_ASCII)))throw invalid();
     try {
@@ -20,6 +21,7 @@ public final class GeoPackageReader implements AutoCloseable {
       Files.write(file,bytes);
       var properties=new Properties();properties.setProperty("enable_load_extension","false");
       db=DriverManager.getConnection("jdbc:sqlite:"+file.toUri()+"?mode=ro&immutable=1",properties);
+      org.sqlite.ProgressHandler.setHandler(db,1000,new org.sqlite.ProgressHandler(){protected int progress(){return System.nanoTime()>deadline?1:0;}});
       try(var s=db.createStatement()){
         s.execute("PRAGMA trusted_schema=OFF");s.execute("PRAGMA query_only=ON");
         try(var r=s.executeQuery("PRAGMA application_id")){if(!r.next()||r.getInt(1)!=0x47504b47)throw invalid();}
@@ -28,6 +30,7 @@ public final class GeoPackageReader implements AutoCloseable {
     }catch(Exception e){close();throw invalid();}
   }
   public List<Layer> layers(){
+    deadline=System.nanoTime()+java.time.Duration.ofSeconds(5).toNanos();
     var out=new ArrayList<Layer>();
     try(var s=db.createStatement()){
       s.setQueryTimeout(5);
@@ -53,7 +56,7 @@ public final class GeoPackageReader implements AutoCloseable {
       String projection=String.join(",",layer.columns().stream().map(c->quote(c.name())).toList());
       try(var r=s.executeQuery("select "+projection+" from "+quote(layer.name())+" order by "+quote(layer.primaryKey())+" limit "+(maxRows+1))){
         while(r.next()){
-          if(rows.size()==maxRows)throw invalid();var row=new LinkedHashMap<String,Object>();
+          if(rows.size()==maxRows||System.nanoTime()>deadline)throw invalid();var row=new LinkedHashMap<String,Object>();
           for(var c:layer.columns()){
             Object value=r.getObject(c.name());
             if(c.name().equals(layer.geometryColumn())){
