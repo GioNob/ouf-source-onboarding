@@ -26,7 +26,7 @@ class AuthorizationAdminRuntimeTest {
  @Autowired MockMvc http;@Autowired ObjectMapper json;@Autowired JdbcClient db;@Autowired AuthorizationPolicyRegistry registry;
  private final String root="/api/trusted-human/v1/authorization";
  @BeforeEach void clean(){db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle cascade").update();}
- private RequestPostProcessor actor(String type,boolean csrf){return r->{TestAuthorization.bind(r,"admin",type,Set.of("authorization.policy.admin"));r.setAttribute("ouf.csrfValidated",csrf);return r;};}
+ private RequestPostProcessor actor(String type,boolean csrf){return r->{var caps=registry.active().isEmpty()?Set.of("authorization.bootstrap"):Set.of("authorization.policy.admin");TestAuthorization.bind(r,"admin",type,caps);r.setAttribute("ouf.csrfValidated",csrf);return r;};}
  private CapabilityDescriptor cap(){return new CapabilityDescriptor("data.read","READ","data.read",Set.of(PrincipalContext.ActorType.HUMAN));}
  private PolicyBundle policy(long version){var now=Instant.now();return new PolicyBundle("admin-test",version,now,List.of(cap()),List.of(new Grant("g1","data.read","tenant-a","reader",null,null,now.minusSeconds(60),now.plusSeconds(3600))));}
  private void register()throws Exception{http.perform(post(root+"/capabilities").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("ownerRef","udp","descriptor",cap())))).andExpect(status().isCreated());}
@@ -77,5 +77,4 @@ class AuthorizationAdminRuntimeTest {
   var node=json.readTree(raw);String actual=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.writeValueAsBytes(node.get("bundle"))));
   assertThat(node.get("contentHash").asText()).isEqualTo(actual);
  }
-
 }
