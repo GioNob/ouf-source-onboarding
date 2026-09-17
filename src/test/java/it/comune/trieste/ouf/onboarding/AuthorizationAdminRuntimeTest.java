@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import it.comune.trieste.ouf.authorization.*;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicyRegistry;
+import it.comune.trieste.ouf.onboarding.authorization.AuthorizationRuntimeSynchronizer;
 import com.fasterxml.jackson.databind.*;
 import java.time.Instant;
 import java.util.*;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.*;
@@ -24,6 +26,7 @@ class AuthorizationAdminRuntimeTest {
  @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));}
  @Autowired it.comune.trieste.ouf.onboarding.authorization.AuthorizationAdminService admin;
  @Autowired MockMvc http;@Autowired ObjectMapper json;@Autowired JdbcClient db;@Autowired AuthorizationPolicyRegistry registry;
+ @MockBean AuthorizationRuntimeSynchronizer runtimeSynchronizer;
  private final String root="/api/trusted-human/v1/authorization";
  @BeforeEach void clean(){db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle cascade").update();}
  private RequestPostProcessor actor(String type,boolean csrf){return r->{var caps=registry.active().isEmpty()?Set.of("authorization.bootstrap"):Set.of("authorization.policy.admin");TestAuthorization.bind(r,"admin",type,caps);r.setAttribute("ouf.csrfValidated",csrf);return r;};}
