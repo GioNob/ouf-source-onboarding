@@ -65,7 +65,9 @@ public class OnboardingService {
     db.sql("insert into ouf_onboarding.approval_challenge(challenge_id,onboarding_version_id,source_id,configuration_hash,status,expires_at) values(:c,:v,:s,:h,'CREATED',:e)")
       .param("c",id).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).param("e",OffsetDateTime.ofInstant(expires,ZoneOffset.UTC)).update();
     audit(sourceId,versionId,correlation,actor,"APPROVAL_CHALLENGE_CREATED",Map.of("challengeId",id.toString()));
-    Map<String,Object> response=new LinkedHashMap<>(db.sql("select challenge_id,onboarding_version_id,source_id,configuration_hash,status,expires_at,created_at from ouf_onboarding.approval_challenge where challenge_id=:i").param("i",id).query().singleRow());response.put("trustedApprovalRef","ths://approval-challenges/"+id);return response;
+    Map<String,Object> response=new LinkedHashMap<>(db.sql("select challenge_id,onboarding_version_id,source_id,configuration_hash,status,expires_at,created_at from ouf_onboarding.approval_challenge where challenge_id=:i").param("i",id).query().singleRow());response.put("trustedApprovalRef","ths://approval-challenges/"+id);
+    @SuppressWarnings("unchecked") var configuration=(Map<String,Object>)v.get("configuration");
+    ConfigurationValidator.spatial(configuration).ifPresent(profile->{response.put("spatialDecision",profile);response.put("spatialDecisionFindings",validator.validate(sourceId,configuration).findings().stream().filter(f->f.path().startsWith("/extractionProfile/runtime/udp/spatial")).toList());});return response;
   }
 
   @Transactional public Map<String,Object> confirm(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){

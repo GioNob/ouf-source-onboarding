@@ -47,8 +47,45 @@ public class ConfigurationValidator {
       if("PROPERTY_EVENTS".equals(mode))requireText(profile,"eventContractRef","/changeRepresentationProfile/eventContractRef",out);
       if("DELTA_PATCH".equals(mode)){Optional<Map<String,Object>> delta=object(configuration,"deltaPatchContract");if(delta.isEmpty())delta=object(configuration,"bundle").flatMap(b->object(b,"deltaPatchContract"));if(delta.isEmpty())error(out,"ONB_DELTA_CONTRACT_REQUIRED","/deltaPatchContract","DELTA_PATCH requires a compiled logical contract");else validateDelta(delta.get(),out);}
     });
+    spatial(configuration).ifPresent(profile->validateSpatial(profile,out));
     if(out.isEmpty()) out.add(new Finding("INFO","ONB_CONFIGURATION_VALID","/","Configuration satisfies the executable onboarding validation profile"));
     return new Result(List.copyOf(out));
+  }
+
+  public static Optional<Map<String,Object>> spatial(Map<String,Object> configuration){
+    return object(configuration,"extractionProfile").flatMap(ex->object(ex,"runtime")).flatMap(r->object(r,"udp")).filter(u->u.containsKey("spatial")).map(u->object(u,"spatial").orElse(Map.of()));
+  }
+  private static void validateSpatial(Map<String,Object> profile,List<Finding> out){
+    String path="/extractionProfile/runtime/udp/spatial";
+    requireText(profile,"policyRef",path+"/policyRef",out);
+    if(!(profile.get("relationships") instanceof List<?> relations)||!relations.isEmpty())error(out,"ONB_SPATIAL_RELATION_POLICY_UNSUPPORTED",path+"/relationships","R2d accepts geometry only; relationship binding belongs to R2e");
+    var geometry=object(profile,"geometry");if(geometry.isEmpty()){error(out,"ONB_CRS_PROFILE_REQUIRED",path+"/geometry","Explicit geometry and CRS profile required");return;}
+    var g=geometry.get();for(String key:List.of("sourceField","normalizationVersion","accessLabel"))requireText(g,key,path+"/geometry/"+key,out);
+    Object crs=g.get("expectedSourceCrs"),srid=g.get("canonicalSrid");
+    if(!(crs instanceof String c)||!c.matches("EPSG:[1-9][0-9]{0,5}")||!(srid instanceof Number n)||n.doubleValue()!=n.intValue()||n.intValue()<1||n.intValue()>999999){error(out,"ONB_CRS_UNKNOWN",path+"/geometry","Known EPSG source CRS and explicit positive municipal SRID required");return;}
+    int source=Integer.parseInt(String.valueOf(crs).substring(5)),target=((Number)srid).intValue();
+    var decision=object(g,"crsPolicy");if(decision.isEmpty()){error(out,"ONB_CRS_DECISION_REQUIRED",path+"/geometry/crsPolicy","Declare XY or YX axes and the human choice CONVERT or REJECT");return;}
+    var policy=decision.get();requireEnum(policy,"sourceAxisOrder",Set.of("XY","YX"),path+"/geometry/crsPolicy/sourceAxisOrder",out);requireEnum(policy,"mismatchAction",Set.of("CONVERT","REJECT"),path+"/geometry/crsPolicy/mismatchAction",out);
+    if(source!=target&&"CONVERT".equals(policy.get("mismatchAction")))validateOperation(policy,"sourceOperation",source,target,path,out);
+    if(target!=4326&&!(source!=target&&"REJECT".equals(policy.get("mismatchAction"))))validateOperation(policy,"servingOperation",target,4326,path,out);
+    out.add(new Finding("INFO","ONB_CRS_HUMAN_DECISION",path,"Source "+crs+", axes "+policy.get("sourceAxisOrder")+", municipal EPSG:"+target+", mismatch "+policy.get("mismatchAction")+". Approval pins this choice, both operations, accuracy and resources for subsequent runs."));
+  }
+  private static void validateOperation(Map<String,Object> policy,String key,int source,int target,String path,List<Finding> out){
+    String p=path+"/geometry/crsPolicy/"+key;var candidate=object(policy,key);if(candidate.isEmpty()){error(out,"ONB_CRS_OPERATION_REQUIRED",p,"Conversion requires an explicit operation, accuracy statement, area and control points");return;}
+    var op=candidate.get();for(String field:List.of("operationId","pipeline","projVersion","accuracyStatement"))requireText(op,field,p+"/"+field,out);
+    if(!(op.get("sourceSrid") instanceof Number a)||a.doubleValue()!=source||!(op.get("targetSrid") instanceof Number b)||b.doubleValue()!=target)error(out,"ONB_CRS_OPERATION_MISMATCH",p,"Operation must bind the declared source and destination CRS");
+    Object accuracy=op.get("accuracyMeters");if(accuracy!=null&&(!(accuracy instanceof Number n)||!Double.isFinite(n.doubleValue())||n.doubleValue()<0))error(out,"ONB_CRS_ACCURACY_INVALID",p+"/accuracyMeters","Accuracy is a non-negative number in metres or null for explicitly unknown accuracy");
+    if(!(op.get("sourceBounds") instanceof List<?> bounds)||bounds.size()!=4||bounds.stream().anyMatch(v->!(v instanceof Number n)||!Double.isFinite(n.doubleValue())))error(out,"ONB_CRS_AREA_REQUIRED",p+"/sourceBounds","Four finite XY source bounds are required");
+    if(!(op.get("controlPoints") instanceof List<?> points)||points.size()<2||points.size()>20)error(out,"ONB_CRS_CONTROLS_REQUIRED",p+"/controlPoints","Two to twenty independent control points required; tolerance uses target CRS units");
+    if(op.get("sourceBounds") instanceof List<?> bounds&&bounds.size()==4&&bounds.stream().allMatch(v->v instanceof Number n&&Double.isFinite(n.doubleValue()))){if(((Number)bounds.get(0)).doubleValue()>=((Number)bounds.get(2)).doubleValue()||((Number)bounds.get(1)).doubleValue()>=((Number)bounds.get(3)).doubleValue())error(out,"ONB_CRS_AREA_INVALID",p+"/sourceBounds","Bounds must be ordered xmin,ymin,xmax,ymax in normalized XY source units");}
+    if(op.get("controlPoints") instanceof List<?> points)for(Object value:points){if(!(value instanceof Map<?,?> point)||List.of("sourceX","sourceY","targetX","targetY","tolerance").stream().anyMatch(k->!(point.get(k) instanceof Number n)||!Double.isFinite(n.doubleValue()))||((Number)point.get("tolerance")).doubleValue()<=0)error(out,"ONB_CRS_CONTROLS_INVALID",p+"/controlPoints","Each control requires finite coordinates and a positive target-unit tolerance");}
+    if(!(op.get("pipeline") instanceof String pipeline)||pipeline.length()>4096||!pipeline.startsWith("+proj=pipeline ")||pipeline.contains("@")||pipeline.contains("+init=")||pipeline.contains("null")||pipeline.contains("http:" )||pipeline.contains("https:"))error(out,"ONB_CRS_PIPELINE_INVALID",p+"/pipeline","Explicit bounded PROJ pipeline required; optional grids and fallback are forbidden");
+    var grids=object(op,"requiredGrids");if(grids.isEmpty())error(out,"ONB_CRS_GRID_INVENTORY_REQUIRED",p+"/requiredGrids","Explicit grid filename to SHA256 map required, including an empty map when none is needed");
+    else if(!grids.get().isEmpty()){
+      if(!(op.get("resourceVersion") instanceof String version)||!version.matches("sha256:[a-f0-9]{64}"))error(out,"ONB_CRS_RESOURCE_VERSION_REQUIRED",p+"/resourceVersion","Pin the SHA256 of the licensed deployment grid manifest");
+      for(var entry:grids.get().entrySet())if(!entry.getKey().matches("[A-Za-z0-9_-]+\\.(tif|gsb|gtx)")||!(entry.getValue() instanceof String hash)||!hash.matches("[a-f0-9]{64}"))error(out,"ONB_CRS_GRID_INVENTORY_INVALID",p+"/requiredGrids","Each grid needs a safe filename and a SHA256 checksum");
+    }
+    out.add(new Finding("INFO","ONB_CRS_OPERATION_ACCURACY",p,"Operation "+op.get("operationId")+": "+op.get("accuracyStatement")+"; accuracy metres="+op.get("accuracyMeters")+"; PROJ="+op.get("projVersion")+"; resources="+op.get("resourceVersion")));
   }
 
   private static void validateScheduledPolicy(Map<String,Object> sync,List<Finding> out){
