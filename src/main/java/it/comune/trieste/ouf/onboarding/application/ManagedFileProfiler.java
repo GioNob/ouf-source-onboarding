@@ -42,7 +42,10 @@ public class ManagedFileProfiler {
         item.put("candidateKeys",profile.candidateKeys());item.put("primaryKey",table.primaryKey());item.put("uniqueKeys",table.uniqueKeys());item.put("rowCount",rows.size());
         item.put("sample",profile.sample().stream().map(row->{var masked=new LinkedHashMap<String,String>();row.keySet().forEach(k->masked.put(k,"[REDACTED]"));return masked;}).toList());tables.add(item);
       }
-      return new Profile("ACCESS",Map.of("layers",tables,"tableSelection","REQUIRED","relationships",reader.relationships(),"proposalStatus","PENDING_HUMAN_REVIEW","reader","jackcess-5.0.0","expressions","DISABLED","linkedTables","REJECTED"),List.of(),List.of(),List.of());
+      var relationships=reader.relationships();var hints=new ArrayList<Map<String,Object>>();
+      for(var table:tables)hints.add(Map.of("kind","CLASS_AND_PROPERTIES","table",table.get("layer"),"sourceColumns",table.get("sourceColumns"),"declaredPrimaryKey",table.get("primaryKey"),"declaredUniqueKeys",table.get("uniqueKeys"),"status","PENDING_HUMAN_REVIEW","nextAction","SEARCH_EXISTING_SEMANTICS_OR_OPEN_GAP"));
+      for(var relationship:relationships)hints.add(Map.of("kind","RELATIONSHIP","name",relationship.get("name"),"referencedTable",relationship.get("fromTable"),"referencedColumns",relationship.get("fromColumns"),"referencingTable",relationship.get("toTable"),"referencingColumns",relationship.get("toColumns"),"referentialIntegrity",relationship.get("referentialIntegrity"),"status","PENDING_HUMAN_REVIEW","nextAction","SELECT_SEMANTIC_RELATION_AND_DIRECTION"));
+      return new Profile("ACCESS",Map.of("layers",tables,"tableSelection","REQUIRED","relationships",relationships,"semanticHints",hints,"proposalStatus","PENDING_HUMAN_REVIEW","reader","jackcess-5.0.0","expressions","DISABLED","linkedTables","REJECTED"),List.of(),List.of(),List.of());
     }
   }
   private Profile geopackage(byte[] bytes){

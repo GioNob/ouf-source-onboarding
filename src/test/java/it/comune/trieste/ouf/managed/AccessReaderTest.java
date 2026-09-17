@@ -28,6 +28,19 @@ class AccessReaderTest {
       assertArrayEquals(original,bytes);assertArrayEquals(original,Files.readAllBytes(file));
     }
   }
+  @Test void preservesDeclaredCompositeRelationshipWithoutPublishingAnOntology() throws Exception {
+    Path file=directory.resolve("relationships.accdb");
+    try(var db=DatabaseBuilder.create(Database.FileFormat.V2010,file.toFile())){
+      new TableBuilder("Parent").addColumn(new ColumnBuilder("zone",DataType.TEXT)).addColumn(new ColumnBuilder("id",DataType.LONG)).addIndex(new IndexBuilder("pk").addColumns("zone","id").setPrimaryKey()).toTable(db);
+      new TableBuilder("Child").addColumn(new ColumnBuilder("parentZone",DataType.TEXT)).addColumn(new ColumnBuilder("parentId",DataType.LONG)).toTable(db);
+      new RelationshipBuilder("Parent","Child").addColumns("zone","parentZone").addColumns("id","parentId").setReferentialIntegrity().setName("parent_children").toRelationship(db);
+    }
+    try(var reader=new AccessReader(Files.readAllBytes(file))){
+      var relationship=reader.relationships().getFirst();assertEquals("Parent",relationship.get("fromTable"));assertEquals("Child",relationship.get("toTable"));
+      assertEquals(List.of("zone","id"),relationship.get("fromColumns"));assertEquals(List.of("parentZone","parentId"),relationship.get("toColumns"));
+      assertEquals(true,relationship.get("referentialIntegrity"));assertEquals("PENDING_HUMAN_REVIEW",relationship.get("proposalStatus"));assertFalse(relationship.containsKey("relationIri"));
+    }
+  }
   @Test void rejectsLinkedDatabaseBeforeOpeningExternalFile() throws Exception {
     Path file=directory.resolve("linked.mdb");
     try(var db=DatabaseBuilder.create(Database.FileFormat.V2000,file.toFile())){db.createLinkedTable("remote","/must-not-open/external.mdb","External");}
