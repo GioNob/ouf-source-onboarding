@@ -27,8 +27,9 @@ public final class ActiveBundleRefresher implements AutoCloseable {
   {
    if(response.statusCode()!=200)throw new IllegalStateException("POLICY_REFRESH_HTTP_FAILURE");
    byte[] raw=response.body();
-   var json=new ObjectMapper();var node=json.readTree(raw);
+   var json=new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);var node=json.readTree(raw);
    for(var it=node.fieldNames();it.hasNext();)if(!java.util.Set.of("bundleId","bundleVersion","activatedAt","bundle","contentHash").contains(it.next()))throw new IllegalArgumentException("UNKNOWN_ACTIVE_FIELD");
+   if(!node.required("bundleVersion").isIntegralNumber()||!node.required("bundleVersion").canConvertToLong())throw new IllegalArgumentException("INVALID_ACTIVE_VERSION");
    byte[] bundle=json.writeValueAsBytes(node.required("bundle"));
    Path temporary=Files.createTempFile("ouf-auth-bundle-", ".json");
    try{Files.write(temporary,bundle);var result=runtime.refresh(new LocalAuthorization.BundleReference(temporary,node.required("bundleId").asText(),node.required("bundleVersion").asLong(),node.required("contentHash").asText(),1));if(!result.installed())throw new IllegalStateException(result.reason());}
