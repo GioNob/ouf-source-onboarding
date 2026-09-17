@@ -56,6 +56,12 @@ public class ConfigurationValidator {
   private static void validateGeoPackageAndRelationships(Map<String,Object> configuration,List<Finding> out){
     var runtime=object(configuration,"extractionProfile").flatMap(ex->object(ex,"runtime")).orElse(Map.of());
     var execution=object(runtime,"execution").orElse(Map.of());var udp=object(runtime,"udp").orElse(Map.of());
+    if("INTERNAL_MANAGED_ACCESS".equals(execution.get("acquisitionMode"))){
+      String path="/extractionProfile/runtime";
+      if(!"managed-access-v1".equals(execution.get("adapterId"))||!(runtime.get("layer") instanceof String table)||table.isBlank()||!Objects.equals(runtime.get("layer"),execution.get("layer")))error(out,"ONB_ACCESS_PROFILE_MISMATCH",path,"Access execution must retain its approved table and adapter");
+      Object keys=object(configuration,"sourceObjectIdentityPolicy").orElse(Map.of()).get("sourceFields");
+      if(!(keys instanceof List<?> list)||list.isEmpty()||list.contains("$managedRowOrdinal"))error(out,"ONB_ACCESS_STABLE_KEY_REQUIRED",path,"Access requires approved stable key fields");
+    }
     if("INTERNAL_MANAGED_GEOPACKAGE".equals(execution.get("acquisitionMode"))){
       String path="/extractionProfile/runtime";
       for(String key:List.of("layer","sourceCrs","geometryColumn"))if(!(runtime.get(key) instanceof String value)||value.isBlank()||!Objects.equals(value,execution.get(key)))error(out,"ONB_GPKG_PROFILE_MISMATCH",path+"/"+key,"Execution must retain the approved GeoPackage layer, CRS and geometry column");

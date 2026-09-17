@@ -16,7 +16,22 @@ public class ManagedFileProfiler {
   public record ColumnProfile(String name,String dataType,boolean nullable,long distinctValues) {}
   public record Profile(String format,Map<String,Object> metadata,List<ColumnProfile> columns,List<String> candidateKeys,List<Map<String,String>> sample) {}
 
-  public Profile profile(byte[] bytes,String mediaType){if(bytes.length==0||bytes.length>MAX_BYTES)throw new IllegalArgumentException("file size outside profiling limits");return switch(mediaType){case "application/geopackage+sqlite3"->geopackage(bytes);case "text/csv"->csv(bytes);case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"->xlsx(bytes);default->throw new IllegalArgumentException("unsupported media type");};}
+  public Profile profile(byte[] bytes,String mediaType){if(bytes.length==0||bytes.length>MAX_BYTES)throw new IllegalArgumentException("file size outside profiling limits");return switch(mediaType){case "application/x-msaccess","application/vnd.ms-access"->access(bytes);case "application/geopackage+sqlite3"->geopackage(bytes);case "text/csv"->csv(bytes);case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"->xlsx(bytes);default->throw new IllegalArgumentException("unsupported media type");};}
+  private Profile access(byte[] bytes){
+    try(var reader=new it.comune.trieste.ouf.managed.AccessReader(bytes)){
+      var tables=new ArrayList<Map<String,Object>>();
+      for(var table:reader.tables()){
+        var headers=table.columns().stream().map(it.comune.trieste.ouf.managed.AccessReader.ColumnInfo::name).toList();
+        var rows=reader.rows(table.name(),headers);
+        var values=rows.stream().map(row->headers.stream().map(h->Objects.toString(row.get(h),"")).toList()).toList();
+        var profile=build("ACCESS",Map.of(),headers,values);
+        var item=new LinkedHashMap<String,Object>();item.put("layer",table.name());item.put("columns",profile.columns());item.put("sourceColumns",table.columns());
+        item.put("candidateKeys",profile.candidateKeys());item.put("primaryKey",table.primaryKey());item.put("uniqueKeys",table.uniqueKeys());item.put("rowCount",rows.size());
+        item.put("sample",profile.sample().stream().map(row->{var masked=new LinkedHashMap<String,String>();row.keySet().forEach(k->masked.put(k,"[REDACTED]"));return masked;}).toList());tables.add(item);
+      }
+      return new Profile("ACCESS",Map.of("layers",tables,"tableSelection","REQUIRED","relationships",reader.relationships(),"proposalStatus","PENDING_HUMAN_REVIEW","reader","jackcess-5.0.0","expressions","DISABLED","linkedTables","REJECTED"),List.of(),List.of(),List.of());
+    }
+  }
   private Profile geopackage(byte[] bytes){
     try(var reader=new it.comune.trieste.ouf.geopackage.GeoPackageReader(bytes)){
       var layers=new ArrayList<Map<String,Object>>();
