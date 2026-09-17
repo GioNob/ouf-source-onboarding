@@ -1,8 +1,8 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  const params = new URLSearchParams(location.search), kind = params.get('kind'), id = params.get('id');
-  let review, baseView, zoom = 1;
+  const params = new URLSearchParams(location.search), kind = params.get('kind') || 'property', id = params.get('id');
+  let review, zoom = 1;
   const status = message => { $('status').textContent = message; };
   function text(tag, value, parent) { const el = document.createElement(tag); el.textContent = String(value); parent.append(el); return el; }
   function json(value, parent) { text('pre', JSON.stringify(value, null, 2), parent); }
@@ -35,13 +35,21 @@
     const scale=Math.min(740/Math.max(xmax-xmin,1e-8),360/Math.max(ymax-ymin,1e-8));
     const project=([x,y])=>[400+(x-(xmin+xmax)/2)*scale,210-(y-(ymin+ymax)/2)*scale];
     $('map').replaceChildren();drawGeometry(before,'shape-old',project);drawGeometry(after,'shape-new',project);
-    baseView=[0,0,800,420];$('map-section').hidden=false;
+    $('map-section').hidden=false;
   }
   function setZoom(value){zoom=Math.max(.5,Math.min(16,value));const w=800/zoom,h=420/zoom;$('map').setAttribute('viewBox',`${400-w/2} ${210-h/2} ${w} ${h}`);}
   $('zoom-in').onclick=()=>setZoom(zoom*1.5);$('zoom-out').onclick=()=>setZoom(zoom/1.5);$('reset').onclick=()=>setZoom(1);
   const endpoint = kind === 'geometry' ? 'geometry/issues' : 'properties/conflicts';
   const url = `/api/udp/v1/governance/${endpoint}/${encodeURIComponent(id)}`;
   async function load() {
+    if(!id && ['geometry','property'].includes(kind)){
+      $('decision').hidden=true;
+      const response=await fetch(`/api/udp/v1/governance/${endpoint}`,{credentials:'same-origin',headers:{Accept:'application/json'},cache:'no-store'});
+      if(!response.ok)throw new Error(`Coda non disponibile (${response.status}).`);
+      const items=await response.json(),list=document.createElement('ul');$('context').replaceChildren(list);
+      for(const item of items){const row=document.createElement('li');const link=text('a',`${item.propertyIri} · ${item.objectId}`,row);link.href=`/trusted-human/r2f?kind=${kind}&id=${encodeURIComponent(item.id)}`;list.append(row);}
+      status(items.length?'Seleziona un conflitto da esaminare. La coda mostra fino a 100 conflitti autorizzati.':'Nessun conflitto aperto visibile in questa coda.');return;
+    }
     if (!['geometry','property'].includes(kind) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id||'')) throw new Error('Apri il collegamento di revisione associato al conflitto.');
     const response=await fetch(url,{credentials:'same-origin',headers:{Accept:'application/json'},cache:'no-store'});
     if(!response.ok)throw new Error(response.status===403?'Non hai i permessi necessari per questo confronto.':`Confronto non disponibile (${response.status}).`);
@@ -53,7 +61,7 @@
       if(kind==='property')json(c.value,label);
       const detail=document.createElement('details');text('summary','Provenienza e riferimenti',detail);json(c.provenance,detail);label.append(detail);$('choices').append(label);
     }
-    if(kind==='geometry')draw(review.current.geometry,review.candidate.geometry);
+    if(kind==='geometry'){draw(review.current.geometry,review.candidate.geometry);if(review.metrics){text('h2','Misure del confronto',$('context'));const metrics=document.createElement('dl');$('context').append(metrics);for(const [key,label] of [['minimum_distance_meters','Distanza minima (m)'],['current_area_m2','Area corrente (m²)'],['candidate_area_m2','Area candidata (m²)'],['topologically_equal','Equivalenza topologica']]){text('dt',label,metrics);text('dd',review.metrics[key],metrics);}}}
     $('submit').disabled=review.state!=='OPEN';$('choices').disabled=review.state!=='OPEN';$('reason').disabled=review.state!=='OPEN';
     status(review.state==='OPEN'?'Confronta i contributi, scegli quale conservare e indica il motivo.':'La revisione è già conclusa.');
   }
