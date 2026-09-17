@@ -48,7 +48,7 @@ class ManagedFileRuntimeTest {
       assertThat(gaps.select(filename,version,gap,candidateId)).containsEntry("state","SELECTED");
       assertThat(gaps.recordCandidates(filename,version,gap,List.of(Map.of("semanticRef","core@1","status","PUBLISHED")),registry)).containsEntry("state","RESOLVED");
       assertThat(onboarding.version(filename,version)).containsEntry("state","DRAFT");
-      db.sql("update ouf_onboarding.onboarding_version set state='IN_REVIEW' where onboarding_version_id=:v").param("v",version).update();
+      db.sql("update ouf_onboarding.onboarding_version set state='IN_REVIEW',configuration_hash='sha256:test',frozen_at=transaction_timestamp() where onboarding_version_id=:v").param("v",version).update();
       assertThatThrownBy(()->gaps.proposeAccessSchema(filename,version,proposer)).hasMessageContaining("DRAFT");
       assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
     }
