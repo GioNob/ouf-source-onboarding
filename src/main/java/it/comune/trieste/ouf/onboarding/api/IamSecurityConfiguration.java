@@ -29,8 +29,8 @@ import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.JwtDecoders;
 import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -45,13 +45,17 @@ public class IamSecurityConfiguration {
     if (issuer == null || issuer.isBlank() || audience == null || audience.isBlank()) {
       throw new IllegalStateException("OUF IAM issuer and audience are required");
     }
-    var decoder = (org.springframework.security.oauth2.jwt.NimbusJwtDecoder) JwtDecoders.fromIssuerLocation(issuer);
+    var decoder = NimbusJwtDecoder.withIssuerLocation(issuer).build();
     OAuth2TokenValidator<Jwt> issuerValidator = JwtValidators.createDefaultWithIssuer(issuer);
-    OAuth2TokenValidator<Jwt> audienceValidator = jwt -> jwt.getAudience().contains(audience)
+    decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(issuerValidator, requiredAudienceValidator(audience)));
+    return decoder;
+  }
+
+  static OAuth2TokenValidator<Jwt> requiredAudienceValidator(String audience) {
+    if (audience == null || audience.isBlank()) throw new IllegalArgumentException("required audience is blank");
+    return jwt -> jwt.getAudience().contains(audience)
         ? OAuth2TokenValidatorResult.success()
         : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token", "required OUF audience missing", null));
-    decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(issuerValidator, audienceValidator));
-    return decoder;
   }
 
   @Bean
