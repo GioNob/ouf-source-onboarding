@@ -6,14 +6,22 @@ import java.util.*;
 /** Shared servlet adapter: ignores client identity/capability headers and legacy capability attributes. */
 public final class ServletAuthorization {
   public static final String RUNTIME=LocalAuthorization.class.getName(),RESOURCE=ResourceContext.class.getName();
+  /** Server-only request binding populated by the IAM adapter after token authentication. */
+  public static final String TRUSTED_PRINCIPAL=ServletAuthorization.class.getName()+".trustedPrincipal";
   private static final String PIN=ServletAuthorization.class.getName()+".snapshot";
   private ServletAuthorization() {}
   public record Context(PrincipalContext principal,Set<String> capabilities,String decisionRef,LocalAuthorization.PolicySnapshot snapshot,Map<String,AuthorizationPolicy.AuthorizationDecision> decisions) {
     public Context(PrincipalContext principal,Set<String> capabilities,String decisionRef,LocalAuthorization.PolicySnapshot snapshot){this(principal,capabilities,decisionRef,snapshot,Map.of());}
     public Context{decisions=Map.copyOf(decisions);}
   }
+  public static TrustedPrincipal principal(HttpServletRequest request){
+    Object bound=request.getAttribute(TRUSTED_PRINCIPAL);
+    if(bound instanceof TrustedPrincipal trusted)return trusted;
+    if(request.getUserPrincipal() instanceof TrustedPrincipal trusted)return trusted;
+    throw new SecurityException("TRUSTED_PRINCIPAL_REQUIRED");
+  }
   public static Context resolve(HttpServletRequest request) {
-    if(!(request.getUserPrincipal() instanceof TrustedPrincipal trusted))throw new SecurityException("TRUSTED_PRINCIPAL_REQUIRED");
+    var trusted=principal(request);
     Object runtime=request.getServletContext().getAttribute(RUNTIME);
     if(!(runtime instanceof LocalAuthorization engine))throw new SecurityException("NO_POLICY_BUNDLE");
     var principal=trusted.context();

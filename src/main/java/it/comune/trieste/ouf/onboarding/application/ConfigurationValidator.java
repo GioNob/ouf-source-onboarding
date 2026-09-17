@@ -47,17 +47,45 @@ public class ConfigurationValidator {
       if("PROPERTY_EVENTS".equals(mode))requireText(profile,"eventContractRef","/changeRepresentationProfile/eventContractRef",out);
       if("DELTA_PATCH".equals(mode)){Optional<Map<String,Object>> delta=object(configuration,"deltaPatchContract");if(delta.isEmpty())delta=object(configuration,"bundle").flatMap(b->object(b,"deltaPatchContract"));if(delta.isEmpty())error(out,"ONB_DELTA_CONTRACT_REQUIRED","/deltaPatchContract","DELTA_PATCH requires a compiled logical contract");else validateDelta(delta.get(),out);}
     });
+    validateWeightedIdentity(configuration,out);
     validateGeoPackageAndRelationships(configuration,out);
     spatial(configuration).ifPresent(profile->validateSpatial(profile,out));
     if(out.isEmpty()) out.add(new Finding("INFO","ONB_CONFIGURATION_VALID","/","Configuration satisfies the executable onboarding validation profile"));
     return new Result(List.copyOf(out));
   }
 
+  private static void validateWeightedIdentity(Map<String,Object> configuration,List<Finding> out){
+    var udp=object(configuration,"extractionProfile").flatMap(ex->object(ex,"runtime")).flatMap(rt->object(rt,"udp")).orElse(Map.of());
+    var resolution=object(udp,"resolution").orElse(Map.of());
+    if(!resolution.containsKey("weighted"))return;
+    String path="/extractionProfile/runtime/udp/resolution";
+    for(String key:List.of("strategyId","strategyVersion","policyRef"))requireText(resolution,key,path+"/"+key,out);
+    try{
+      var policy=new com.fasterxml.jackson.databind.ObjectMapper().convertValue(resolution.get("weighted"),WeightedIdentityPolicy.Policy.class);
+      if(policy==null)throw new IllegalArgumentException();
+      Set<String> mapped=new HashSet<>();
+      var materialization=object(udp,"materialization").orElse(Map.of());
+      if(materialization.get("properties") instanceof List<?> properties)for(Object entry:properties)if(entry instanceof Map<?,?> property)mapped.add(Objects.toString(property.get("propertyIri"),""));
+      if(!mapped.containsAll(policy.blockingProperties()))throw new IllegalArgumentException();
+      var geometry=object(udp,"spatial").flatMap(sp->object(sp,"geometry")).orElse(Map.of());
+      if(policy.blockingDistanceMeters()!=null&&geometry.isEmpty())throw new IllegalArgumentException();
+      for(var signal:policy.signals())if(!mapped.contains(signal.property())||(signal.spatial()&&!Objects.equals(signal.property(),geometry.get("sourceField"))))throw new IllegalArgumentException();
+      out.add(new Finding("INFO","ONB_WEIGHTED_IDENTITY_HUMAN_DECISION",path,"Approval pins signals, weights, thresholds, candidate limit and margin. Scores do not determine property authority."));
+    }catch(IllegalArgumentException failure){error(out,"ONB_WEIGHTED_IDENTITY_INVALID",path,"Require mapped signals, positive weights summing to one, bounded candidates, blocking evidence, review/high thresholds and a positive margin; spatial signals require the approved geometry.");}
+  }
+
   private static void validateGeoPackageAndRelationships(Map<String,Object> configuration,List<Finding> out){
     var runtime=object(configuration,"extractionProfile").flatMap(ex->object(ex,"runtime")).orElse(Map.of());
     var execution=object(runtime,"execution").orElse(Map.of());var udp=object(runtime,"udp").orElse(Map.of());
-    if("INTERNAL_MANAGED_GEOPACKAGE".equals(execution.get("acquisitionMode"))){
+    if("INTERNAL_MANAGED_ACCESS".equals(execution.get("acquisitionMode"))){
       String path="/extractionProfile/runtime";
+      if(!"managed-access-v1".equals(execution.get("adapterId"))||!(runtime.get("layer") instanceof String table)||table.isBlank()||!Objects.equals(runtime.get("layer"),execution.get("layer")))error(out,"ONB_ACCESS_PROFILE_MISMATCH",path,"Access execution must retain its approved table and adapter");
+      Object keys=object(configuration,"sourceObjectIdentityPolicy").orElse(Map.of()).get("sourceFields");
+      if(!(keys instanceof List<?> list)||list.isEmpty()||list.contains("$managedRowOrdinal"))error(out,"ONB_ACCESS_STABLE_KEY_REQUIRED",path,"Access requires approved stable key fields");
+    }
+    if(Set.of("INTERNAL_MANAGED_GEOPACKAGE","INTERNAL_MANAGED_SHAPEFILE").contains(Objects.toString(execution.get("acquisitionMode"),""))){
+      String path="/extractionProfile/runtime";
+      if("INTERNAL_MANAGED_SHAPEFILE".equals(execution.get("acquisitionMode"))&&(!"managed-shapefile-v1".equals(execution.get("adapterId"))||!(runtime.get("encoding") instanceof String encoding)||encoding.isBlank()||!Objects.equals(runtime.get("encoding"),execution.get("encoding"))))error(out,"ONB_SHAPEFILE_PROFILE_MISMATCH",path,"Execution must retain the approved Shapefile adapter and encoding");
       for(String key:List.of("layer","sourceCrs","geometryColumn"))if(!(runtime.get(key) instanceof String value)||value.isBlank()||!Objects.equals(value,execution.get(key)))error(out,"ONB_GPKG_PROFILE_MISMATCH",path+"/"+key,"Execution must retain the approved GeoPackage layer, CRS and geometry column");
       var keys=object(configuration,"sourceObjectIdentityPolicy").orElse(Map.of()).get("sourceFields");
       if(!(keys instanceof List<?> list)||list.isEmpty()||list.contains("$managedRowOrdinal")||list.contains(runtime.get("geometryColumn")))error(out,"ONB_GPKG_STABLE_KEY_REQUIRED","/sourceObjectIdentityPolicy","GeoPackage requires explicit stable feature keys");

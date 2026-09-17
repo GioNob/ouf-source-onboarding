@@ -210,6 +210,29 @@ paths:
       x-ouf-mcp-capability: ouf.source-onboarding.semantic-gap.create
       parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
       responses: {'201': {description: Semantic gap registered}, default: {$ref: '#/components/responses/Problem'}}
+  /access-semantic-proposals:
+    post:
+      operationId: proposeAccessSchemaThroughGateway
+      x-ouf-mcp-capability: ouf.source-onboarding.semantic-gap.create
+      description: Bounded Gateway entry for idempotent proposals from a DRAFT's pinned Access profile. No adoption or publication.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId, versionId]
+              properties:
+                sourceId: {type: string, minLength: 1}
+                versionId: {type: string, format: uuid}
+      responses: {'200': {description: Schema proposals with immutable profile evidence}, default: {$ref: '#/components/responses/Problem'}}
+  /sources/{sourceId}/onboarding-versions/{versionId}/semantic-gaps/from-access-schema:
+    post:
+      operationId: proposeAccessSchemaSemantics
+      x-ouf-mcp-capability: ouf.source-onboarding.semantic-gap.create
+      description: Open idempotent proposals from the pinned Access profile, including composite keys and FK direction evidence. No semantic adoption or publication.
+      parameters: [{$ref: '#/components/parameters/SourceId'}, {$ref: '#/components/parameters/VersionId'}]
+      responses: {'200': {description: Schema proposals with source evidence}, default: {$ref: '#/components/responses/Problem'}}
   /sources/{sourceId}/onboarding-versions/{versionId}/semantic-gaps/{gapId}/search:
     post:
       operationId: requestSemanticDiscovery
@@ -411,7 +434,7 @@ components:
         profile_id: {type: string, format: uuid}
         asset_id: {type: string, format: uuid}
         version: {type: integer, minimum: 1}
-        format: {type: string, enum: [CSV, XLSX]}
+        format: {type: string, enum: [CSV, XLSX, GEOPACKAGE, SHAPEFILE, ACCESS]}
         metadata: {type: object, additionalProperties: true}
         inferred_schema:
           type: array

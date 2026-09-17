@@ -10,11 +10,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class AuthorizationAdminService {
- private final JdbcClient db;private final ObjectMapper json;private final AuthorizationPolicyRegistry registry;
- public AuthorizationAdminService(JdbcClient db,ObjectMapper json,AuthorizationPolicyRegistry registry){this.db=db;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.registry=registry;}
+ private final JdbcClient db;private final ObjectMapper json;private final AuthorizationPolicyRegistry registry;private final AuthorizationRuntimeSynchronizer runtime;
+ public AuthorizationAdminService(JdbcClient db,ObjectMapper json,AuthorizationPolicyRegistry registry,AuthorizationRuntimeSynchronizer runtime){this.db=db;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.registry=registry;this.runtime=runtime;}
  public record Draft(UUID id,long revision,String state,String baseActiveRef,PolicyBundle policy){}
  public record Actor(String subject,String tenant,String type,String policyRef,String correlation) {public Actor {if(!"HUMAN".equals(type)||subject==null||subject.isBlank()||policyRef==null||policyRef.isBlank())throw new SecurityException("AUTH_ADMIN_HUMAN_REQUIRED");}}
  private DomainFailure failure(HttpStatus status,String code){return new DomainFailure(status,code,code);}
@@ -22,6 +24,13 @@ public class AuthorizationAdminService {
  private String encode(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalArgumentException("AUTH_POLICY_INVALID",e);}}
  private PolicyBundle decode(String raw){try{return json.readValue(raw,PolicyBundle.class);}catch(Exception e){throw new IllegalArgumentException("AUTH_POLICY_INVALID",e);}}
  private String activeRef(){return registry.active().map(a->a.bundleId()+":"+a.version()).orElse("NONE");}
+ private boolean bootstrapCompleted(){return db.sql("select completed from ouf_authorization.bootstrap_latch where singleton_key=true").query(Boolean.class).single();}
+ public boolean bootstrapOpen(){return !bootstrapCompleted()&&registry.active().isEmpty();}
+ private void completeBootstrap(Actor actor){db.sql("update ouf_authorization.bootstrap_latch set completed=true,completed_at=transaction_timestamp(),completed_by=:subject where singleton_key=true and completed=false").param("subject",actor.subject()).update();}
+ private void refreshRuntimeAfterCommit(){
+  if(!TransactionSynchronizationManager.isSynchronizationActive())throw new IllegalStateException("AUTH_RUNTIME_REFRESH_REQUIRES_TRANSACTION");
+  TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization(){@Override public void afterCommit(){runtime.refreshActive();}});
+ }
  private void audit(String action,String target,Actor actor){db.sql("insert into ouf_authorization.admin_audit values(:id,:a,:t,:s,:tenant,'HUMAN',:p,:c,transaction_timestamp())").param("id",UUID.randomUUID()).param("a",action).param("t",target).param("s",actor.subject()).param("tenant",actor.tenant()).param("p",actor.policyRef()).param("c",actor.correlation()).update();}
  @Transactional public void register(String owner,CapabilityDescriptor descriptor,Actor actor){
   if(owner==null||owner.isBlank())throw new IllegalArgumentException("ownerRef required");
@@ -45,7 +54,10 @@ public class AuthorizationAdminService {
   if(!activeRef().equals(d.baseActiveRef()))throw failure(HttpStatus.CONFLICT,"AUTH_ACTIVE_CHANGED_REBASE_REQUIRED");validate(d.policy());
   var active=registry.active();if(active.isPresent()&&(!active.get().bundleId().equals(d.policy().bundleId())||d.policy().version()<=active.get().version()))throw failure(HttpStatus.CONFLICT,"AUTH_POLICY_VERSION_MUST_ADVANCE");
   var p=d.policy();registry.publishAndActivate(new PolicyBundle(p.bundleId(),p.version(),Instant.now(),p.capabilities(),p.grants()),actor.subject());
-  db.sql("update ouf_authorization.policy_draft set state='PUBLISHED',revision=revision+1 where draft_id=:id").param("id",id).update();audit("PUBLISH_ACTIVATE",id.toString(),actor);return get(id);
+  completeBootstrap(actor);
+  db.sql("update ouf_authorization.policy_draft set state='PUBLISHED',revision=revision+1 where draft_id=:id").param("id",id).update();audit("PUBLISH_ACTIVATE",id.toString(),actor);
+  refreshRuntimeAfterCommit();
+  return get(id);
  }
  private void validate(PolicyBundle policy){
   if(encode(policy).getBytes(java.nio.charset.StandardCharsets.UTF_8).length>5*1024*1024)throw new IllegalArgumentException("AUTH_POLICY_TOO_LARGE");

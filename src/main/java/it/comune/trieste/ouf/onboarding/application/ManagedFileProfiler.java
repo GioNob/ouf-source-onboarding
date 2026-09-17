@@ -16,7 +16,38 @@ public class ManagedFileProfiler {
   public record ColumnProfile(String name,String dataType,boolean nullable,long distinctValues) {}
   public record Profile(String format,Map<String,Object> metadata,List<ColumnProfile> columns,List<String> candidateKeys,List<Map<String,String>> sample) {}
 
-  public Profile profile(byte[] bytes,String mediaType){if(bytes.length==0||bytes.length>MAX_BYTES)throw new IllegalArgumentException("file size outside profiling limits");return switch(mediaType){case "application/geopackage+sqlite3"->geopackage(bytes);case "text/csv"->csv(bytes);case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"->xlsx(bytes);default->throw new IllegalArgumentException("unsupported media type");};}
+  public Profile profile(byte[] bytes,String mediaType){if(bytes.length==0||bytes.length>MAX_BYTES)throw new IllegalArgumentException("file size outside profiling limits");return switch(mediaType){case "application/zip"->shapefile(bytes);case "application/x-msaccess","application/vnd.ms-access"->access(bytes);case "application/geopackage+sqlite3"->geopackage(bytes);case "text/csv"->csv(bytes);case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"->xlsx(bytes);default->throw new IllegalArgumentException("unsupported media type");};}
+  private Profile shapefile(byte[] bytes){
+    try(var reader=new it.comune.trieste.ouf.managed.ShapefileReader(bytes)){
+      var layers=new ArrayList<Map<String,Object>>();
+      for(var layer:reader.layers()){
+        var rows=layer.rows().stream().map(row->layer.columns().stream().map(h->h.equals(layer.geometryColumn())?"[GEOMETRY]":Objects.toString(row.get(h),"")).toList()).toList();
+        var tabular=build("SHAPEFILE",Map.of(),layer.columns(),rows);
+        var columns=tabular.columns().stream().map(c->c.name().equals(layer.geometryColumn())?new ColumnProfile(c.name(),"GEOMETRY",false,0):c).toList();
+        var item=new LinkedHashMap<String,Object>();item.put("layer",layer.name());item.put("sourceCrs",layer.crs());item.put("srsId",Integer.parseInt(layer.crs().substring(5)));item.put("encoding",layer.encoding());item.put("geometryColumn",layer.geometryColumn());item.put("columns",columns);
+        item.put("candidateKeys",tabular.candidateKeys().stream().filter(k->!k.equals(layer.geometryColumn())).toList());item.put("sample",tabular.sample());item.put("featureCount",rows.size());layers.add(item);
+      }
+      return new Profile("SHAPEFILE",Map.of("layers",layers,"layerSelection","REQUIRED","dimensions",2,"reader","geotools-35.0"),List.of(),List.of(),List.of());
+    }
+  }
+  private Profile access(byte[] bytes){
+    try(var reader=new it.comune.trieste.ouf.managed.AccessReader(bytes)){
+      var tables=new ArrayList<Map<String,Object>>();
+      for(var table:reader.tables()){
+        var headers=table.columns().stream().map(it.comune.trieste.ouf.managed.AccessReader.ColumnInfo::name).toList();
+        var rows=reader.rows(table.name(),headers);
+        var values=rows.stream().map(row->headers.stream().map(h->Objects.toString(row.get(h),"")).toList()).toList();
+        var profile=build("ACCESS",Map.of(),headers,values);
+        var item=new LinkedHashMap<String,Object>();item.put("layer",table.name());item.put("columns",profile.columns());item.put("sourceColumns",table.columns());
+        item.put("candidateKeys",profile.candidateKeys());item.put("primaryKey",table.primaryKey());item.put("uniqueKeys",table.uniqueKeys());item.put("rowCount",rows.size());
+        item.put("sample",profile.sample().stream().map(row->{var masked=new LinkedHashMap<String,String>();row.keySet().forEach(k->masked.put(k,"[REDACTED]"));return masked;}).toList());tables.add(item);
+      }
+      var relationships=reader.relationships();var hints=new ArrayList<Map<String,Object>>();
+      for(var table:tables)hints.add(Map.of("kind","CLASS_AND_PROPERTIES","table",table.get("layer"),"sourceColumns",table.get("sourceColumns"),"declaredPrimaryKey",table.get("primaryKey"),"declaredUniqueKeys",table.get("uniqueKeys"),"status","PENDING_HUMAN_REVIEW","nextAction","SEARCH_EXISTING_SEMANTICS_OR_OPEN_GAP"));
+      for(var relationship:relationships)hints.add(Map.of("kind","RELATIONSHIP","name",relationship.get("name"),"referencedTable",relationship.get("fromTable"),"referencedColumns",relationship.get("fromColumns"),"referencingTable",relationship.get("toTable"),"referencingColumns",relationship.get("toColumns"),"referentialIntegrity",relationship.get("referentialIntegrity"),"status","PENDING_HUMAN_REVIEW","nextAction","SELECT_SEMANTIC_RELATION_AND_DIRECTION"));
+      return new Profile("ACCESS",Map.of("layers",tables,"tableSelection","REQUIRED","relationships",relationships,"semanticHints",hints,"proposalStatus","PENDING_HUMAN_REVIEW","reader","jackcess-5.0.0","expressions","DISABLED","linkedTables","REJECTED"),List.of(),List.of(),List.of());
+    }
+  }
   private Profile geopackage(byte[] bytes){
     try(var reader=new it.comune.trieste.ouf.geopackage.GeoPackageReader(bytes)){
       var layers=new ArrayList<Map<String,Object>>();

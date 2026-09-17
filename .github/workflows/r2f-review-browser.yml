@@ -1,0 +1,19 @@
+name: R2f trusted review browser
+on: [push, pull_request, workflow_dispatch]
+permissions: {contents: read}
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: npm install --no-save --package-lock=false playwright@1.62.1
+      - run: npx playwright install --with-deps chromium
+      - run: node --test tests/browser/r2f-review.test.cjs
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2f-browser-evidence
+          path: target/browser-evidence/
