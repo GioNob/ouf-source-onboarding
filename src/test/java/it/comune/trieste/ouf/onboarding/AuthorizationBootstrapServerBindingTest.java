@@ -46,7 +46,7 @@ class AuthorizationBootstrapServerBindingTest {
   }
 
   @Test
-  void bootstrapPostWorksWithoutServletPrincipalWhenIamBoundPrincipalExists() throws Exception {
+  void bootstrapPostWorksWithoutServletPrincipalWhenServerBindingsExist() throws Exception {
     var descriptor = new CapabilityDescriptor(
         "bootstrap.test", "EXECUTE", "bootstrap.test",
         Set.of(PrincipalContext.ActorType.HUMAN));
@@ -57,7 +57,7 @@ class AuthorizationBootstrapServerBindingTest {
           request.setAttribute(
               ServletAuthorization.TRUSTED_PRINCIPAL,
               TestAuthorization.principal("human:admin", "HUMAN", Set.of("authorization.bootstrap")));
-          request.setAttribute("ouf.csrfValidated", Boolean.TRUE);
+          request.setAttribute("ouf.statelessBearerWriteValidated", Boolean.TRUE);
           return request;
         })
         .contentType(MediaType.APPLICATION_JSON)
