@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -34,7 +33,7 @@ import org.springframework.security.oauth2.server.resource.web.authentication.Be
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-@Configuration
+@Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(name = "ouf.iam.enabled", havingValue = "true")
 public class IamSecurityConfiguration {
   @Bean
@@ -165,5 +164,23 @@ public class IamSecurityConfiguration {
       }
       chain.doFilter(request, response);
     }
+  }
+}
+
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(name = "ouf.iam.enabled", havingValue = "false", matchIfMissing = true)
+class IamDisabledSecurityConfiguration {
+  /**
+   * Suppress Spring Boot's generated default security chain when OUF IAM is not
+   * enabled. The sentinel path is deliberately outside every OUF API namespace
+   * and denied; real endpoints are therefore not intercepted by Spring Security
+   * and retain their existing domain-level fail-closed authorization checks.
+   */
+  @Bean
+  SecurityFilterChain iamDisabledSentinelSecurityFilterChain(HttpSecurity http) throws Exception {
+    http.securityMatcher("/__ouf/iam-disabled/**");
+    http.csrf(csrf -> csrf.disable());
+    http.authorizeHttpRequests(auth -> auth.anyRequest().denyAll());
+    return http.build();
   }
 }
