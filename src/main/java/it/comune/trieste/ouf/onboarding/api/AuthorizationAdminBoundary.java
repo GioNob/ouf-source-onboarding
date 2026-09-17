@@ -26,7 +26,7 @@ public class AuthorizationAdminBoundary extends OncePerRequestFilter {
    } else {
     ServletAuthorization.require(r,"authorization.policy.admin",true);
    }
-   if(!"GET".equals(r.getMethod())&&!"HEAD".equals(r.getMethod())&&!Boolean.TRUE.equals(r.getAttribute("ouf.csrfValidated")))throw new SecurityException("AUTH_CSRF_REQUIRED");
+   if(!"GET".equals(r.getMethod())&&!"HEAD".equals(r.getMethod()))TrustedWriteProof.require(r);
   }catch(SecurityException e){response.sendError(403,"Authorization administration denied");return;}
   final int maximum=5*1024*1024;
   byte[] body=r.getInputStream().readNBytes(maximum+1);
