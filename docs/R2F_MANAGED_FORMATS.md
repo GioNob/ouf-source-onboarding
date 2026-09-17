@@ -22,12 +22,17 @@ Lettore Jackcess 5.0.0 (Apache-2.0), sola lettura. Fixture `.mdb` V2000 e `.accd
 
 Non vengono eseguiti query salvate, macro, VBA o espressioni. Database protetti e tabelle collegate sono rifiutati; il resolver non apre file/reti esterni. Allegati/OLE/tipi complessi non rientrano nel profilo iniziale; il profiling di una tabella che li contiene può richiedere un'esportazione tabellare compatibile. I sample Access sono redatti integralmente durante il profiling.
 
-`metadata.relationships` e `uniqueKeys` sono **evidenze per proposte**: non assegnano IRI, non pubblicano ontologie e non materializzano edge. Il collegamento completo della proposta a Semantic Registry/THS e il collaudo di relazioni Access restano nel perimetro aperto R2f.
+`metadata.relationships` e `uniqueKeys` sono **evidenze per proposte**: non assegnano IRI, non pubblicano ontologie e non materializzano edge. `metadata.semanticHints` propone la ricerca delle classi/proprietà e l’esame delle dipendenze dichiarate; `sourceSchemaEvidence` conserva il catalogo e il riferimento al profilo nella bozza. Il collegamento completo della proposta a Semantic Registry/THS resta nel perimetro aperto R2f.
 
 ## Evidenze e limiti di accettazione
 
-`AccessReaderTest`: lettura dei due formati, chiavi composite, rilettura con projection diversa, integrità originale, dati corrotti/oversize e blocco dei link esterni.
+`AccessReaderTest`: lettura dei due formati, chiavi e relazioni composite dichiarate, rilettura con projection diversa, integrità originale, dati corrotti/oversize e blocco dei link esterni.
 
 `ShapefileReaderTest`: punto, poligono con anello interno, identificativo testuale con zeri iniziali, componenti mancanti, traversal e indici incoerenti.
 
 Questi test dei lettori non sostituiscono il collaudo source-to-serving con entrambi gli owner delle nuove pubblicazioni. Le precedenti pairwise R2a–R2e usano i loro profili storici e non attestano automaticamente Access/Shapefile.
+
+
+`ManagedAdditionalFormatsTest` (Ingestion): identità composita stabile con riordino delle righe MDB/ACCDB, ripresa dal checkpoint, proiezione dei soli campi approvati, hash/chiavi/limiti discordanti; Shapefile verifica CRS, encoding, chiave, limiti e ripresa.
+
+I due adapter richiedono `maxRows` (1..10000) e `maxCellChars` (1..65536) nel profilo di esecuzione approvato e ne rispettano anche limiti inferiori a quelli del lettore.
