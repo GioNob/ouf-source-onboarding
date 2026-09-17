@@ -13,8 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AuthorizationAdminService {
- private final JdbcClient db;private final ObjectMapper json;private final AuthorizationPolicyRegistry registry;
- public AuthorizationAdminService(JdbcClient db,ObjectMapper json,AuthorizationPolicyRegistry registry){this.db=db;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.registry=registry;}
+ private final JdbcClient db;private final ObjectMapper json;private final AuthorizationPolicyRegistry registry;private final AuthorizationRuntimeSynchronizer runtime;
+ public AuthorizationAdminService(JdbcClient db,ObjectMapper json,AuthorizationPolicyRegistry registry,AuthorizationRuntimeSynchronizer runtime){this.db=db;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.registry=registry;this.runtime=runtime;}
  public record Draft(UUID id,long revision,String state,String baseActiveRef,PolicyBundle policy){}
  public record Actor(String subject,String tenant,String type,String policyRef,String correlation) {public Actor {if(!"HUMAN".equals(type)||subject==null||subject.isBlank()||policyRef==null||policyRef.isBlank())throw new SecurityException("AUTH_ADMIN_HUMAN_REQUIRED");}}
  private DomainFailure failure(HttpStatus status,String code){return new DomainFailure(status,code,code);}
@@ -46,6 +46,7 @@ public class AuthorizationAdminService {
   if(!activeRef().equals(d.baseActiveRef()))throw failure(HttpStatus.CONFLICT,"AUTH_ACTIVE_CHANGED_REBASE_REQUIRED");validate(d.policy());
   var active=registry.active();if(active.isPresent()&&(!active.get().bundleId().equals(d.policy().bundleId())||d.policy().version()<=active.get().version()))throw failure(HttpStatus.CONFLICT,"AUTH_POLICY_VERSION_MUST_ADVANCE");
   var p=d.policy();registry.publishAndActivate(new PolicyBundle(p.bundleId(),p.version(),Instant.now(),p.capabilities(),p.grants()),actor.subject());
+  runtime.refreshActive();
   db.sql("update ouf_authorization.policy_draft set state='PUBLISHED',revision=revision+1 where draft_id=:id").param("id",id).update();audit("PUBLISH_ACTIVATE",id.toString(),actor);return get(id);
  }
  private void validate(PolicyBundle policy){
