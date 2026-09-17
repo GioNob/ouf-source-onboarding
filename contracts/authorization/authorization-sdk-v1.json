@@ -4,55 +4,207 @@
   "title": "OUF Authorization SDK Contract v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["principal", "resource", "capabilityId", "operation"],
+  "required": [
+    "principal",
+    "resource",
+    "capabilityId",
+    "operation"
+  ],
   "properties": {
     "principal": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["subjectId", "tenantId", "actorType", "authenticationContextRef", "issuer", "audience", "scopes"],
+      "required": [
+        "subjectId",
+        "tenantId",
+        "actorType",
+        "authenticationContextRef",
+        "issuer",
+        "audience",
+        "scopes"
+      ],
       "properties": {
-        "subjectId": {"type": "string", "minLength": 1},
-        "tenantId": {"type": "string", "minLength": 1},
-        "actorType": {"enum": ["HUMAN", "SERVICE", "AI_AGENT"]},
-        "servicePrincipalId": {"type": ["string", "null"]},
-        "authenticationContextRef": {"type": "string", "minLength": 1},
-        "issuer": {"type": "string", "minLength": 1},
-        "audience": {"type": "string", "minLength": 1},
-        "scopes": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+        "subjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actorType": {
+          "enum": [
+            "HUMAN",
+            "SERVICE",
+            "AI_AGENT"
+          ]
+        },
+        "servicePrincipalId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "authenticationContextRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "claims": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "externalRoleRefs": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "acr": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "amr": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "authenticatedAt": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          }
+        }
       }
     },
     "resource": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["resourceType", "tenantId", "attributes"],
+      "required": [
+        "resourceType",
+        "tenantId",
+        "attributes"
+      ],
       "properties": {
-        "resourceType": {"type": "string", "minLength": 1},
-        "resourceId": {"type": ["string", "null"]},
-        "tenantId": {"type": "string", "minLength": 1},
-        "organizationId": {"type": ["string", "null"]},
+        "resourceType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resourceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "organizationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "attributes": {
           "type": "object",
-          "additionalProperties": {"type": "string"}
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },
-    "capabilityId": {"type": "string", "minLength": 1},
-    "operation": {"type": "string", "minLength": 1}
+    "capabilityId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operation": {
+      "type": "string",
+      "minLength": 1
+    }
   },
   "x-ouf-decision": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["allowed", "decisionCode", "decisionRef", "bundleId", "bundleVersion"],
+    "required": [
+      "allowed",
+      "decisionCode",
+      "decisionRef",
+      "bundleId",
+      "bundleVersion"
+    ],
     "properties": {
-      "allowed": {"type": "boolean"},
-      "decisionCode": {"type": "string", "minLength": 1},
-      "decisionRef": {"type": "string", "minLength": 1},
-      "bundleId": {"type": "string", "minLength": 1},
-      "bundleVersion": {"type": "integer", "minimum": 1}
+      "allowed": {
+        "type": "boolean"
+      },
+      "decisionCode": {
+        "type": "string",
+        "minLength": 1
+      },
+      "decisionRef": {
+        "type": "string",
+        "minLength": 1
+      },
+      "bundleId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "bundleVersion": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "permittedDetailLevel": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "resourceScope": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
     }
   },
   "x-ouf-integration-gate": {
     "scenarioNeutral": true,
-    "external": ["issuer", "jwks", "audience", "claimMapping", "serviceIdentityProvisioning", "rotation", "revocation"]
+    "external": [
+      "issuer",
+      "jwks",
+      "audience",
+      "claimMapping",
+      "serviceIdentityProvisioning",
+      "rotation",
+      "revocation"
+    ]
   }
 }

@@ -35,7 +35,7 @@ public final class LocalAuthorization {
       if(bytes.length>MAX_BYTES)throw new IllegalArgumentException("BUNDLE_TOO_LARGE");
       String hash=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
       if(!hash.equals(ref.sha256()))throw new IllegalArgumentException("BUNDLE_HASH_MISMATCH");
-      var json=new ObjectMapper().registerModule(new JavaTimeModule()).enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+      var json=new ObjectMapper().registerModule(new JavaTimeModule()).enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
       var bundle=json.readValue(bytes,PolicyBundle.class);
       if(!bundle.bundleId().equals(ref.bundleId())||bundle.version()!=ref.version())throw new IllegalArgumentException("BUNDLE_REFERENCE_MISMATCH");
       if(bundle.capabilities().size()>10000||bundle.grants().size()>10000)throw new IllegalArgumentException("BUNDLE_CARDINALITY_LIMIT");
@@ -51,11 +51,13 @@ public final class LocalAuthorization {
           if(bundle.version()<old.bundle().version())throw new IllegalArgumentException("BUNDLE_ROLLBACK_REJECTED");
           if(bundle.version()==old.bundle().version()&&!hash.equals(old.sha256()))throw new IllegalArgumentException("IMMUTABLE_BUNDLE_CHANGED");
         }
+        if(old!=null&&next.verifiedAt().isBefore(old.verifiedAt()))throw new IllegalArgumentException("OLDER_REFRESH_REJECTED");
         if(active.compareAndSet(old,next))break;
       }
       lastError=null;return new BundleRefreshResult(true,"INSTALLED");
     }catch(Exception e){lastError=e instanceof IllegalArgumentException?e.getMessage():"BUNDLE_LOAD_FAILED";return new BundleRefreshResult(false,lastError);}
   }
+  public void refreshFailure(String code){lastError=code;}
   public PolicySnapshot currentSnapshot(){var p=active.get();requireFresh(p);return p;}
   public void requireFresh(PolicySnapshot p){
     if(p==null)throw new SecurityException("NO_POLICY_BUNDLE");

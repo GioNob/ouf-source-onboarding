@@ -61,6 +61,7 @@ public class AuthorizationPolicyRegistry {
 
   @Transactional
   public ActiveBundle activate(String bundleId, long version) {
+    db.sql("select pg_advisory_xact_lock(741093)").query(Object.class).single();
     require(bundleId, "bundleId");
     db.sql("select 1 from ouf_authorization.policy_bundle where bundle_id=:id and version=:version")
         .param("id", bundleId).param("version", version).query(Integer.class).single();
@@ -133,6 +134,8 @@ public class AuthorizationPolicyRegistry {
     return db.sql("select count(*) from ouf_authorization.authorization_decision_audit where tenant_id=:tenant")
         .param("tenant", tenantId).query(Long.class).single();
   }
+
+  public String transportHash(PolicyBundle bundle){try{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.writer().without(com.fasterxml.jackson.databind.SerializationFeature.INDENT_OUTPUT).writeValueAsBytes(bundle)));}catch(Exception e){throw new IllegalStateException(e);}}
 
   public Map<String, Object> activeMetadata() {
     return active().<Map<String, Object>>map(a -> Map.of(
