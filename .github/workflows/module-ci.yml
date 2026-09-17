@@ -41,8 +41,8 @@ jobs:
       - name: Verify shared SDK production packaging
         run: |
           jar tf target/source-onboarding-*.jar > target/sdk-packaging.txt
-          grep -q 'BOOT-INF/lib/authorization-sdk-1.1.0.jar' target/sdk-packaging.txt
-          if grep -q 'authorization-sdk-1.1.0-tests.jar' target/sdk-packaging.txt; then exit 1; fi
+          grep -q 'BOOT-INF/lib/authorization-sdk-1.2.0.jar' target/sdk-packaging.txt
+          if grep -q 'authorization-sdk-1.2.0-tests.jar' target/sdk-packaging.txt; then exit 1; fi
       - name: Build non-root container
         run: |
           docker build -t ouf-source-onboarding:${{ github.sha }} .
