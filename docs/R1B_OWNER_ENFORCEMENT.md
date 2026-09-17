@@ -1,0 +1,9 @@
+# R1b owner enforcement — PET mapping
+
+Normative sources: Authorization 1.5 §§109.2–109.3, 36.10 (owner-side DAL), 34.2 (operational detail and denial semantics); Semantic 1.3 §65/§160.7. This follow-up closes the code boundaries identified in the previous R1b endpoint audit. Real IAM/workload/THS browser acceptance remains AUT-04/R6.
+
+Shared SDK 1.2 adds `OwnerAuthorization`, a request-bound evaluator using the exact same immutable snapshot as servlet authentication. `candidates()` is admission only: it checks declared actor/scope and MUST NOT authorize release. `decide`/`require` is called with owner-resolved resource metadata before each output. No directory or remote PDP lookup occurs in this path. Raw capability/label headers and coarse attributes remain non-authoritative.
+
+Protected logs use `protected-log` resources, `module=ONBOARDING`, `detailLevel=SECURITY_SENSITIVE`, canonical HUMAN and the exact per-operation capability. The global audit-store namespace must be explicitly configured with `ouf.protected-log.tenant-id` / `OUF_PROTECTED_LOG_TENANT_ID`. It is a platform audit-owner namespace, not caller-selected tenancy and not a tenant filter over the global audit store. Absence denies; it must be assigned only to the platform operators allowed to inspect the entire store. Grants need an explicit SECURITY_SENSITIVE detail level. PII and download-any capabilities are re-evaluated against that same resource; secret redaction remains unconditional. Scoped log/export reads bind the route identifier. Audit records now receive the exact bundle/version/capability decision reference. Existing direct domain constructors remain available to controlled internal tests; HTTP always goes through this boundary.
+
+Tests: OwnerAuthorizationTest (scoped grant despite coarse denial, wrong resource, pinned snapshot/revocation); ProtectedLogOwnerBoundaryTest (missing detail, authorized detail, wrong owner namespace, exact audit reference).
