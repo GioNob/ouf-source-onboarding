@@ -33,7 +33,26 @@ class AuthorizationCapabilitiesTest {
     assertThat(export.operation()).isEqualTo("READ");
     assertThat(export.requiredScope()).isEqualTo("installation.configuration.export");
     assertThat(export.allowedActors()).isEqualTo(Set.of(PrincipalContext.ActorType.HUMAN));
+    var read = AuthorizationCapabilities.INSTALLATION_CONFIGURATION_READ;
+    var write = AuthorizationCapabilities.INSTALLATION_CONFIGURATION_WRITE;
+    var activate = AuthorizationCapabilities.INSTALLATION_CONFIGURATION_ACTIVATE;
+
+    assertThat(read.capabilityId()).isEqualTo("installation.configuration.read");
+    assertThat(read.operation()).isEqualTo("READ");
+    assertThat(read.requiredScope()).isEqualTo("installation.configuration.read");
+    assertThat(read.allowedActors()).isEqualTo(Set.of(PrincipalContext.ActorType.HUMAN));
+
+    assertThat(write.capabilityId()).isEqualTo("installation.configuration.write");
+    assertThat(write.operation()).isEqualTo("EXECUTE");
+    assertThat(write.requiredScope()).isEqualTo("installation.configuration.write");
+    assertThat(write.allowedActors()).isEqualTo(Set.of(PrincipalContext.ActorType.HUMAN));
+
+    assertThat(activate.capabilityId()).isEqualTo("installation.configuration.activate");
+    assertThat(activate.operation()).isEqualTo("EXECUTE");
+    assertThat(activate.requiredScope()).isEqualTo("installation.configuration.activate");
+    assertThat(activate.allowedActors()).isEqualTo(Set.of(PrincipalContext.ActorType.HUMAN));
+
     assertThat(AuthorizationCapabilities.installationDescriptors())
-        .containsExactly(export);
+        .containsExactly(read, write, activate, export);
   }
 }
