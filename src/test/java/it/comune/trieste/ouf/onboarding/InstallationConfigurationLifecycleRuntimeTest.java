@@ -64,6 +64,7 @@ class InstallationConfigurationLifecycleRuntimeTest {
         "internalDnsStrategy", "REVERSE_PROXY_ALIAS"));
     root.put("iam", Map.of(
         "issuerUrl", "https://iam.example.test/realms/ouf",
+        "tokenEndpoint", "https://iam.example.test/realms/ouf/token",
         "realm", "ouf",
         "humanAdminClientId", "human-admin",
         "gatewayAudience", "gateway",
