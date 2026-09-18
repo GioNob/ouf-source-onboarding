@@ -108,6 +108,30 @@ class InstallationProjectionExportRuntimeTest {
         .doesNotContain("password=");
   }
 
+
+  @Test
+  void exportsValidatedCandidateWithoutActivePointerAndAuditsPurpose() throws Exception {
+    var r1 = configurations.create(lab(), lifecycleActor());
+
+    var projection = exports.exportCandidate(
+        r1.installationId(), r1.revision(), exportActor("corr-candidate-1"));
+
+    assertThat(projection.revision()).isEqualTo(r1.revision());
+    assertThat(projection.checksum()).isEqualTo(r1.checksum());
+    assertThat(configurations.active(r1.installationId())).isEmpty();
+
+    var audit = db.sql("""
+        select export_purpose,correlation_id
+        from ouf_installation.installation_projection_export_event
+        where installation_id=:id and revision=:rev
+        """)
+        .param("id", r1.installationId())
+        .param("rev", r1.revision())
+        .query((rs,n) -> List.of(rs.getString(1), rs.getString(2))).single();
+
+    assertThat(audit).containsExactly("CANDIDATE", "corr-candidate-1");
+  }
+
   @Test
   void exportFailsWhenInstallationHasNoActiveRevision() throws Exception {
     var revision = configurations.create(lab(), lifecycleActor());
