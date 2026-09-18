@@ -46,6 +46,7 @@ public class InstallationRuntimeProjectionService {
     JsonNode p = source.payload();
 
     String issuer = required(p, "/iam/issuerUrl");
+    String tokenEndpoint = required(p, "/iam/tokenEndpoint");
     String api = stripSlash(required(p, "/gateway/publicApiBaseUrl"));
     String issuerHost = host(issuer, "INSTALLATION_ISSUER_HOST_INVALID");
     String apiHost = host(api, "INSTALLATION_API_HOST_INVALID");
@@ -76,7 +77,7 @@ public class InstallationRuntimeProjectionService {
         required(p, "/gateway/internalServiceRef"));
 
     Map<String,String> env = new TreeMap<>();
-    env.put("MCP_OIDC_TOKEN_ENDPOINT", stripSlash(issuer) + "/protocol/openid-connect/token");
+    env.put("MCP_OIDC_TOKEN_ENDPOINT", tokenEndpoint);
     env.put("MCP_OIDC_CLIENT_ID", mcpClientId);
     env.put("MCP_GATEWAY_ENDPOINT", api + "/internal/capabilities/v1/execute");
     env.put("MCP_AUTHORIZATION_BUNDLE_ENDPOINT",
