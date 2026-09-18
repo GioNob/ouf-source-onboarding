@@ -143,7 +143,11 @@ public class InstallationBootstrapApi {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST, "INSTALLATION_CORRELATION_REQUIRED");
     var context = require(request, capability, true);
-    TrustedWriteProof.require(request);
+    try {
+      TrustedWriteProof.require(request);
+    } catch (SecurityException e) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, e.getMessage());
+    }
     return new InstallationConfigurationService.Actor(
         context.principal().subjectId(), correlationId);
   }
@@ -151,7 +155,7 @@ public class InstallationBootstrapApi {
   private ServletAuthorization.Context require(
       HttpServletRequest request,
       String capability,
-      boolean write) {
+      boolean humanOnly) {
     try {
       return ServletAuthorization.require(request, capability, true);
     } catch (SecurityException e) {
