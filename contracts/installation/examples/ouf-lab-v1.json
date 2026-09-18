@@ -19,6 +19,9 @@
     "realm": "ouf",
     "humanAdminClientId": "ouf-human-admin",
     "gatewayAudience": "ouf-api-gateway",
+    "workloadClients": {
+      "mcpServer": "ouf-mcp-server"
+    },
     "enterpriseCaRef": null
   },
   "gateway": {
