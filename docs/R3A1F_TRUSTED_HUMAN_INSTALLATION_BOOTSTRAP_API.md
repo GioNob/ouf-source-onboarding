@@ -86,7 +86,7 @@ Migration V24 persists correlation for:
 - every InstallationConfiguration creation attempt, including REJECTED revisions, via `created_correlation_id`;
 - every environment validation run via `correlation_id`.
 
-Existing rows are backfilled with deterministic `legacy:` values before NOT NULL is enforced.
+Existing rows receive the temporary DDL default `legacy:pre-v24` while the NOT NULL columns are added; the default is then removed so new evidence must always provide explicit correlation. This avoids mutating rows protected by immutability triggers.
 
 Lifecycle activation/supersession/rollback/revoke already store correlation through append-only lifecycle events.
 
