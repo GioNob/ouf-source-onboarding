@@ -44,11 +44,11 @@ public class InstallationProjectionExportApi {
           .cacheControl(CacheControl.noStore())
           .header(
               "Content-Disposition",
-              "attachment; filename="installation-projection-"
+              "attachment; filename=\"installation-projection-"
                   + safeInstallationId
                   + "-r"
                   + projection.revision()
-                  + ".json"")
+                  + ".json\"")
           .header("X-OUF-Installation-Revision", Long.toString(projection.revision()))
           .header("X-OUF-Installation-Checksum", projection.checksum())
           .body(projection);
