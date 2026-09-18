@@ -49,12 +49,17 @@
     "iam": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["issuerUrl", "realm", "humanAdminClientId", "gatewayAudience"],
+      "required": ["issuerUrl", "tokenEndpoint", "realm", "humanAdminClientId", "gatewayAudience"],
       "properties": {
         "issuerUrl": {"type": "string", "format": "uri", "pattern": "^https://"},
+        "tokenEndpoint": {"type": "string", "format": "uri", "pattern": "^https://"},
         "realm": {"type": "string", "minLength": 1},
         "humanAdminClientId": {"type": "string", "minLength": 1},
         "gatewayAudience": {"type": "string", "minLength": 1},
+        "workloadClients": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
         "enterpriseCaRef": {"type": ["string", "null"]}
       }
     },

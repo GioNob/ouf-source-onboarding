@@ -1,14 +1,18 @@
 package it.comune.trieste.ouf.onboarding;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import it.comune.trieste.ouf.onboarding.installation.InstallationConfigurationService;
+import it.comune.trieste.ouf.onboarding.installation.InstallationEnvironmentProbe;
 import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.*;
 
@@ -24,6 +28,7 @@ class InstallationConfigurationLifecycleRuntimeTest {
   @Autowired InstallationConfigurationService service;
   @Autowired ObjectMapper json;
   @Autowired JdbcClient db;
+  @MockBean InstallationEnvironmentProbe environmentProbe;
 
   private InstallationConfigurationService.Actor actor() {
     return new InstallationConfigurationService.Actor("installer-human", UUID.randomUUID().toString());
@@ -31,8 +36,11 @@ class InstallationConfigurationLifecycleRuntimeTest {
 
   @BeforeEach
   void clean() {
+    when(environmentProbe.inspect(any())).thenReturn(List.of(
+        new InstallationEnvironmentProbe.Finding("fixture", "PASS", "ok")));
     db.sql("""
-      truncate ouf_installation.installation_configuration_lifecycle_event,
+      truncate ouf_installation.installation_environment_validation,
+               ouf_installation.installation_configuration_lifecycle_event,
                ouf_installation.installation_configuration_active,
                ouf_installation.installation_configuration_revision
       cascade
@@ -56,9 +64,11 @@ class InstallationConfigurationLifecycleRuntimeTest {
         "internalDnsStrategy", "REVERSE_PROXY_ALIAS"));
     root.put("iam", Map.of(
         "issuerUrl", "https://iam.example.test/realms/ouf",
+        "tokenEndpoint", "https://iam.example.test/realms/ouf/token",
         "realm", "ouf",
         "humanAdminClientId", "human-admin",
-        "gatewayAudience", "gateway"));
+        "gatewayAudience", "gateway",
+        "workloadClients", Map.of("mcpServer", "mcp-server")));
     root.put("gateway", Map.of(
         "publicApiBaseUrl", apiHost,
         "publicMcpPath", "/mcp",
@@ -126,11 +136,39 @@ class InstallationConfigurationLifecycleRuntimeTest {
         .hasMessageContaining("INSTALLATION_REVISION_NOT_VALIDATED");
   }
 
+
+  @Test
+  void latestEnvironmentFailureBlocksActivationAndEvidenceIsImmutable() {
+    var revision = service.create(valid("install-env", "https://api.example.test"), actor());
+
+    assertThatThrownBy(() -> service.activate("install-env", revision.revision(), actor()))
+        .hasMessageContaining("INSTALLATION_ENVIRONMENT_VALIDATION_REQUIRED");
+
+    var pass = service.validateEnvironment("install-env", revision.revision(), actor());
+    assertThat(pass.overallStatus()).isEqualTo("PASS");
+    assertThat(service.activate("install-env", revision.revision(), actor()).revision()).isEqualTo(1);
+
+    when(environmentProbe.inspect(any())).thenReturn(List.of(
+        new InstallationEnvironmentProbe.Finding("gateway.https", "FAIL", "unreachable")));
+    var fail = service.validateEnvironment("install-env", revision.revision(), actor());
+    assertThat(fail.overallStatus()).isEqualTo("FAIL");
+
+    db.sql("delete from ouf_installation.installation_configuration_active where installation_id='install-env'").update();
+    assertThatThrownBy(() -> service.activate("install-env", revision.revision(), actor()))
+        .hasMessageContaining("INSTALLATION_ENVIRONMENT_VALIDATION_REQUIRED");
+
+    assertThatThrownBy(() ->
+        db.sql("delete from ouf_installation.installation_environment_validation").update())
+        .hasStackTraceContaining("installation environment validation evidence is append-only");
+  }
+
   @Test
   void activationSupersedeRollbackAndRevocationAreAudited() {
     var r1 = service.create(valid("install-c", "https://api-v1.example.test"), actor());
     var r2 = service.create(valid("install-c", "https://api-v2.example.test"), actor());
 
+    service.validateEnvironment("install-c", r1.revision(), actor());
+    service.validateEnvironment("install-c", r2.revision(), actor());
     assertThat(service.activate("install-c", r1.revision(), actor()).revision()).isEqualTo(1);
     assertThat(service.activate("install-c", r2.revision(), actor()).revision()).isEqualTo(2);
     assertThat(service.activate("install-c", r1.revision(), actor()).revision()).isEqualTo(1);

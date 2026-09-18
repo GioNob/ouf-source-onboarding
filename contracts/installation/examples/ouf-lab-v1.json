@@ -16,9 +16,13 @@
   },
   "iam": {
     "issuerUrl": "https://auth.ouf-lab.it/realms/ouf",
+    "tokenEndpoint": "https://auth.ouf-lab.it/realms/ouf/protocol/openid-connect/token",
     "realm": "ouf",
     "humanAdminClientId": "ouf-human-admin",
     "gatewayAudience": "ouf-api-gateway",
+    "workloadClients": {
+      "mcpServer": "ouf-mcp-server"
+    },
     "enterpriseCaRef": null
   },
   "gateway": {

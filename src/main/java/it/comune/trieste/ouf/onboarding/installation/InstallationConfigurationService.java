@@ -13,10 +13,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class InstallationConfigurationService {
   private final JdbcClient db;
   private final ObjectMapper json;
+  private final InstallationEnvironmentProbe environmentProbe;
 
-  public InstallationConfigurationService(JdbcClient db, ObjectMapper json) {
+  public InstallationConfigurationService(
+      JdbcClient db,
+      ObjectMapper json,
+      InstallationEnvironmentProbe environmentProbe) {
     this.db = db;
     this.json = json.copy();
+    this.environmentProbe = environmentProbe;
   }
 
   public record Actor(String subject, String correlationId) {
@@ -36,6 +41,13 @@ public class InstallationConfigurationService {
 
   public record Active(String installationId, long revision, String checksum) {}
 
+  public record EnvironmentValidation(
+      UUID validationId,
+      String installationId,
+      long revision,
+      String overallStatus,
+      JsonNode results) {}
+
   public record ValidationResult(boolean valid, ArrayNode findings) {}
 
   public ValidationResult validate(JsonNode input) {
@@ -48,7 +60,9 @@ public class InstallationConfigurationService {
     requireText(input, "/organization/organizationId", findings);
     requireText(input, "/organization/tenantId", findings);
     requireHttps(input, "/iam/issuerUrl", findings);
+    requireHttps(input, "/iam/tokenEndpoint", findings);
     requireText(input, "/iam/realm", findings);
+    requireText(input, "/iam/workloadClients/mcpServer", findings);
     requireHttps(input, "/gateway/publicApiBaseUrl", findings);
 
     JsonNode refs = input.at("/secrets/references");
@@ -184,6 +198,77 @@ public class InstallationConfigurationService {
   }
 
   @Transactional
+  public EnvironmentValidation validateEnvironment(String installationId, long revision, Actor actor) {
+    Revision target = get(installationId, revision);
+    if (!"VALIDATED".equals(target.validationState()))
+      throw new IllegalStateException("INSTALLATION_REVISION_NOT_VALIDATED");
+
+    List<InstallationEnvironmentProbe.Finding> findings = environmentProbe.inspect(target.payload());
+    boolean pass = findings.stream().allMatch(f -> "PASS".equals(f.status()));
+    UUID validationId = UUID.randomUUID();
+    db.sql("""
+        insert into ouf_installation.installation_environment_validation
+        (validation_id,installation_id,revision,overall_status,results,checked_by)
+        values(:validation,:id,:rev,:status,cast(:results as jsonb),:actor)
+        """)
+        .param("validation", validationId)
+        .param("id", installationId)
+        .param("rev", revision)
+        .param("status", pass ? "PASS" : "FAIL")
+        .param("results", encode(json.valueToTree(findings)))
+        .param("actor", actor.subject())
+        .update();
+    return environmentValidation(validationId);
+  }
+
+  public Optional<EnvironmentValidation> latestEnvironmentValidation(String installationId, long revision) {
+    return db.sql("""
+        select validation_id,installation_id,revision,overall_status,results::text
+        from ouf_installation.installation_environment_validation
+        where installation_id=:id and revision=:rev
+        order by checked_at desc,validation_id desc
+        limit 1
+        """)
+        .param("id", installationId).param("rev", revision)
+        .query((rs,n) -> new EnvironmentValidation(
+            rs.getObject(1, UUID.class),
+            rs.getString(2),
+            rs.getLong(3),
+            rs.getString(4),
+            readJson(rs.getString(5))))
+        .optional();
+  }
+
+  private EnvironmentValidation environmentValidation(UUID id) {
+    return db.sql("""
+        select validation_id,installation_id,revision,overall_status,results::text
+        from ouf_installation.installation_environment_validation
+        where validation_id=:id
+        """)
+        .param("id", id)
+        .query((rs,n) -> new EnvironmentValidation(
+            rs.getObject(1, UUID.class),
+            rs.getString(2),
+            rs.getLong(3),
+            rs.getString(4),
+            readJson(rs.getString(5))))
+        .single();
+  }
+
+  private JsonNode readJson(String raw) {
+    try { return json.readTree(raw); }
+    catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new IllegalStateException("INSTALLATION_EVIDENCE_INVALID", e);
+    }
+  }
+
+  private boolean environmentPasses(String installationId, long revision) {
+    return latestEnvironmentValidation(installationId, revision)
+        .map(v -> "PASS".equals(v.overallStatus()))
+        .orElse(false);
+  }
+
+  @Transactional
   public Active activate(String installationId, long revision, Actor actor) {
     db.sql("select pg_advisory_xact_lock(hashtext(:id))").param("id", installationId).query(Object.class).single();
     Revision target = get(installationId, revision);
@@ -191,6 +276,8 @@ public class InstallationConfigurationService {
       throw new IllegalStateException("INSTALLATION_REVISION_NOT_VALIDATED");
     if (revoked(installationId, revision))
       throw new IllegalStateException("INSTALLATION_REVISION_REVOKED");
+    if (!environmentPasses(installationId, revision))
+      throw new IllegalStateException("INSTALLATION_ENVIRONMENT_VALIDATION_REQUIRED");
 
     Optional<Active> current = active(installationId);
     boolean rollback = current.isPresent() && revision < current.get().revision();
