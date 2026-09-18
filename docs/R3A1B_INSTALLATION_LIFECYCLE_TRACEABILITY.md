@@ -82,3 +82,12 @@ Not claimed by R3a.1b:
 - automatic Caddy/APISIX/Keycloak application;
 - unattended bootstrap;
 - multi-node HA control-plane acceptance.
+
+
+## CI history
+
+Initial PR #22 Source Onboarding CI run `35329328093` failed during test compilation before runtime execution. Root causes:
+- the test fixture used `Map.of(...)` with more key/value pairs than Java supports;
+- `ObjectNode` was referenced without an explicit import.
+
+The branch was corrected without changing lifecycle behavior, validation semantics or acceptance thresholds.
