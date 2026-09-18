@@ -60,6 +60,7 @@ public class InstallationConfigurationService {
     requireText(input, "/organization/organizationId", findings);
     requireText(input, "/organization/tenantId", findings);
     requireHttps(input, "/iam/issuerUrl", findings);
+    requireHttps(input, "/iam/tokenEndpoint", findings);
     requireText(input, "/iam/realm", findings);
     requireText(input, "/iam/workloadClients/mcpServer", findings);
     requireHttps(input, "/gateway/publicApiBaseUrl", findings);
