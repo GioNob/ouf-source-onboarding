@@ -60,3 +60,7 @@ Repository CI must demonstrate:
 - non-root container build remains green.
 
 Real IAM and deployed multi-service evidence remain EVIDENCE PENDING.
+
+## Production IAM acceptance history
+
+The real Keycloak bootstrap, first ACTIVE PolicyBundle, production IAM activation, restart acceptance, intermediate failures and rollback state are recorded in [docs/history/IAM_BOOTSTRAP_PRODUCTION_ACCEPTANCE_2026-09-18.md](history/IAM_BOOTSTRAP_PRODUCTION_ACCEPTANCE_2026-09-18.md).
