@@ -20,6 +20,14 @@ The operation is HUMAN-only and requires capability:
 
 `installation.configuration.export`
 
+Canonical descriptor:
+- owner: `installation`;
+- operation: `READ`;
+- required scope: `installation.configuration.export`;
+- allowed actor: `HUMAN`.
+
+The descriptor is versioned in `AuthorizationCapabilities`. Registration in the Authorization capability registry is an explicit bootstrap/deployment action; the runtime does not silently auto-register it.
+
 It is explicitly outside the MCP surface.
 
 ## Endpoint
@@ -95,6 +103,7 @@ After merge, deployment proceeds by:
 2. creating/validating the lab InstallationConfiguration revision;
 3. producing environment PASS;
 4. activating it;
-5. granting the installer HUMAN `installation.configuration.export`;
-6. exporting the ACTIVE projection through this endpoint;
-7. atomically materializing it as the installation projection consumed by Gateway/Caddy/MCP.
+5. registering the canonical `installation.configuration.export` descriptor with owner `installation`;
+6. publishing a policy/grant that grants the installer HUMAN `installation.configuration.export`;
+7. exporting the ACTIVE projection through this endpoint;
+8. atomically materializing it as the installation projection consumed by Gateway/Caddy/MCP.
