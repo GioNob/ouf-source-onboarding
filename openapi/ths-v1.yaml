@@ -6,6 +6,25 @@ info:
 x-ouf-mcp-exposed: false
 security: [{bearerAuth: []}]
 paths:
+  /api/trusted-human/v1/installations/{installationId}/projection:
+    get:
+      operationId: exportActiveInstallationProjection
+      description: Exports only the ACTIVE InstallationProjection. Requires HUMAN identity with installation.configuration.export; optional revision is an active-revision precondition.
+      parameters:
+        - {name: installationId, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: revision, in: query, required: false, schema: {type: integer, minimum: 1}}
+        - {name: X-Correlation-ID, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+      responses:
+        '200':
+          description: Active non-secret InstallationProjection
+          headers:
+            X-OUF-Installation-Revision: {schema: {type: string}}
+            X-OUF-Installation-Checksum: {schema: {type: string}}
+            Cache-Control: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {type: object}
+        default: {$ref: '#/components/responses/Problem'}
   /api/trusted-human/v1/managed-file-quarantine:
     get:
       operationId: searchManagedFileQuarantine
