@@ -26,5 +26,14 @@ class AuthorizationCapabilitiesTest {
 
     assertThat(AuthorizationCapabilities.bootstrapDescriptors())
         .containsExactly(admin, reader);
+
+    var export = AuthorizationCapabilities.INSTALLATION_CONFIGURATION_EXPORT;
+    assertThat(AuthorizationCapabilities.INSTALLATION_OWNER_REF).isEqualTo("installation");
+    assertThat(export.capabilityId()).isEqualTo("installation.configuration.export");
+    assertThat(export.operation()).isEqualTo("READ");
+    assertThat(export.requiredScope()).isEqualTo("installation.configuration.export");
+    assertThat(export.allowedActors()).isEqualTo(Set.of(PrincipalContext.ActorType.HUMAN));
+    assertThat(AuthorizationCapabilities.installationDescriptors())
+        .containsExactly(export);
   }
 }
