@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "1.0",
+  "installationId": "ouf-lab-netcup-01",
+  "organization": {
+    "organizationId": "ouf-lab",
+    "displayName": "OUF Laboratory",
+    "tenantId": "ouf-lab",
+    "timezone": "Europe/Rome"
+  },
+  "environment": "production",
+  "networking": {
+    "backendNetwork": "ouf-backend",
+    "edgeNetwork": "ouf-edge",
+    "gatewayControlNetwork": "ouf-gateway-control",
+    "internalDnsStrategy": "REVERSE_PROXY_ALIAS"
+  },
+  "iam": {
+    "issuerUrl": "https://auth.ouf-lab.it/realms/ouf",
+    "realm": "ouf",
+    "humanAdminClientId": "ouf-human-admin",
+    "gatewayAudience": "ouf-api-gateway",
+    "enterpriseCaRef": null
+  },
+  "gateway": {
+    "publicApiBaseUrl": "https://api.ouf-lab.it",
+    "publicMcpPath": "/mcp",
+    "tlsTermination": "CADDY",
+    "internalServiceRef": "service://ouf-apisix:9080"
+  },
+  "persistence": {
+    "postgresServiceRef": "service://ouf-postgres:5432",
+    "moduleDatabases": {
+      "onboarding": "ouf_onboarding",
+      "mcp": "ouf_mcp"
+    },
+    "objectStorage": {
+      "mode": "S3_COMPATIBLE",
+      "endpoint": "service://ouf-minio:9000",
+      "bucket": null
+    }
+  },
+  "secrets": {
+    "provider": "FILES",
+    "references": {
+      "mcpClientSecret": "/opt/ouf/secrets/mcp-client-secret",
+      "mcpFingerprintKey": "/opt/ouf/secrets/mcp-fingerprint-key",
+      "apisixAdminKey": "/opt/ouf/secrets/apisix-admin-key"
+    }
+  },
+  "observability": {
+    "metricsEnabled": true,
+    "logSink": "local-container-logs",
+    "alertDestination": null
+  },
+  "lifecycle": {
+    "revision": 1,
+    "status": "VALIDATED",
+    "checksum": "sha256:LAB-EXAMPLE-NOT-ACTIVATION-EVIDENCE"
+  }
+}

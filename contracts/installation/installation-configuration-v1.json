@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.example/contracts/installation/installation-configuration-v1.json",
+  "title": "OUF InstallationConfiguration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "installationId",
+    "organization",
+    "environment",
+    "networking",
+    "iam",
+    "gateway",
+    "persistence",
+    "secrets",
+    "observability",
+    "lifecycle"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "installationId": {"type": "string", "minLength": 1},
+    "organization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organizationId", "displayName", "tenantId", "timezone"],
+      "properties": {
+        "organizationId": {"type": "string", "minLength": 1},
+        "displayName": {"type": "string", "minLength": 1},
+        "tenantId": {"type": "string", "minLength": 1},
+        "timezone": {"type": "string", "minLength": 1}
+      }
+    },
+    "environment": {
+      "type": "string",
+      "enum": ["dev", "test", "staging", "production"]
+    },
+    "networking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backendNetwork", "edgeNetwork", "gatewayControlNetwork", "internalDnsStrategy"],
+      "properties": {
+        "backendNetwork": {"type": "string", "minLength": 1},
+        "edgeNetwork": {"type": "string", "minLength": 1},
+        "gatewayControlNetwork": {"type": "string", "minLength": 1},
+        "internalDnsStrategy": {"enum": ["REVERSE_PROXY_ALIAS", "CLUSTER_DNS", "ENTERPRISE_DNS"]}
+      }
+    },
+    "iam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuerUrl", "realm", "humanAdminClientId", "gatewayAudience"],
+      "properties": {
+        "issuerUrl": {"type": "string", "format": "uri", "pattern": "^https://"},
+        "realm": {"type": "string", "minLength": 1},
+        "humanAdminClientId": {"type": "string", "minLength": 1},
+        "gatewayAudience": {"type": "string", "minLength": 1},
+        "enterpriseCaRef": {"type": ["string", "null"]}
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publicApiBaseUrl", "publicMcpPath", "tlsTermination", "internalServiceRef"],
+      "properties": {
+        "publicApiBaseUrl": {"type": "string", "format": "uri", "pattern": "^https://"},
+        "publicMcpPath": {"const": "/mcp"},
+        "tlsTermination": {"enum": ["CADDY", "INGRESS", "EXTERNAL_LOAD_BALANCER"]},
+        "internalServiceRef": {"type": "string", "minLength": 1}
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["postgresServiceRef", "moduleDatabases", "objectStorage"],
+      "properties": {
+        "postgresServiceRef": {"type": "string", "minLength": 1},
+        "moduleDatabases": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "objectStorage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": {"enum": ["S3_COMPATIBLE", "FILESYSTEM", "NONE"]},
+            "endpoint": {"type": ["string", "null"]},
+            "bucket": {"type": ["string", "null"]}
+          }
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "references"],
+      "properties": {
+        "provider": {"enum": ["FILES", "KUBERNETES_SECRETS", "EXTERNAL_SECRET_STORE"]},
+        "references": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metricsEnabled", "logSink"],
+      "properties": {
+        "metricsEnabled": {"type": "boolean"},
+        "logSink": {"type": "string", "minLength": 1},
+        "alertDestination": {"type": ["string", "null"]}
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "status", "checksum"],
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "status": {"enum": ["DRAFT", "VALIDATED", "ACTIVE", "SUPERSEDED", "REVOKED"]},
+        "checksum": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
