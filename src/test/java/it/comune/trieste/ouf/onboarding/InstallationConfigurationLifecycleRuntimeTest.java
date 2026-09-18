@@ -72,6 +72,7 @@ class InstallationConfigurationLifecycleRuntimeTest {
         "provider", "FILES",
         "references", Map.of(
             "mcpClientSecret", "/run/secrets/mcp-client-secret",
+            "dbPassword", "/run/secrets/db-password",
             "mcpFingerprintKey", "/run/secrets/mcp-fingerprint-key")));
     root.put("observability", Map.of(
         "metricsEnabled", true,
@@ -99,6 +100,13 @@ class InstallationConfigurationLifecycleRuntimeTest {
           set checksum=:x where installation_id='install-a' and revision=1
           """).param("x", "0".repeat(64)).update())
         .hasStackTraceContaining("installation configuration revisions are immutable");
+  }
+
+  @Test
+  void credentialNamedReferencesAreAllowedButInlineValuesAreRejected() {
+    var revision = service.create(valid("install-ref", "https://api.example.test"), actor());
+    assertThat(revision.validationState()).isEqualTo("VALIDATED");
+    assertThat(revision.validationFindings()).isEmpty();
   }
 
   @Test
