@@ -20,6 +20,15 @@ Baseline: OUF Reality Baseline Package v1.7, Authorization / Access Control PET 
 5. Every persisted decision references the exact bundle id/version used for evaluation.
 6. No consumer is required to make a synchronous network call to Source Onboarding for every authorization decision.
 
+## Canonical platform Authorization capabilities
+
+`AuthorizationCapabilities` is the executable catalogue for platform-owned capabilities that must be stable during IAM/bootstrap integration. The capability registration owner is `authorization`.
+
+- `authorization.policy.admin`: operation `EXECUTE`, required scope `authorization.policy.admin`, allowed actor `HUMAN`.
+- `authorization.bundle.read`: operation `READ`, required scope `authorization.bundle.read`, allowed actor `SERVICE`.
+
+The first real policy bundle must preserve an applicable HUMAN grant for `authorization.policy.admin` before the bootstrap latch is closed. Workloads that retrieve the active bundle through `GET /api/internal/v1/authorization/policy-bundle/active` require an applicable SERVICE grant for `authorization.bundle.read`. Capability descriptors must be registered through the trusted-human administration API before a bundle containing them can be published; direct database insertion is not part of the supported bootstrap path.
+
 ## A/B/C external integration gate
 
 Still EVIDENCE PENDING until the external IAM path is selected/deployed:
@@ -47,6 +56,7 @@ Repository CI must demonstrate:
 - publish/activate/evaluate/audit path passes integration tests;
 - published bundle mutation is rejected;
 - same-version different-content publication fails closed;
+- canonical platform Authorization capability descriptors remain pinned by tests;
 - non-root container build remains green.
 
 Real IAM and deployed multi-service evidence remain EVIDENCE PENDING.
