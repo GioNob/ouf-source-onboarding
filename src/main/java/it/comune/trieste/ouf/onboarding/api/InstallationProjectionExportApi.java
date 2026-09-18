@@ -29,6 +29,7 @@ public class InstallationProjectionExportApi {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST,
           "INSTALLATION_EXPORT_CORRELATION_REQUIRED");
+    String safeInstallationId = safeFilename(installationId);
     try {
       var authorization =
           ServletAuthorization.require(request, "installation.configuration.export", true);
@@ -36,7 +37,7 @@ public class InstallationProjectionExportApi {
           authorization.principal().subjectId(),
           correlationId);
       var projection = exports.exportActive(
-          installationId,
+          safeInstallationId,
           revision == null ? OptionalLong.empty() : OptionalLong.of(revision),
           actor);
       return ResponseEntity.ok()
@@ -44,7 +45,7 @@ public class InstallationProjectionExportApi {
           .header(
               "Content-Disposition",
               "attachment; filename="installation-projection-"
-                  + safeFilename(installationId)
+                  + safeInstallationId
                   + "-r"
                   + projection.revision()
                   + ".json"")
