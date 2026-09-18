@@ -1,6 +1,8 @@
 package it.comune.trieste.ouf.onboarding.api;
 
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.PolicyBundle;
+import it.comune.trieste.ouf.authorization.PrincipalContext;
+import it.comune.trieste.ouf.authorization.ServletAuthorization;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicyRegistry;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,17 +16,16 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/internal/v1/authorization/policy-bundle")
 public class AuthorizationBundleApi {
   private final AuthorizationPolicyRegistry registry;
-  private final TrustedActorResolver actors;
 
-  public AuthorizationBundleApi(AuthorizationPolicyRegistry registry, TrustedActorResolver actors) {
+  public AuthorizationBundleApi(AuthorizationPolicyRegistry registry) {
     this.registry = registry;
-    this.actors = actors;
   }
 
   @GetMapping("/active")
   ActivePolicyBundleView active(HttpServletRequest request) {
-    var actor = actors.actor(request);
-    if (!"SERVICE".equals(actor.type()) || !actor.capabilities().contains("authorization.bundle.read")) {
+    var principal = ServletAuthorization.principal(request).context();
+    if (principal.actorType() != PrincipalContext.ActorType.SERVICE
+        || !principal.scopes().contains("authorization.bundle.read")) {
       throw new DomainFailure(
           HttpStatus.FORBIDDEN,
           "AUTH_BUNDLE_READ_REQUIRED",
