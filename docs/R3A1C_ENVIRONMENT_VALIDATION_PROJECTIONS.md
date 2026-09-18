@@ -22,6 +22,7 @@ The default validator performs from the deployed Source Onboarding network conte
 - DNS resolution for IAM and API hosts;
 - HTTPS/OIDC discovery;
 - exact OIDC issuer match;
+- exact configured token endpoint match against OIDC discovery;
 - HTTPS reachability of the public API hostname (2xx–4xx accepted because an undefined root route may legitimately be 404);
 - TCP reachability of PostgreSQL `service://host:port`;
 - TCP reachability of S3-compatible object storage when configured.
@@ -75,8 +76,9 @@ The MCP workload client id is installation configuration at `iam.workloadClients
 
 ## Product protocol paths vs environment coordinates
 
+The OIDC token endpoint is installation data and must match the value published by OIDC discovery.
+
 The following paths are OUF protocol/API contracts and therefore may be fixed by the product:
-- `/protocol/openid-connect/token` relative to the configured issuer;
 - `/internal/capabilities/v1/execute`;
 - `/internal/capabilities/v1/authorization/policy-bundle/active`;
 - `/internal/capabilities/v1/recovery`.
