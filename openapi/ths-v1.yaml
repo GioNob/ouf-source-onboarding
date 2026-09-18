@@ -6,6 +6,66 @@ info:
 x-ouf-mcp-exposed: false
 security: [{bearerAuth: []}]
 paths:
+  /api/trusted-human/v1/installations/{installationId}/active:
+    get:
+      operationId: readActiveInstallationConfiguration
+      description: HUMAN-only read of the ACTIVE installation configuration pointer. Requires installation.configuration.read.
+      parameters:
+        - {name: installationId, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/installations/{installationId}/revisions:
+    post:
+      operationId: createInstallationConfigurationRevision
+      description: Creates a new immutable installation configuration revision. Requires HUMAN installation.configuration.write, stateless trusted-write proof and X-Correlation-ID.
+      parameters:
+        - {name: installationId, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: X-Correlation-ID, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
+      responses: {'201': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/installations/{installationId}/revisions/{revision}:
+    get:
+      operationId: readInstallationConfigurationRevision
+      description: HUMAN-only read of one immutable installation configuration revision. Requires installation.configuration.read.
+      parameters:
+        - {name: installationId, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: revision, in: path, required: true, schema: {type: integer, minimum: 1}}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/installations/{installationId}/revisions/{revision}:validate-environment:
+    post:
+      operationId: validateInstallationEnvironment
+      description: Runs real environment probes and persists append-only findings. Requires HUMAN installation.configuration.write, trusted-write proof and X-Correlation-ID.
+      parameters:
+        - {name: installationId, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: revision, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - {name: X-Correlation-ID, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/installations/{installationId}/revisions/{revision}:activate:
+    post:
+      operationId: activateInstallationConfigurationRevision
+      description: Activates a validated revision whose latest environment validation is PASS. Requires HUMAN installation.configuration.activate, trusted-write proof and X-Correlation-ID.
+      parameters:
+        - {name: installationId, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: revision, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - {name: X-Correlation-ID, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/installations/{installationId}/revisions/{revision}:rollback:
+    post:
+      operationId: rollbackInstallationConfigurationRevision
+      description: Reactivates an older validated revision and records ROLLBACK_ACTIVATED. Requires HUMAN installation.configuration.activate, trusted-write proof and X-Correlation-ID.
+      parameters:
+        - {name: installationId, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: revision, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - {name: X-Correlation-ID, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/installations/{installationId}/revisions/{revision}:revoke:
+    post:
+      operationId: revokeInstallationConfigurationRevision
+      description: Revokes a revision and removes the ACTIVE pointer if that revision was active. Requires HUMAN installation.configuration.activate, trusted-write proof and X-Correlation-ID.
+      parameters:
+        - {name: installationId, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: revision, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - {name: X-Correlation-ID, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+      responses: {'204': {description: Revision revoked}, default: {$ref: '#/components/responses/Problem'}}
   /api/trusted-human/v1/installations/{installationId}/projection:
     get:
       operationId: exportActiveInstallationProjection
