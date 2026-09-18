@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.onboarding;
 import static org.assertj.core.api.Assertions.*;
 
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import it.comune.trieste.ouf.onboarding.installation.InstallationConfigurationService;
 import java.util.*;
 import org.junit.jupiter.api.*;
@@ -39,47 +40,47 @@ class InstallationConfigurationLifecycleRuntimeTest {
   }
 
   private JsonNode valid(String id, String apiHost) {
-    return json.valueToTree(Map.of(
-        "schemaVersion", "1.0",
-        "installationId", id,
-        "organization", Map.of(
-            "organizationId", "org-a",
-            "displayName", "Org A",
-            "tenantId", "tenant-a",
-            "timezone", "Europe/Rome"),
-        "environment", "production",
-        "networking", Map.of(
-            "backendNetwork", "backend-a",
-            "edgeNetwork", "edge-a",
-            "gatewayControlNetwork", "control-a",
-            "internalDnsStrategy", "REVERSE_PROXY_ALIAS"),
-        "iam", Map.of(
-            "issuerUrl", "https://iam.example.test/realms/ouf",
-            "realm", "ouf",
-            "humanAdminClientId", "human-admin",
-            "gatewayAudience", "gateway"),
-        "gateway", Map.of(
-            "publicApiBaseUrl", apiHost,
-            "publicMcpPath", "/mcp",
-            "tlsTermination", "CADDY",
-            "internalServiceRef", "service://gateway:9080"),
-        "persistence", Map.of(
-            "postgresServiceRef", "service://postgres:5432",
-            "moduleDatabases", Map.of("mcp", "mcpdb"),
-            "objectStorage", Map.of("mode", "NONE")),
-        "secrets", Map.of(
-            "provider", "FILES",
-            "references", Map.of(
-                "mcpClientSecret", "/run/secrets/mcp-client-secret",
-                "mcpFingerprintKey", "/run/secrets/mcp-fingerprint-key")),
-        "observability", Map.of(
-            "metricsEnabled", true,
-            "logSink", "local"),
-        "lifecycle", Map.of(
-            "revision", 1,
-            "status", "VALIDATED",
-            "checksum", "placeholder")
-    ));
+    Map<String,Object> root = new LinkedHashMap<>();
+    root.put("schemaVersion", "1.0");
+    root.put("installationId", id);
+    root.put("organization", Map.of(
+        "organizationId", "org-a",
+        "displayName", "Org A",
+        "tenantId", "tenant-a",
+        "timezone", "Europe/Rome"));
+    root.put("environment", "production");
+    root.put("networking", Map.of(
+        "backendNetwork", "backend-a",
+        "edgeNetwork", "edge-a",
+        "gatewayControlNetwork", "control-a",
+        "internalDnsStrategy", "REVERSE_PROXY_ALIAS"));
+    root.put("iam", Map.of(
+        "issuerUrl", "https://iam.example.test/realms/ouf",
+        "realm", "ouf",
+        "humanAdminClientId", "human-admin",
+        "gatewayAudience", "gateway"));
+    root.put("gateway", Map.of(
+        "publicApiBaseUrl", apiHost,
+        "publicMcpPath", "/mcp",
+        "tlsTermination", "CADDY",
+        "internalServiceRef", "service://gateway:9080"));
+    root.put("persistence", Map.of(
+        "postgresServiceRef", "service://postgres:5432",
+        "moduleDatabases", Map.of("mcp", "mcpdb"),
+        "objectStorage", Map.of("mode", "NONE")));
+    root.put("secrets", Map.of(
+        "provider", "FILES",
+        "references", Map.of(
+            "mcpClientSecret", "/run/secrets/mcp-client-secret",
+            "mcpFingerprintKey", "/run/secrets/mcp-fingerprint-key")));
+    root.put("observability", Map.of(
+        "metricsEnabled", true,
+        "logSink", "local"));
+    root.put("lifecycle", Map.of(
+        "revision", 1,
+        "status", "VALIDATED",
+        "checksum", "placeholder"));
+    return json.valueToTree(root);
   }
 
   @Test
