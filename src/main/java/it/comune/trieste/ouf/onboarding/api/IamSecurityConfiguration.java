@@ -108,7 +108,10 @@ public class IamSecurityConfiguration {
     http.csrf(csrf -> csrf.disable());
     http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
     http.authorizeHttpRequests(auth -> auth
-        .requestMatchers("/api/trusted-human/v1/authorization/**", "/api/internal/v1/authorization/policy-bundle/**").authenticated()
+        .requestMatchers(
+            "/api/trusted-human/v1/authorization/**",
+            "/api/trusted-human/v1/installations/**",
+            "/api/internal/v1/authorization/policy-bundle/**").authenticated()
         .anyRequest().permitAll());
     http.oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(trustedJwtAuthenticationConverter)));
     http.addFilterAfter(new TrustedBearerPrincipalBridgeFilter(), BearerTokenAuthenticationFilter.class);

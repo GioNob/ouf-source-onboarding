@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.mockito.Mockito.when;
@@ -78,6 +79,13 @@ class IamAuthorizationBootstrapIntegrationTest {
     var descriptor = new CapabilityDescriptor(
         id, "EXECUTE", id, Set.of(PrincipalContext.ActorType.HUMAN));
     return json.writeValueAsBytes(Map.of("ownerRef", "authorization", "descriptor", descriptor));
+  }
+
+
+  @Test
+  void installationTrustedHumanSurfaceReturns401WithoutBearerToken() throws Exception {
+    http.perform(get("/api/trusted-human/v1/installations/install-a/active"))
+        .andExpect(status().isUnauthorized());
   }
 
   @Test

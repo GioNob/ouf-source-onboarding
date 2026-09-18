@@ -46,7 +46,8 @@ public class InstallationConfigurationService {
       String installationId,
       long revision,
       String overallStatus,
-      JsonNode results) {}
+      JsonNode results,
+      String correlationId) {}
 
   public record ValidationResult(boolean valid, ArrayNode findings) {}
 
@@ -165,12 +166,12 @@ public class InstallationConfigurationService {
     String hash = checksum(payload);
     db.sql("""
         insert into ouf_installation.installation_configuration_revision
-        (installation_id,revision,payload,checksum,validation_state,validation_findings,created_by)
-        values(:id,:rev,cast(:payload as jsonb),:hash,:state,cast(:findings as jsonb),:actor)
+        (installation_id,revision,payload,checksum,validation_state,validation_findings,created_by,created_correlation_id)
+        values(:id,:rev,cast(:payload as jsonb),:hash,:state,cast(:findings as jsonb),:actor,:correlation)
         """)
         .param("id", id).param("rev", revision).param("payload", encode(payload))
         .param("hash", hash).param("state", state).param("findings", encode(validation.findings()))
-        .param("actor", actor.subject()).update();
+        .param("actor", actor.subject()).param("correlation", actor.correlationId()).update();
     if (validation.valid()) event(id, revision, "VALIDATED", actor);
     return get(id, revision);
   }
@@ -208,8 +209,8 @@ public class InstallationConfigurationService {
     UUID validationId = UUID.randomUUID();
     db.sql("""
         insert into ouf_installation.installation_environment_validation
-        (validation_id,installation_id,revision,overall_status,results,checked_by)
-        values(:validation,:id,:rev,:status,cast(:results as jsonb),:actor)
+        (validation_id,installation_id,revision,overall_status,results,checked_by,correlation_id)
+        values(:validation,:id,:rev,:status,cast(:results as jsonb),:actor,:correlation)
         """)
         .param("validation", validationId)
         .param("id", installationId)
@@ -217,13 +218,14 @@ public class InstallationConfigurationService {
         .param("status", pass ? "PASS" : "FAIL")
         .param("results", encode(json.valueToTree(findings)))
         .param("actor", actor.subject())
+        .param("correlation", actor.correlationId())
         .update();
     return environmentValidation(validationId);
   }
 
   public Optional<EnvironmentValidation> latestEnvironmentValidation(String installationId, long revision) {
     return db.sql("""
-        select validation_id,installation_id,revision,overall_status,results::text
+        select validation_id,installation_id,revision,overall_status,results::text,correlation_id
         from ouf_installation.installation_environment_validation
         where installation_id=:id and revision=:rev
         order by checked_at desc,validation_id desc
@@ -235,13 +237,14 @@ public class InstallationConfigurationService {
             rs.getString(2),
             rs.getLong(3),
             rs.getString(4),
-            readJson(rs.getString(5))))
+            readJson(rs.getString(5)),
+            rs.getString(6)))
         .optional();
   }
 
   private EnvironmentValidation environmentValidation(UUID id) {
     return db.sql("""
-        select validation_id,installation_id,revision,overall_status,results::text
+        select validation_id,installation_id,revision,overall_status,results::text,correlation_id
         from ouf_installation.installation_environment_validation
         where validation_id=:id
         """)
@@ -251,7 +254,8 @@ public class InstallationConfigurationService {
             rs.getString(2),
             rs.getLong(3),
             rs.getString(4),
-            readJson(rs.getString(5))))
+            readJson(rs.getString(5)),
+            rs.getString(6)))
         .single();
   }
 
