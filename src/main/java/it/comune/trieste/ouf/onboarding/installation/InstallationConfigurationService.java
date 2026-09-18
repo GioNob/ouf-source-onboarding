@@ -78,6 +78,7 @@ public class InstallationConfigurationService {
 
   private void scanForbiddenSecretValues(JsonNode node, String path, ArrayNode findings) {
     if (node == null) return;
+    if ("/secrets/references".equals(path)) return;
     if (node.isObject()) {
       node.fields().forEachRemaining(e -> {
         String p = path + "/" + e.getKey();
