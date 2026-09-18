@@ -46,7 +46,8 @@ public class InstallationConfigurationService {
       String installationId,
       long revision,
       String overallStatus,
-      JsonNode results) {}
+      JsonNode results,
+      String correlationId) {}
 
   public record ValidationResult(boolean valid, ArrayNode findings) {}
 
@@ -224,7 +225,7 @@ public class InstallationConfigurationService {
 
   public Optional<EnvironmentValidation> latestEnvironmentValidation(String installationId, long revision) {
     return db.sql("""
-        select validation_id,installation_id,revision,overall_status,results::text
+        select validation_id,installation_id,revision,overall_status,results::text,correlation_id
         from ouf_installation.installation_environment_validation
         where installation_id=:id and revision=:rev
         order by checked_at desc,validation_id desc
@@ -236,13 +237,14 @@ public class InstallationConfigurationService {
             rs.getString(2),
             rs.getLong(3),
             rs.getString(4),
-            readJson(rs.getString(5))))
+            readJson(rs.getString(5)),
+            rs.getString(6)))
         .optional();
   }
 
   private EnvironmentValidation environmentValidation(UUID id) {
     return db.sql("""
-        select validation_id,installation_id,revision,overall_status,results::text
+        select validation_id,installation_id,revision,overall_status,results::text,correlation_id
         from ouf_installation.installation_environment_validation
         where validation_id=:id
         """)
@@ -252,7 +254,8 @@ public class InstallationConfigurationService {
             rs.getString(2),
             rs.getLong(3),
             rs.getString(4),
-            readJson(rs.getString(5))))
+            readJson(rs.getString(5)),
+            rs.getString(6)))
         .single();
   }
 
