@@ -208,8 +208,8 @@ public class InstallationConfigurationService {
     UUID validationId = UUID.randomUUID();
     db.sql("""
         insert into ouf_installation.installation_environment_validation
-        (validation_id,installation_id,revision,overall_status,results,checked_by)
-        values(:validation,:id,:rev,:status,cast(:results as jsonb),:actor)
+        (validation_id,installation_id,revision,overall_status,results,checked_by,correlation_id)
+        values(:validation,:id,:rev,:status,cast(:results as jsonb),:actor,:correlation)
         """)
         .param("validation", validationId)
         .param("id", installationId)
@@ -217,6 +217,7 @@ public class InstallationConfigurationService {
         .param("status", pass ? "PASS" : "FAIL")
         .param("results", encode(json.valueToTree(findings)))
         .param("actor", actor.subject())
+        .param("correlation", actor.correlationId())
         .update();
     return environmentValidation(validationId);
   }
