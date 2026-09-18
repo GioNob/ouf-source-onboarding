@@ -166,12 +166,12 @@ public class InstallationConfigurationService {
     String hash = checksum(payload);
     db.sql("""
         insert into ouf_installation.installation_configuration_revision
-        (installation_id,revision,payload,checksum,validation_state,validation_findings,created_by)
-        values(:id,:rev,cast(:payload as jsonb),:hash,:state,cast(:findings as jsonb),:actor)
+        (installation_id,revision,payload,checksum,validation_state,validation_findings,created_by,created_correlation_id)
+        values(:id,:rev,cast(:payload as jsonb),:hash,:state,cast(:findings as jsonb),:actor,:correlation)
         """)
         .param("id", id).param("rev", revision).param("payload", encode(payload))
         .param("hash", hash).param("state", state).param("findings", encode(validation.findings()))
-        .param("actor", actor.subject()).update();
+        .param("actor", actor.subject()).param("correlation", actor.correlationId()).update();
     if (validation.valid()) event(id, revision, "VALIDATED", actor);
     return get(id, revision);
   }
