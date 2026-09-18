@@ -66,6 +66,15 @@ paths:
         - {name: revision, in: path, required: true, schema: {type: integer, minimum: 1}}
         - {name: X-Correlation-ID, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
       responses: {'204': {description: Revision revoked}, default: {$ref: '#/components/responses/Problem'}}
+  /api/trusted-human/v1/installations/{installationId}/revisions/{revision}/projection:
+    get:
+      operationId: exportCandidateInstallationProjection
+      description: HUMAN-only export of a deterministic candidate projection for one VALIDATED revision. Requires installation.configuration.export and X-Correlation-ID.
+      parameters:
+        - {name: installationId, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: revision, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - {name: X-Correlation-ID, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
   /api/trusted-human/v1/installations/{installationId}/projection:
     get:
       operationId: exportActiveInstallationProjection
