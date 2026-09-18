@@ -24,10 +24,11 @@ public class DefaultInstallationEnvironmentProbe implements InstallationEnvironm
   public List<Finding> inspect(JsonNode config) {
     List<Finding> out = new ArrayList<>();
     String issuer = config.at("/iam/issuerUrl").asText("");
+    String tokenEndpoint = config.at("/iam/tokenEndpoint").asText("");
     String api = config.at("/gateway/publicApiBaseUrl").asText("");
     checkDns("iam.dns", issuer, out);
     checkDns("gateway.dns", api, out);
-    checkIssuer(issuer, out);
+    checkIssuer(issuer, tokenEndpoint, out);
     checkApi(api, out);
     checkServiceRef("postgres.tcp", config.at("/persistence/postgresServiceRef").asText(""), out);
 
@@ -51,7 +52,7 @@ public class DefaultInstallationEnvironmentProbe implements InstallationEnvironm
     }
   }
 
-  private void checkIssuer(String issuer, List<Finding> out) {
+  private void checkIssuer(String issuer, String configuredTokenEndpoint, List<Finding> out) {
     try {
       URI discovery = URI.create(stripSlash(issuer) + "/.well-known/openid-configuration");
       HttpResponse<String> response = send(discovery);
@@ -61,12 +62,18 @@ public class DefaultInstallationEnvironmentProbe implements InstallationEnvironm
       }
       JsonNode body = json.readTree(response.body());
       String returnedIssuer = body.path("issuer").asText("");
+      String returnedTokenEndpoint = body.path("token_endpoint").asText("");
+      out.add(new Finding("iam.oidc-discovery", "PASS", "HTTP 200"));
       if (!issuer.equals(returnedIssuer)) {
         out.add(new Finding("iam.issuer-match", "FAIL", "issuer mismatch"));
-        return;
+      } else {
+        out.add(new Finding("iam.issuer-match", "PASS", "issuer exact"));
       }
-      out.add(new Finding("iam.oidc-discovery", "PASS", "HTTP 200"));
-      out.add(new Finding("iam.issuer-match", "PASS", "issuer exact"));
+      if (!configuredTokenEndpoint.equals(returnedTokenEndpoint)) {
+        out.add(new Finding("iam.token-endpoint-match", "FAIL", "token endpoint mismatch"));
+      } else {
+        out.add(new Finding("iam.token-endpoint-match", "PASS", "token endpoint exact"));
+      }
     } catch (Exception e) {
       out.add(new Finding("iam.oidc-discovery", "FAIL", safe(e)));
     }
