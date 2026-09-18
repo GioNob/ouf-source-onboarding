@@ -29,6 +29,27 @@ public final class AuthorizationCapabilities {
           "installation.configuration.export",
           Set.of(PrincipalContext.ActorType.HUMAN));
 
+  public static final CapabilityDescriptor INSTALLATION_CONFIGURATION_READ =
+      new CapabilityDescriptor(
+          "installation.configuration.read",
+          "READ",
+          "installation.configuration.read",
+          Set.of(PrincipalContext.ActorType.HUMAN));
+
+  public static final CapabilityDescriptor INSTALLATION_CONFIGURATION_WRITE =
+      new CapabilityDescriptor(
+          "installation.configuration.write",
+          "EXECUTE",
+          "installation.configuration.write",
+          Set.of(PrincipalContext.ActorType.HUMAN));
+
+  public static final CapabilityDescriptor INSTALLATION_CONFIGURATION_ACTIVATE =
+      new CapabilityDescriptor(
+          "installation.configuration.activate",
+          "EXECUTE",
+          "installation.configuration.activate",
+          Set.of(PrincipalContext.ActorType.HUMAN));
+
   private AuthorizationCapabilities() {}
 
   public static List<CapabilityDescriptor> bootstrapDescriptors() {
@@ -36,6 +57,10 @@ public final class AuthorizationCapabilities {
   }
 
   public static List<CapabilityDescriptor> installationDescriptors() {
-    return List.of(INSTALLATION_CONFIGURATION_EXPORT);
+    return List.of(
+        INSTALLATION_CONFIGURATION_READ,
+        INSTALLATION_CONFIGURATION_WRITE,
+        INSTALLATION_CONFIGURATION_ACTIVATE,
+        INSTALLATION_CONFIGURATION_EXPORT);
   }
 }
