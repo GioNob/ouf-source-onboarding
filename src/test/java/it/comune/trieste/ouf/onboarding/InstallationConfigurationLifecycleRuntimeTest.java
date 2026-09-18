@@ -39,7 +39,8 @@ class InstallationConfigurationLifecycleRuntimeTest {
     when(environmentProbe.inspect(any())).thenReturn(List.of(
         new InstallationEnvironmentProbe.Finding("fixture", "PASS", "ok")));
     db.sql("""
-      truncate ouf_installation.installation_configuration_lifecycle_event,
+      truncate ouf_installation.installation_environment_validation,
+               ouf_installation.installation_configuration_lifecycle_event,
                ouf_installation.installation_configuration_active,
                ouf_installation.installation_configuration_revision
       cascade
@@ -132,6 +133,32 @@ class InstallationConfigurationLifecycleRuntimeTest {
 
     assertThatThrownBy(() -> service.activate("install-b", revision.revision(), actor()))
         .hasMessageContaining("INSTALLATION_REVISION_NOT_VALIDATED");
+  }
+
+
+  @Test
+  void latestEnvironmentFailureBlocksActivationAndEvidenceIsImmutable() {
+    var revision = service.create(valid("install-env", "https://api.example.test"), actor());
+
+    assertThatThrownBy(() -> service.activate("install-env", revision.revision(), actor()))
+        .hasMessageContaining("INSTALLATION_ENVIRONMENT_VALIDATION_REQUIRED");
+
+    var pass = service.validateEnvironment("install-env", revision.revision(), actor());
+    assertThat(pass.overallStatus()).isEqualTo("PASS");
+    assertThat(service.activate("install-env", revision.revision(), actor()).revision()).isEqualTo(1);
+
+    when(environmentProbe.inspect(any())).thenReturn(List.of(
+        new InstallationEnvironmentProbe.Finding("gateway.https", "FAIL", "unreachable")));
+    var fail = service.validateEnvironment("install-env", revision.revision(), actor());
+    assertThat(fail.overallStatus()).isEqualTo("FAIL");
+
+    db.sql("delete from ouf_installation.installation_configuration_active where installation_id='install-env'").update();
+    assertThatThrownBy(() -> service.activate("install-env", revision.revision(), actor()))
+        .hasMessageContaining("INSTALLATION_ENVIRONMENT_VALIDATION_REQUIRED");
+
+    assertThatThrownBy(() ->
+        db.sql("delete from ouf_installation.installation_environment_validation").update())
+        .hasStackTraceContaining("installation environment validation evidence is append-only");
   }
 
   @Test
