@@ -19,6 +19,52 @@ public class InstallationProjectionExportApi {
     this.exports = exports;
   }
 
+
+  @GetMapping("/{installationId}/revisions/{revision}/projection")
+  ResponseEntity<?> exportCandidate(
+      @PathVariable String installationId,
+      @PathVariable long revision,
+      @RequestHeader(value = "X-Correlation-ID", required = false) String correlationId,
+      HttpServletRequest request) {
+    if (correlationId == null || correlationId.isBlank())
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST,
+          "INSTALLATION_EXPORT_CORRELATION_REQUIRED");
+    String safeInstallationId = safeFilename(installationId);
+    try {
+      var authorization =
+          ServletAuthorization.require(request, "installation.configuration.export", true);
+      var actor = new InstallationProjectionExportService.Actor(
+          authorization.principal().subjectId(),
+          correlationId);
+      var projection = exports.exportCandidate(safeInstallationId, revision, actor);
+      return ResponseEntity.ok()
+          .cacheControl(CacheControl.noStore())
+          .header(
+              "Content-Disposition",
+              "attachment; filename=\"installation-candidate-projection-"
+                  + safeInstallationId
+                  + "-r"
+                  + projection.revision()
+                  + ".json\"")
+          .header("X-OUF-Installation-Revision", Long.toString(projection.revision()))
+          .header("X-OUF-Installation-Checksum", projection.checksum())
+          .header("X-OUF-Projection-Purpose", "CANDIDATE")
+          .body(projection);
+    } catch (SecurityException e) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, e.getMessage());
+    } catch (java.util.NoSuchElementException e) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+    } catch (IllegalStateException e) {
+      HttpStatus status = switch (e.getMessage()) {
+        case "INSTALLATION_REVISION_NOT_VALIDATED" -> HttpStatus.CONFLICT;
+        case "INSTALLATION_CANDIDATE_CHECKSUM_MISMATCH" -> HttpStatus.INTERNAL_SERVER_ERROR;
+        default -> HttpStatus.BAD_REQUEST;
+      };
+      throw new ResponseStatusException(status, e.getMessage());
+    }
+  }
+
   @GetMapping("/{installationId}/projection")
   ResponseEntity<?> exportActive(
       @PathVariable String installationId,

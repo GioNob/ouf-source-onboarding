@@ -66,6 +66,29 @@ class InstallationProjectionExportApiTest {
         argThat(a -> a.subject().equals("principal-1") && a.correlationId().equals("corr-1")));
   }
 
+
+  @Test
+  void humanCanExportValidatedCandidateBeforeActivation() {
+    var exports = mock(InstallationProjectionExportService.class);
+    when(exports.exportCandidate(
+        eq("install-a"),
+        eq(7L),
+        any(InstallationProjectionExportService.Actor.class)))
+        .thenReturn(projection());
+
+    var response = new InstallationProjectionExportApi(exports).exportCandidate(
+        "install-a",
+        7L,
+        "corr-candidate",
+        request("HUMAN", Set.of("installation.configuration.export")));
+
+    assertThat(response.getStatusCode().value()).isEqualTo(200);
+    assertThat(response.getHeaders().getFirst("X-OUF-Projection-Purpose"))
+        .isEqualTo("CANDIDATE");
+    assertThat(response.getHeaders().getFirst("X-OUF-Installation-Revision")).isEqualTo("7");
+    assertThat(response.getHeaders().getFirst("X-OUF-Installation-Checksum")).isEqualTo("a".repeat(64));
+  }
+
   @Test
   void serviceIdentityIsRejectedEvenWithExportCapability() {
     var exports = mock(InstallationProjectionExportService.class);

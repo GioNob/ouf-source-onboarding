@@ -46,13 +46,42 @@ public class InstallationProjectionExportService {
 
     db.sql("""
         insert into ouf_installation.installation_projection_export_event
-        (export_id,installation_id,revision,configuration_checksum,actor_subject,correlation_id)
-        values(:event,:id,:rev,:checksum,:actor,:correlation)
+        (export_id,installation_id,revision,configuration_checksum,actor_subject,correlation_id,export_purpose)
+        values(:event,:id,:rev,:checksum,:actor,:correlation,'ACTIVE')
         """)
         .param("event", UUID.randomUUID())
         .param("id", installationId)
         .param("rev", active.revision())
         .param("checksum", active.checksum())
+        .param("actor", actor.subject())
+        .param("correlation", actor.correlationId())
+        .update();
+
+    return projection;
+  }
+
+  @Transactional
+  public InstallationRuntimeProjectionService.Projection exportCandidate(
+      String installationId,
+      long revision,
+      Actor actor) {
+    var source = configurations.get(installationId, revision);
+    if (!"VALIDATED".equals(source.validationState()))
+      throw new IllegalStateException("INSTALLATION_REVISION_NOT_VALIDATED");
+
+    var projection = projections.project(installationId, revision);
+    if (!projection.checksum().equals(source.checksum()))
+      throw new IllegalStateException("INSTALLATION_CANDIDATE_CHECKSUM_MISMATCH");
+
+    db.sql("""
+        insert into ouf_installation.installation_projection_export_event
+        (export_id,installation_id,revision,configuration_checksum,actor_subject,correlation_id,export_purpose)
+        values(:event,:id,:rev,:checksum,:actor,:correlation,'CANDIDATE')
+        """)
+        .param("event", UUID.randomUUID())
+        .param("id", installationId)
+        .param("rev", revision)
+        .param("checksum", source.checksum())
         .param("actor", actor.subject())
         .param("correlation", actor.correlationId())
         .update();
