@@ -103,8 +103,8 @@ class InstallationConfigurationLifecycleRuntimeTest {
   @Test
   void rejectedConfigurationIsPersistedButCannotActivate() {
     ObjectNode bad = (ObjectNode) valid("install-b", "https://api.example.test");
-    ((ObjectNode) bad.withObject("/iam")).put("issuerUrl", "http://insecure.example.test");
-    ((ObjectNode) bad.withObject("/secrets")).put("clientSecret", "forbidden");
+    ((ObjectNode) bad.path("iam")).put("issuerUrl", "http://insecure.example.test");
+    ((ObjectNode) bad.path("secrets")).put("clientSecret", "forbidden");
 
     var revision = service.create(bad, actor());
 
