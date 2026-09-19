@@ -19,3 +19,25 @@ An unresolved `BREAKING` or `UNKNOWN` surveillance issue blocks activation. Reso
 ## Protected log export
 
 Exports are HUMAN_USER-only, purpose-bound and expire. A failed export may be retried by the worker while attempts remain. Never expose `artifact`, storage paths, credentials or Authorization context through status APIs. Investigate every unexpected download using `protected_log_access_audit`.
+
+## Installazione IAM, ChatGPT e policy MCP — checkpoint 19 settembre 2026
+
+Seguire la [guida operativa Keycloak / ChatGPT / MCP](https://github.com/GioNob/ouf-mcp-server/blob/fix/constrained-policy-cache-roundtrip/docs/INSTALLAZIONE_KEYCLOAK_CHATGPT.md) per client,
+scope, audience, attributi utente, Device Flow amministrativo dal server,
+registrazione capability, draft, ETag, pubblicazione e rollback monotono.
+Il documento indica sempre browser del PC oppure terminale SSH del server.
+
+Il [verbale bootstrap IAM](history/IAM_BOOTSTRAP_PRODUCTION_ACCEPTANCE_2026-09-18.md)
+resta l'evidenza storica della prima attivazione, non lo stato finale della
+successiva prova ChatGPT. In tale prova la policy v4 è stata pubblicata ma
+rifiutata dalla cache MCP; l'operatore ha pubblicato v5 ripristinando il contenuto
+v3. La registrazione di `ouf.system.status` non è cancellata dal rollback.
+
+La [PR MCP #27](https://github.com/GioNob/ouf-mcp-server/pull/27) corregge il
+round-trip dei vincoli opzionali. Al checkpoint non è stata distribuita.
+Il dettaglio `PUBLIC_OPERATIONAL` rimane un blocco di accettazione distinto:
+non allargare grant o rimuovere vincoli per aggirarlo. La guida contiene
+la matrice dei risultati effettivi e le verifiche ancora da eseguire.
+
+Il collegamento punta al branch della PR finché non è mergiata; non implica
+che il contenuto sia già su main o in produzione.
