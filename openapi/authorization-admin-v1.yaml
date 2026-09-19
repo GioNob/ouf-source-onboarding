@@ -3,7 +3,7 @@
   "info": {
     "title": "OUF Authorization administration",
     "version": "1.0.0",
-    "description": "PET Authorization 1.5 sections 109.1-109.7. Platform policy administration via trusted HUMAN channel. No MCP exposure. Authentication and CSRF validation must be established by the deployment trusted adapter; headers are never authority."
+    "description": "PET Authorization 1.5 sections 109.1-109.7. Platform policy administration via trusted HUMAN channel. No MCP exposure. Authentication and CSRF validation must be established by the deployment trusted adapter; headers are never authority. Bootstrap requires the installation-designated HUMAN principal (issuer, canonical subject, tenant). The first published policy must include an applicable nominal authorization.policy.admin grant for that principal; missing configuration or grant returns 403. Bootstrap remains permanently closed after the first successful publication. See docs/OUF_ADMIN_BOOTSTRAP.md."
   },
   "security": [
     {

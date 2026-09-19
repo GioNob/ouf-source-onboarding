@@ -24,7 +24,11 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+ "ouf.authorization.bootstrap.admin-issuer=fixture-issuer",
+ "ouf.authorization.bootstrap.admin-subject=human:admin",
+ "ouf.authorization.bootstrap.admin-tenant=tenant-a"
+})
 @AutoConfigureMockMvc
 class AuthorizationBootstrapServerBindingTest {
   @DynamicPropertySource

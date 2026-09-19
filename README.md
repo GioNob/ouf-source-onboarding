@@ -48,3 +48,10 @@ Authentication, principal normalization, tenant/resource authorization and polic
 The machine-readable MCP-facing surface is defined in `openapi/onboarding-v1.yaml`; the non-MCP trusted-human contract is `openapi/ths-v1.yaml`. Protected log operations require HUMAN_USER plus Authorization-owned capabilities and a trusted authorization context on every request. The built-in typed adapter exposes the module's append-only audit stream; production environments add the shared log-store adapter behind the same interface. To run the in-process profiling worker, configure `ouf.onboarding.object-store.gateway-base-url`; the adapter reads the opaque `object://` reference through the Gateway internal object-storage route and applies the registered size and content-hash checks before profiling. The worker remains disabled when that route is not configured.
 
 It does not claim ownership of geospatial runtime ingestion, Authorization Policy Registry, the Ingestion Runtime implementation, the shared log store, or a production browser shell. Production IAM/session/CSRF/CSP/step-up controls and concrete Gateway/log-store/object-store routes remain environment bindings owned by Authorization, Gateway and platform operations.
+
+### Primo amministratore OUF
+
+Il primo amministratore deve essere designato nella configurazione di bootstrap
+tramite issuer, subject canonico e tenant. Non serve un ruolo amministrativo OUF
+nell'IAM esterno. La prima policy deve attribuirgli un grant nominale attivo;
+vedere [configurazione e limiti dell'incremento](docs/OUF_ADMIN_BOOTSTRAP.md).

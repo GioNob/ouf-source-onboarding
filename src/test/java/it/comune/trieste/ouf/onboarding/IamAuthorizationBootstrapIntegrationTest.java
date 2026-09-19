@@ -31,6 +31,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(properties = {
     "ouf.iam.enabled=true",
+    "ouf.authorization.bootstrap.admin-issuer=https://auth.ouf-lab.it/realms/ouf",
+    "ouf.authorization.bootstrap.admin-subject=human:admin",
+    "ouf.authorization.bootstrap.admin-tenant=ouf-lab",
     "ouf.iam.issuer=https://auth.ouf-lab.it/realms/ouf",
     "ouf.iam.audience=ouf-api-gateway",
     "ouf.iam.actor-type-claim=ouf_actor_type"
@@ -106,6 +109,19 @@ class IamAuthorizationBootstrapIntegrationTest {
         .contentType(MediaType.APPLICATION_JSON)
         .content(registration("iam.human-bootstrap")))
         .andExpect(status().isCreated());
+  }
+
+  @Test
+  void anotherHumanWithBootstrapScopeCannotBecomeTheFirstAdministrator() throws Exception {
+    var original = token("HUMAN", "authorization.bootstrap", false);
+    var claims = new HashMap<String, Object>(original.getClaims());
+    claims.put("sub", "human:other");
+    claims.put("ouf_subject", "human:other");
+    when(jwtDecoder.decode("other-human")).thenReturn(new Jwt("other-human", original.getIssuedAt(), original.getExpiresAt(), original.getHeaders(), claims));
+    http.perform(post("/api/trusted-human/v1/authorization/capabilities")
+        .header("Authorization", "Bearer other-human")
+        .contentType(MediaType.APPLICATION_JSON).content(registration("iam.other-human")))
+        .andExpect(status().isForbidden());
   }
 
   @Test

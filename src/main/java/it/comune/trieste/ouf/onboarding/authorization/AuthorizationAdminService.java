@@ -15,10 +15,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 @Service
 public class AuthorizationAdminService {
- private final JdbcClient db;private final ObjectMapper json;private final AuthorizationPolicyRegistry registry;private final AuthorizationRuntimeSynchronizer runtime;
- public AuthorizationAdminService(JdbcClient db,ObjectMapper json,AuthorizationPolicyRegistry registry,AuthorizationRuntimeSynchronizer runtime){this.db=db;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.registry=registry;this.runtime=runtime;}
+ private final JdbcClient db;private final ObjectMapper json;private final AuthorizationPolicyRegistry registry;private final AuthorizationRuntimeSynchronizer runtime;private final BootstrapAdministrator bootstrapAdmin;
+ public AuthorizationAdminService(JdbcClient db,ObjectMapper json,AuthorizationPolicyRegistry registry,AuthorizationRuntimeSynchronizer runtime,BootstrapAdministrator bootstrapAdmin){this.db=db;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.registry=registry;this.runtime=runtime;this.bootstrapAdmin=bootstrapAdmin;}
  public record Draft(UUID id,long revision,String state,String baseActiveRef,PolicyBundle policy){}
- public record Actor(String subject,String tenant,String type,String policyRef,String correlation) {public Actor {if(!"HUMAN".equals(type)||subject==null||subject.isBlank()||policyRef==null||policyRef.isBlank())throw new SecurityException("AUTH_ADMIN_HUMAN_REQUIRED");}}
+ public record Actor(String subject,String tenant,String type,String policyRef,String correlation,PrincipalContext principal) {public Actor(String subject,String tenant,String type,String policyRef,String correlation){this(subject,tenant,type,policyRef,correlation,null);}public Actor {if(!"HUMAN".equals(type)||subject==null||subject.isBlank()||policyRef==null||policyRef.isBlank())throw new SecurityException("AUTH_ADMIN_HUMAN_REQUIRED");if(principal!=null&&(!subject.equals(principal.subjectId())||!Objects.equals(tenant,principal.tenantId())||!type.equals(principal.actorType().name())))throw new SecurityException("AUTH_ADMIN_PRINCIPAL_MISMATCH");}}
  private DomainFailure failure(HttpStatus status,String code){return new DomainFailure(status,code,code);}
  public <T> T parse(JsonNode node,Class<T> type){try{var value=json.treeToValue(node,type);if(value==null)throw new IllegalArgumentException("null policy");return value;}catch(Exception e){throw new IllegalArgumentException("AUTH_POLICY_INVALID",e);}}
  private String encode(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalArgumentException("AUTH_POLICY_INVALID",e);}}
@@ -26,6 +26,7 @@ public class AuthorizationAdminService {
  private String activeRef(){return registry.active().map(a->a.bundleId()+":"+a.version()).orElse("NONE");}
  private boolean bootstrapCompleted(){return db.sql("select completed from ouf_authorization.bootstrap_latch where singleton_key=true").query(Boolean.class).single();}
  public boolean bootstrapOpen(){return !bootstrapCompleted()&&registry.active().isEmpty();}
+ public void requireBootstrapPrincipal(PrincipalContext principal){bootstrapAdmin.requirePrincipal(principal);}
  private void completeBootstrap(Actor actor){db.sql("update ouf_authorization.bootstrap_latch set completed=true,completed_at=transaction_timestamp(),completed_by=:subject where singleton_key=true and completed=false").param("subject",actor.subject()).update();}
  private void refreshRuntimeAfterCommit(){
   if(!TransactionSynchronizationManager.isSynchronizationActive())throw new IllegalStateException("AUTH_RUNTIME_REFRESH_REQUIRES_TRANSACTION");
@@ -53,7 +54,13 @@ public class AuthorizationAdminService {
   db.sql("select pg_advisory_xact_lock(741093)").query(Object.class).single();var d=editable(id,revision);
   if(!activeRef().equals(d.baseActiveRef()))throw failure(HttpStatus.CONFLICT,"AUTH_ACTIVE_CHANGED_REBASE_REQUIRED");validate(d.policy());
   var active=registry.active();if(active.isPresent()&&(!active.get().bundleId().equals(d.policy().bundleId())||d.policy().version()<=active.get().version()))throw failure(HttpStatus.CONFLICT,"AUTH_POLICY_VERSION_MUST_ADVANCE");
-  var p=d.policy();registry.publishAndActivate(new PolicyBundle(p.bundleId(),p.version(),Instant.now(),p.capabilities(),p.grants()),actor.subject());
+  var p=d.policy();
+  if(bootstrapOpen()){
+   if(actor.principal()==null)throw failure(HttpStatus.FORBIDDEN,"AUTH_BOOTSTRAP_TRUSTED_PRINCIPAL_REQUIRED");
+   try{bootstrapAdmin.requireInitialPolicy(p,actor.principal(),Instant.now());}
+   catch(SecurityException e){throw failure(HttpStatus.FORBIDDEN,e.getMessage());}
+  }
+  registry.publishAndActivate(new PolicyBundle(p.bundleId(),p.version(),Instant.now(),p.capabilities(),p.grants()),actor.subject());
   completeBootstrap(actor);
   db.sql("update ouf_authorization.policy_draft set state='PUBLISHED',revision=revision+1 where draft_id=:id").param("id",id).update();audit("PUBLISH_ACTIVATE",id.toString(),actor);
   refreshRuntimeAfterCommit();

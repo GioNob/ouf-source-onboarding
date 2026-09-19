@@ -23,6 +23,7 @@ public class AuthorizationAdminBoundary extends OncePerRequestFilter {
     var principal=ServletAuthorization.principal(r).context();
     if(principal.actorType()!=PrincipalContext.ActorType.HUMAN)throw new SecurityException("HUMAN_REQUIRED");
     if(!principal.scopes().contains("authorization.bootstrap"))throw new SecurityException("AUTH_BOOTSTRAP_SCOPE_REQUIRED");
+    service.requireBootstrapPrincipal(principal);
    } else {
     ServletAuthorization.require(r,"authorization.policy.admin",true);
    }

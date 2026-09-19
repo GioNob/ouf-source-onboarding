@@ -19,12 +19,13 @@ public class AuthorizationAdminApi {
     var p=ServletAuthorization.principal(r).context();
     if(p.actorType()!=PrincipalContext.ActorType.HUMAN)throw new SecurityException("HUMAN_REQUIRED");
     if(!p.scopes().contains("authorization.bootstrap"))throw new SecurityException("AUTH_BOOTSTRAP_SCOPE_REQUIRED");
+    service.requireBootstrapPrincipal(p);
     if(write)TrustedWriteProof.require(r);
-    return new AuthorizationAdminService.Actor(p.subjectId(),p.tenantId(),p.actorType().name(),"bootstrap:iam",UUID.randomUUID().toString());
+    return new AuthorizationAdminService.Actor(p.subjectId(),p.tenantId(),p.actorType().name(),"bootstrap:iam",UUID.randomUUID().toString(),p);
    }
    var c=ServletAuthorization.require(r,"authorization.policy.admin",true);
    if(write)TrustedWriteProof.require(r);
-   return new AuthorizationAdminService.Actor(c.principal().subjectId(),c.principal().tenantId(),c.principal().actorType().name(),c.decisionRef(),UUID.randomUUID().toString());
+   return new AuthorizationAdminService.Actor(c.principal().subjectId(),c.principal().tenantId(),c.principal().actorType().name(),c.decisionRef(),UUID.randomUUID().toString(),c.principal());
   }catch(SecurityException e){throw new ResponseStatusException(HttpStatus.FORBIDDEN,e.getMessage());}
  }
  private long revision(String etag){if(etag==null||!etag.matches("\"[0-9]+\""))throw new ResponseStatusException(HttpStatus.PRECONDITION_REQUIRED,"AUTH_ETAG_REQUIRED");try{return Long.parseLong(etag.substring(1,etag.length()-1));}catch(NumberFormatException e){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"AUTH_ETAG_INVALID");}}
