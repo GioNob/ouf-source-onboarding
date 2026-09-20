@@ -56,3 +56,10 @@ protetta di superadmin OUF. Gli admin ordinari non possono modificarla.
 Il superadmin può trasferirla con conferma di un titolare del ruolo destinatario.
 Configurazione, adozione sulle installazioni esistenti e contratto sono nella
 [guida di bootstrap e trasferimento](docs/OUF_ADMIN_BOOTSTRAP.md).
+
+### Revisione dei permessi prima della pubblicazione
+
+La [guida di consultazione e simulazione](docs/AUTHORIZATION_REVIEW.md) descrive
+lookup dei grant nominali/per ruolo, diff di una bozza e confronto delle decisioni
+ACTIVE/bozza. Sono operazioni del canale umano amministrativo: non attivano policy
+e non costituiscono ancora tool chatbot o una directory utenti IAM.
