@@ -29,7 +29,7 @@ public class AuthorizationReviewService {
  private record Snapshot(AuthorizationAdminService.Draft draft,PolicyBundle active){}
  private DomainFailure fail(HttpStatus status,String code){return new DomainFailure(status,code,code);}
  private String ref(PolicyBundle p){return p.bundleId()+":"+p.version();}
- private PolicyBundle authorized(PrincipalContext caller){
+ PolicyBundle authorized(PrincipalContext caller){
   authority.lock(); // Serialize permission checks and snapshots with policy publication and role handover.
   if(caller==null||caller.actorType()!=PrincipalContext.ActorType.HUMAN||!caller.scopes().contains("authorization.policy.admin"))throw fail(HttpStatus.FORBIDDEN,"AUTH_ADMIN_REQUIRED");
   var active=registry.active().orElseThrow(()->fail(HttpStatus.CONFLICT,"AUTH_ACTIVE_REQUIRED"));
@@ -43,7 +43,9 @@ public class AuthorizationReviewService {
  }
  private static void text(String value,int maximum){if(value==null||value.isBlank()||value.length()>maximum||value.chars().anyMatch(Character::isISOControl))throw new IllegalArgumentException("AUTH_REVIEW_INVALID_INPUT");}
  @Transactional public GrantPage grants(PrincipalContext caller,String subject,String role,int limit,String after,String expectedPolicyRef){
-  var active=authorized(caller);
+  return projectGrants(caller,authorized(caller),subject,role,limit,after,expectedPolicyRef);
+ }
+ GrantPage projectGrants(PrincipalContext caller,PolicyBundle active,String subject,String role,int limit,String after,String expectedPolicyRef){
   if((subject==null)==(role==null)||limit<1||limit>200)throw new IllegalArgumentException("AUTH_REVIEW_SELECTOR_OR_LIMIT_INVALID");
   text(subject==null?role:subject,256);
   if(role!=null&&!BootstrapAdministrator.validRole(role))throw new IllegalArgumentException("AUTH_REVIEW_ROLE_INVALID");

@@ -63,3 +63,7 @@ La [guida di consultazione e simulazione](docs/AUTHORIZATION_REVIEW.md) descrive
 lookup dei grant nominali/per ruolo, diff di una bozza e confronto delle decisioni
 ACTIVE/bozza. Sono operazioni del canale umano amministrativo: non attivano policy
 e non costituiscono ancora tool chatbot o una directory utenti IAM.
+
+## Chatbot e THS per i permessi
+
+Configurazione IAM, sessione, chiavi, ciclo proposta/conferma e collaudo: [guida operativa](docs/PERMISSION_PROPOSALS.md).

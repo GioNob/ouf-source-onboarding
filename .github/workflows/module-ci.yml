@@ -30,6 +30,14 @@ jobs:
       MAVEN_OPTS: -Dmaven.wagon.http.connectionTimeout=10000 -Dmaven.wagon.http.readTimeout=30000 -Djava.net.preferIPv4Stack=true
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: GioNob/ouf-api-gateway
+          ref: 630a977055bdc2e224a5804bf17a8b30fe0a0a60
+          path: .pairwise/permission-gateway
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - run: pip install -r .pairwise/permission-gateway/requirements-dev.txt
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Verify frozen rc3 contract pin
@@ -37,6 +45,7 @@ jobs:
       - name: Compile, test and package
         run: |
           bash scripts/install-authorization-sdk.sh
+          export OUF_GATEWAY_PAIRWISE_ROOT="$PWD/.pairwise/permission-gateway"
           timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
       - name: Verify shared SDK production packaging
         run: |

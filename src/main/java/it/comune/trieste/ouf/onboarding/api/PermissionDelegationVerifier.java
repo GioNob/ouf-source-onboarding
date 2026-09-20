@@ -1,0 +1,40 @@
+package it.comune.trieste.ouf.onboarding.api;
+
+import com.fasterxml.jackson.databind.*;
+import it.comune.trieste.ouf.authorization.PrincipalContext;
+import it.comune.trieste.ouf.onboarding.authorization.BootstrapAdministrator;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.security.*;
+import java.time.Instant;
+import java.util.*;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+/** A separate, purpose-bound owner receipt. The signing key is never distributed to MCP. */
+@Component
+public class PermissionDelegationVerifier {
+ private final ObjectMapper json;private final String issuer,audience,workload;private final byte[] key;
+ public record Delegated(PrincipalContext principal,String idempotencyKey){}
+ public record Receipt(int v,String purpose,String method,String path,String bodyHash,String capability,long iat,long exp,String issuer,String audience,String workload,String subject,String tenant,String acr,String roles,String scope,String idempotencyKey){}
+ public PermissionDelegationVerifier(ObjectMapper json,@Value("${ouf.authorization.delegation.key-file:}") String file,@Value("${ouf.iam.issuer:}") String issuer,@Value("${ouf.iam.audience:}") String audience,@Value("${ouf.authorization.delegation.workload:ouf-mcp-server}") String workload){
+  this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.issuer=issuer;this.audience=audience;this.workload=workload;
+  try{String value=file.isBlank()?"":Files.readString(Path.of(file)).trim();if(!value.isEmpty()&&!value.matches("[0-9a-fA-F]{64}"))throw new IllegalArgumentException("invalid authorization owner key");key=value.getBytes(StandardCharsets.US_ASCII);}catch(java.io.IOException e){throw new IllegalStateException("authorization owner key unavailable",e);}
+ }
+ private SecurityException denied(){return new SecurityException("AUTH_OWNER_RECEIPT_INVALID");}
+ public Delegated verify(String proof,String path,String capability,byte[] body){
+  try{
+   if(key.length!=64||issuer.isBlank()||audience.isBlank()||proof==null||proof.length()>16384||body.length>65536)throw denied();
+   var parts=proof.split("\\.",-1);if(parts.length!=2||!parts[0].matches("[A-Za-z0-9_-]+")||!parts[1].matches("[A-Za-z0-9_-]+"))throw denied();
+   var mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(key,"HmacSHA256"));
+   if(!MessageDigest.isEqual(mac.doFinal(("ouf-authorization-owner-v1."+parts[0]).getBytes(StandardCharsets.US_ASCII)),Base64.getUrlDecoder().decode(parts[1])))throw denied();
+   var r=json.readValue(Base64.getUrlDecoder().decode(parts[0]),Receipt.class);var now=Instant.now().getEpochSecond();
+   if(r.v()!=1||!"authorization-proposal-owner".equals(r.purpose())||!"POST".equals(r.method())||!path.equals(r.path())||!capability.equals(r.capability())||r.iat()>now||r.exp()<=now||r.exp()<=r.iat()||r.exp()-r.iat()>30||!issuer.equals(r.issuer())||!audience.equals(r.audience())||!workload.equals(r.workload())||!HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body)).equals(r.bodyHash()))throw denied();
+   var roles=new TreeSet<String>();if(r.roles()!=null&&!r.roles().isEmpty())for(String role:r.roles().split(" ",-1)){if(!BootstrapAdministrator.validRole(role)||!roles.add(role)||roles.size()>32)throw denied();}
+   if(r.scope()==null||r.scope().length()>8192)throw denied();var scopes=new HashSet<>(Arrays.asList(r.scope().split(" +")));if(!scopes.contains(capability))throw denied();
+   return new Delegated(new PrincipalContext(r.subject(),r.tenant(),PrincipalContext.ActorType.HUMAN,r.workload(),r.acr(),r.issuer(),r.audience(),scopes,new PrincipalContext.IdentityClaims(roles,r.acr(),Set.of(),null)),r.idempotencyKey());
+  }catch(Exception e){throw denied();}
+ }
+}

@@ -1,0 +1,64 @@
+openapi: 3.0.3
+info: {title: OUF permission proposals and trusted human review, version: 1.0.0}
+paths:
+  /api/internal/v1/authorization/permissions/read:
+    post:
+      operationId: delegatedPermissionRead
+      description: Closed GatewayRequest envelope, Arguments filter subjectId/externalRoleRef, bounded limit and pinned policyRef pagination. Tenant comes from signed receipt. Configured grants are not effective-permission proof.
+      security: [{ownerReceipt: []}]
+      responses: {'200': {description: Configured grants page}, '403': {description: Receipt or dedicated capability denied}}
+  /api/internal/v1/authorization/permissions/propose:
+    post:
+      operationId: delegatedPermissionPropose
+      description: Closed GatewayRequest envelope with one UPSERT or REVOKE in Arguments; signed receipt binds exact bytes and idempotency key. Creates immutable fifteen-minute proposal without activating policy.
+      security: [{ownerReceipt: []}]
+      responses: {'200': {description: Receipt with proposalId revision state expiresAt approvalPath and finalPolicyRef}, '403': {description: Receipt or dedicated capability denied}, '409': {description: Idempotency conflict or no change}}
+  /api/internal/v1/authorization/permissions/status:
+    post:
+      operationId: delegatedProposalStatus
+      description: Arguments contains proposalId. Only original proposer in the same tenant with authorization.proposal.read may read the receipt.
+      security: [{ownerReceipt: []}]
+      responses: {'200': {description: Current receipt}, '404': {description: Not visible}}
+  /trusted-human/authorization/api/proposals/{id}:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    get:
+      operationId: permissionProposalCard
+      security: [{humanSession: []}]
+      responses: {'200': {description: Exact before/after card and session CSRF token/header}, '403': {description: Current human admin authority required}}
+  /trusted-human/authorization/api/proposals/{id}/confirm:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    post:
+      operationId: confirmPermissionProposal
+      x-ouf-mcp-class: TRUSTED_HUMAN_ONLY
+      security: [{humanSession: [], csrf: []}]
+      parameters: [{$ref: '#/components/parameters/revision'}]
+      requestBody: {$ref: '#/components/requestBodies/confirmation'}
+      responses: {'200': {description: Atomic policy publication and PUBLISHED receipt}, '403': {description: Current human admin or CSRF denied}, '409': {description: Hash mismatch or ACTIVE changed}, '410': {description: Expired proposal}, '412': {description: Stale revision}}
+  /trusted-human/authorization/api/proposals/{id}/reject:
+    parameters: [{$ref: '#/components/parameters/id'}]
+    post:
+      operationId: rejectPermissionProposal
+      x-ouf-mcp-class: TRUSTED_HUMAN_ONLY
+      security: [{humanSession: [], csrf: []}]
+      parameters: [{$ref: '#/components/parameters/revision'}]
+      requestBody: {$ref: '#/components/requestBodies/confirmation'}
+      responses: {'200': {description: REJECTED receipt without policy publication}, '403': {description: Current human admin or CSRF denied}, '410': {description: Expired proposal}, '412': {description: Stale revision}}
+components:
+  securitySchemes:
+    ownerReceipt: {type: apiKey, in: header, name: X-OUF-Authorization-Receipt, description: HMAC owner receipt signed only by Gateway; never accepted by THS}
+    humanSession: {type: apiKey, in: cookie, name: JSESSIONID, description: Server OAuth2 login session; bearer from chatbot is insufficient}
+    csrf: {type: apiKey, in: header, name: X-CSRF-TOKEN}
+  parameters:
+    id: {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    revision: {name: If-Match, in: header, required: true, schema: {type: string}, description: Quoted integer revision from card}
+  requestBodies:
+    confirmation:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [expectedHash]
+            properties:
+              expectedHash: {type: string, description: Exact proposedHash from card}
