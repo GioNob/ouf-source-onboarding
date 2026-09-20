@@ -71,7 +71,7 @@ class PermissionProposalRuntimeTest {
   assertThat(query).doesNotContainKey("code_verifier").doesNotContainKey("client_secret");
   var callback=new org.springframework.mock.web.MockHttpServletRequest();
   callback.setSession(response.getRequest().getSession(false));
-  callback.setParameter("state",query.getFirst("state"));
+  callback.setParameter("state",java.net.URLDecoder.decode(query.getFirst("state"),StandardCharsets.UTF_8));
   var saved=new org.springframework.security.oauth2.client.web.HttpSessionOAuth2AuthorizationRequestRepository().loadAuthorizationRequest(callback);
   assertThat(saved).isNotNull();
   String verifier=saved.getAttribute("code_verifier");
