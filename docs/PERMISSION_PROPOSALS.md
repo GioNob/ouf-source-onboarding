@@ -117,3 +117,9 @@ L'autorità protetta può essere designata tramite ruolo IAM o persona (`issuer`
 serve quando la designazione è organizzativa. I permessi ordinari continuano a
 seguire il ciclo proposta, card, conferma e pubblicazione. Vedere
 [bootstrap e trasferimento](OUF_ADMIN_BOOTSTRAP.md).
+
+## Ruoli OUF ordinari
+
+La proposta `REPLACE_ROLES` gestisce ruoli OUF e relative assegnazioni nominali
+o organizzative. Lettura con `view: ROLES`; revisione e conferma restano nella
+stessa THS. Vedere [modello, esempio e limiti](OUF_APPLICATION_ROLES.md).

@@ -15,8 +15,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 @Service
 public class AuthorizationAdminService {
- private final JdbcClient db;private final ObjectMapper json;private final AuthorizationPolicyRegistry registry;private final AuthorizationRuntimeSynchronizer runtime;private final BootstrapAdministrator bootstrapAdmin;private final SuperadminAuthority authority;
- public AuthorizationAdminService(JdbcClient db,ObjectMapper json,AuthorizationPolicyRegistry registry,AuthorizationRuntimeSynchronizer runtime,BootstrapAdministrator bootstrapAdmin,SuperadminAuthority authority){this.db=db;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.registry=registry;this.runtime=runtime;this.bootstrapAdmin=bootstrapAdmin;this.authority=authority;}
+ private final JdbcClient db;private final ObjectMapper json;private final AuthorizationPolicyRegistry registry;private final AuthorizationRuntimeSynchronizer runtime;private final BootstrapAdministrator bootstrapAdmin;private final SuperadminAuthority authority;private final OufRoleCatalogueStore roles;
+ public AuthorizationAdminService(JdbcClient db,ObjectMapper json,AuthorizationPolicyRegistry registry,AuthorizationRuntimeSynchronizer runtime,BootstrapAdministrator bootstrapAdmin,SuperadminAuthority authority,OufRoleCatalogueStore roles){this.db=db;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.registry=registry;this.runtime=runtime;this.bootstrapAdmin=bootstrapAdmin;this.authority=authority;this.roles=roles;}
  public record Draft(UUID id,long revision,String state,String baseActiveRef,PolicyBundle policy){}
  public record Actor(String subject,String tenant,String type,String policyRef,String correlation,PrincipalContext principal) {public Actor(String subject,String tenant,String type,String policyRef,String correlation){this(subject,tenant,type,policyRef,correlation,null);}public Actor {if(!"HUMAN".equals(type)||subject==null||subject.isBlank()||policyRef==null||policyRef.isBlank())throw new SecurityException("AUTH_ADMIN_HUMAN_REQUIRED");if(principal!=null&&(!subject.equals(principal.subjectId())||!Objects.equals(tenant,principal.tenantId())||!type.equals(principal.actorType().name())))throw new SecurityException("AUTH_ADMIN_PRINCIPAL_MISMATCH");}}
  private DomainFailure failure(HttpStatus status,String code){return new DomainFailure(status,code,code);}
@@ -88,6 +88,7 @@ public class AuthorizationAdminService {
   return get(id);
  }
  private void validate(PolicyBundle policy){
+  roles.verifyManagedGrants(policy);
   if(encode(policy).getBytes(java.nio.charset.StandardCharsets.UTF_8).length>5*1024*1024)throw new IllegalArgumentException("AUTH_POLICY_TOO_LARGE");
   for(var c:policy.capabilities()){
    String raw=db.sql("select descriptor::text from ouf_authorization.capability_registration where capability_id=:id").param("id",c.capabilityId()).query(String.class).optional().orElseThrow(()->failure(HttpStatus.CONFLICT,"AUTH_CAPABILITY_UNREGISTERED"));

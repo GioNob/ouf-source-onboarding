@@ -1,64 +1,820 @@
-openapi: 3.0.3
-info: {title: OUF permission proposals and trusted human review, version: 1.0.0}
-paths:
-  /api/internal/v1/authorization/permissions/read:
-    post:
-      operationId: delegatedPermissionRead
-      description: Closed GatewayRequest envelope, Arguments filter subjectId/externalRoleRef, bounded limit and pinned policyRef pagination. Tenant comes from signed receipt. Configured grants are not effective-permission proof.
-      security: [{ownerReceipt: []}]
-      responses: {'200': {description: Configured grants page}, '403': {description: Receipt or dedicated capability denied}}
-  /api/internal/v1/authorization/permissions/propose:
-    post:
-      operationId: delegatedPermissionPropose
-      description: Closed GatewayRequest envelope with one UPSERT or REVOKE in Arguments; signed receipt binds exact bytes and idempotency key. Creates immutable fifteen-minute proposal without activating policy.
-      security: [{ownerReceipt: []}]
-      responses: {'200': {description: Receipt with proposalId revision state expiresAt approvalPath and finalPolicyRef}, '403': {description: Receipt or dedicated capability denied}, '409': {description: Idempotency conflict or no change}}
-  /api/internal/v1/authorization/permissions/status:
-    post:
-      operationId: delegatedProposalStatus
-      description: Arguments contains proposalId. Only original proposer in the same tenant with authorization.proposal.read may read the receipt.
-      security: [{ownerReceipt: []}]
-      responses: {'200': {description: Current receipt}, '404': {description: Not visible}}
-  /trusted-human/authorization/api/proposals/{id}:
-    parameters: [{$ref: '#/components/parameters/id'}]
-    get:
-      operationId: permissionProposalCard
-      security: [{humanSession: []}]
-      responses: {'200': {description: Exact before/after card and session CSRF token/header}, '403': {description: Current human admin authority required}}
-  /trusted-human/authorization/api/proposals/{id}/confirm:
-    parameters: [{$ref: '#/components/parameters/id'}]
-    post:
-      operationId: confirmPermissionProposal
-      x-ouf-mcp-class: TRUSTED_HUMAN_ONLY
-      security: [{humanSession: [], csrf: []}]
-      parameters: [{$ref: '#/components/parameters/revision'}]
-      requestBody: {$ref: '#/components/requestBodies/confirmation'}
-      responses: {'200': {description: Atomic policy publication and PUBLISHED receipt}, '403': {description: Current human admin or CSRF denied}, '409': {description: Hash mismatch or ACTIVE changed}, '410': {description: Expired proposal}, '412': {description: Stale revision}}
-  /trusted-human/authorization/api/proposals/{id}/reject:
-    parameters: [{$ref: '#/components/parameters/id'}]
-    post:
-      operationId: rejectPermissionProposal
-      x-ouf-mcp-class: TRUSTED_HUMAN_ONLY
-      security: [{humanSession: [], csrf: []}]
-      parameters: [{$ref: '#/components/parameters/revision'}]
-      requestBody: {$ref: '#/components/requestBodies/confirmation'}
-      responses: {'200': {description: REJECTED receipt without policy publication}, '403': {description: Current human admin or CSRF denied}, '410': {description: Expired proposal}, '412': {description: Stale revision}}
-components:
-  securitySchemes:
-    ownerReceipt: {type: apiKey, in: header, name: X-OUF-Authorization-Receipt, description: HMAC owner receipt signed only by Gateway; never accepted by THS}
-    humanSession: {type: apiKey, in: cookie, name: JSESSIONID, description: Server OAuth2 login session; bearer from chatbot is insufficient}
-    csrf: {type: apiKey, in: header, name: X-CSRF-TOKEN}
-  parameters:
-    id: {name: id, in: path, required: true, schema: {type: string, format: uuid}}
-    revision: {name: If-Match, in: header, required: true, schema: {type: string}, description: Quoted integer revision from card}
-  requestBodies:
-    confirmation:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            additionalProperties: false
-            required: [expectedHash]
-            properties:
-              expectedHash: {type: string, description: Exact proposedHash from card}
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OUF permission proposals and trusted human review",
+    "version": "1.1.0"
+  },
+  "paths": {
+    "/api/internal/v1/authorization/permissions/read": {
+      "post": {
+        "operationId": "delegatedPermissionRead",
+        "description": "Verified Gateway envelope. Select view ROLES for the tenant role catalogue, or filter subjectId/externalRoleRef for configured grants. Role view forbids grant filters. Tenant and issuer come from verified identity.",
+        "security": [
+          {
+            "ownerReceipt": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured grants page"
+          },
+          "403": {
+            "description": "Receipt or dedicated capability denied"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "Arguments"
+                ],
+                "properties": {
+                  "Arguments": {
+                    "$ref": "#/components/schemas/PermissionReadArguments"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/internal/v1/authorization/permissions/propose": {
+      "post": {
+        "operationId": "delegatedPermissionPropose",
+        "description": "Verified Gateway envelope. UPSERT/REVOKE propose a direct grant change; REPLACE_ROLES proposes a complete tenant catalogue. Maximum role proposal 48000 bytes and 200 generated grants. Creates an immutable fifteen-minute proposal; only THS confirmation publishes.",
+        "security": [
+          {
+            "ownerReceipt": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Receipt with proposalId revision state expiresAt approvalPath and finalPolicyRef"
+          },
+          "403": {
+            "description": "Receipt or dedicated capability denied"
+          },
+          "409": {
+            "description": "Idempotency conflict or no change"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "Arguments"
+                ],
+                "properties": {
+                  "Arguments": {
+                    "$ref": "#/components/schemas/PermissionChangeArguments"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/internal/v1/authorization/permissions/status": {
+      "post": {
+        "operationId": "delegatedProposalStatus",
+        "description": "Arguments contains proposalId. Only original proposer in the same tenant with authorization.proposal.read may read the receipt.",
+        "security": [
+          {
+            "ownerReceipt": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current receipt"
+          },
+          "404": {
+            "description": "Not visible"
+          }
+        }
+      }
+    },
+    "/trusted-human/authorization/api/proposals/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "get": {
+        "operationId": "permissionProposalCard",
+        "security": [
+          {
+            "humanSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact before/after card and session CSRF token/header"
+          },
+          "403": {
+            "description": "Current human admin authority required"
+          }
+        }
+      }
+    },
+    "/trusted-human/authorization/api/proposals/{id}/confirm": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "post": {
+        "operationId": "confirmPermissionProposal",
+        "x-ouf-mcp-class": "TRUSTED_HUMAN_ONLY",
+        "security": [
+          {
+            "humanSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/revision"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/confirmation"
+        },
+        "responses": {
+          "200": {
+            "description": "Atomic policy publication and PUBLISHED receipt"
+          },
+          "403": {
+            "description": "Current human admin or CSRF denied"
+          },
+          "409": {
+            "description": "Hash mismatch or ACTIVE changed"
+          },
+          "410": {
+            "description": "Expired proposal"
+          },
+          "412": {
+            "description": "Stale revision"
+          }
+        }
+      }
+    },
+    "/trusted-human/authorization/api/proposals/{id}/reject": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/id"
+        }
+      ],
+      "post": {
+        "operationId": "rejectPermissionProposal",
+        "x-ouf-mcp-class": "TRUSTED_HUMAN_ONLY",
+        "security": [
+          {
+            "humanSession": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/revision"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/confirmation"
+        },
+        "responses": {
+          "200": {
+            "description": "REJECTED receipt without policy publication"
+          },
+          "403": {
+            "description": "Current human admin or CSRF denied"
+          },
+          "410": {
+            "description": "Expired proposal"
+          },
+          "412": {
+            "description": "Stale revision"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ownerReceipt": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-OUF-Authorization-Receipt",
+        "description": "HMAC owner receipt signed only by Gateway; never accepted by THS"
+      },
+      "humanSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "JSESSIONID",
+        "description": "Server OAuth2 login session; bearer from chatbot is insufficient"
+      },
+      "csrf": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-CSRF-TOKEN"
+      }
+    },
+    "parameters": {
+      "id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "revision": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Quoted integer revision from card"
+      }
+    },
+    "requestBodies": {
+      "confirmation": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expectedHash"
+              ],
+              "properties": {
+                "expectedHash": {
+                  "type": "string",
+                  "description": "Exact proposedHash from card"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "PermissionReadArguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "subjectId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "externalRoleRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "after": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "policyRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "GRANTS",
+              "ROLES"
+            ]
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "view"
+            ],
+            "properties": {
+              "view": {
+                "const": "ROLES"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "subjectId"
+                  ]
+                },
+                {
+                  "required": [
+                    "externalRoleRef"
+                  ]
+                },
+                {
+                  "required": [
+                    "limit"
+                  ]
+                },
+                {
+                  "required": [
+                    "after"
+                  ]
+                },
+                {
+                  "required": [
+                    "policyRef"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "view": {
+                "const": "GRANTS"
+              }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "subjectId"
+                ],
+                "not": {
+                  "required": [
+                    "externalRoleRef"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "externalRoleRef"
+                ],
+                "not": {
+                  "required": [
+                    "subjectId"
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "PermissionChangeArguments": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation",
+          "reason"
+        ],
+        "properties": {
+          "operation": {
+            "enum": [
+              "UPSERT",
+              "REVOKE",
+              "REPLACE_ROLES"
+            ]
+          },
+          "grantId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_:.-]{1,128}$"
+          },
+          "grant": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "grantId",
+              "capabilityId",
+              "tenantId",
+              "validFrom",
+              "validUntil"
+            ],
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "capabilityId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "tenantId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "subjectId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 256
+              },
+              "servicePrincipalId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 256
+              },
+              "organizationId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 256
+              },
+              "validFrom": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "validUntil": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "constraints": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "effect": {
+                    "enum": [
+                      "ALLOW",
+                      "DENY"
+                    ]
+                  },
+                  "externalRoleRef": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "resourceType": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "resourceId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 256
+                  },
+                  "resourceAttributes": {
+                    "type": "object",
+                    "maxProperties": 32,
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512
+                    }
+                  },
+                  "allowedDataLabels": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  },
+                  "allowedDetailLevels": {
+                    "type": "array",
+                    "maxItems": 16,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  },
+                  "requiredAcr": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "requiredAmr": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  },
+                  "maxAuthenticationAgeSeconds": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 86400
+                  }
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "roleCatalogue": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "issuer",
+              "roles",
+              "assignments"
+            ],
+            "properties": {
+              "issuer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "roles": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "roleId",
+                    "displayName",
+                    "permissions"
+                  ],
+                  "properties": {
+                    "roleId": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.-]{1,80}$"
+                    },
+                    "displayName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160
+                    },
+                    "permissions": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "capabilityId"
+                        ],
+                        "properties": {
+                          "capabilityId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "constraints": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "effect": {
+                                "enum": [
+                                  "ALLOW",
+                                  "DENY"
+                                ]
+                              },
+                              "externalRoleRef": {
+                                "type": "null"
+                              },
+                              "resourceType": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "maxLength": 128
+                              },
+                              "resourceId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "maxLength": 256
+                              },
+                              "resourceAttributes": {
+                                "type": "object",
+                                "maxProperties": 32,
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 512
+                                }
+                              },
+                              "allowedDataLabels": {
+                                "type": "array",
+                                "maxItems": 32,
+                                "uniqueItems": true,
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                }
+                              },
+                              "allowedDetailLevels": {
+                                "type": "array",
+                                "maxItems": 16,
+                                "uniqueItems": true,
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                }
+                              },
+                              "requiredAcr": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "maxLength": 128
+                              },
+                              "requiredAmr": {
+                                "type": "array",
+                                "maxItems": 32,
+                                "uniqueItems": true,
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128
+                                }
+                              },
+                              "maxAuthenticationAgeSeconds": {
+                                "type": [
+                                  "integer",
+                                  "null"
+                                ],
+                                "minimum": 1,
+                                "maximum": 86400
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "assignments": {
+                "type": "array",
+                "maxItems": 1000,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "assignmentId",
+                    "roleId",
+                    "validFrom",
+                    "validUntil"
+                  ],
+                  "properties": {
+                    "assignmentId": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.-]{1,80}$"
+                    },
+                    "roleId": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.-]{1,80}$"
+                    },
+                    "subjectId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[!-~]{1,255}$"
+                    },
+                    "externalRoleRef": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[A-Za-z0-9_:./-]{1,128}$"
+                    },
+                    "validFrom": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "validUntil": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "oneOf": [
+                    {
+                      "required": [
+                        "subjectId"
+                      ],
+                      "properties": {
+                        "subjectId": {
+                          "type": "string"
+                        },
+                        "externalRoleRef": {
+                          "type": "null"
+                        }
+                      }
+                    },
+                    {
+                      "required": [
+                        "externalRoleRef"
+                      ],
+                      "properties": {
+                        "externalRoleRef": {
+                          "type": "string"
+                        },
+                        "subjectId": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "grantId"
+            ],
+            "properties": {
+              "operation": {
+                "enum": [
+                  "UPSERT",
+                  "REVOKE"
+                ]
+              }
+            },
+            "not": {
+              "required": [
+                "roleCatalogue"
+              ]
+            }
+          },
+          {
+            "required": [
+              "roleCatalogue"
+            ],
+            "properties": {
+              "operation": {
+                "const": "REPLACE_ROLES"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "grantId"
+                  ]
+                },
+                {
+                  "required": [
+                    "grant"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
