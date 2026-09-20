@@ -62,3 +62,10 @@ components:
             required: [expectedHash]
             properties:
               expectedHash: {type: string, description: Exact proposedHash from card}
+
+# Application-role authoring extension:
+# read Arguments.view=ROLES returns issuer, roles, assignments for caller tenant.
+# propose Arguments.operation=REPLACE_ROLES requires reason and roleCatalogue,
+# and forbids grant/grantId. See docs/OUF_APPLICATION_ROLES.md and MCP inputSchema.
+# Card adds beforeRoles and afterRoles; confirmation binds both catalogue and
+# compiled policy through proposedHash. No chatbot publication endpoint exists.

@@ -6,6 +6,11 @@
  function text(tag,value,parent){const el=document.createElement(tag);el.textContent=String(value);parent.append(el);return el;}
  function pair(dl,label,value){text('dt',label,dl);text('dd',value,dl);}
  function grant(value,parent){parent.replaceChildren();if(!value){text('p','Nessuna abilitazione con questo identificativo.',parent);return;}const dl=document.createElement('dl');parent.append(dl);pair(dl,'Capability',value.capabilityId);pair(dl,'Soggetto',value.subjectId||'—');pair(dl,'Ruolo IAM',value.constraints?.externalRoleRef||'—');pair(dl,'Effetto',value.constraints?.effect||'ALLOW');pair(dl,'Valido da',value.validFrom);pair(dl,'Valido fino a',value.validUntil);if(value.servicePrincipalId)pair(dl,'Servizio',value.servicePrincipalId);}
+ function catalogue(value,parent){
+  parent.replaceChildren();const dl=document.createElement('dl');parent.append(dl);pair(dl,'Issuer IAM',value.issuer);
+  for(const role of value.roles){text('h3',role.displayName+' ('+role.roleId+')',parent);for(const permission of role.permissions){text('p',permission.capabilityId,parent);if(permission.constraints)text('pre',JSON.stringify(permission.constraints,null,2),parent);}}
+  text('h3','Assegnazioni',parent);for(const a of value.assignments){const item=document.createElement('dl');parent.append(item);pair(item,'Ruolo OUF',a.roleId);pair(item,a.subjectId?'Persona IAM (sub)':'Ruolo organizzativo IAM',a.subjectId||a.externalRoleRef);pair(item,'Valido da',a.validFrom);pair(item,'Valido fino a',a.validUntil);}
+ }
  const endpoint=`/trusted-human/authorization/api/proposals/${encodeURIComponent(id||'')}`;
  function controls(enabled){$('confirm').disabled=!enabled||!$('checked').checked;$('reject').disabled=!enabled;$('checked').disabled=!enabled;}
  $('checked').onchange=()=>controls(!busy&&card?.state==='PENDING');
@@ -16,7 +21,7 @@
   const data=await r.json();card=data.card;csrfHeader=data.csrfHeader;csrfToken=data.csrfToken;
   if(card.proposalId!==id||!csrfHeader||!csrfToken)throw new Error('Risposta di revisione non valida.');
   pair($('context'),'Ente / tenant',card.tenant);pair($('context'),'Proposto da',card.proposedBy);pair($('context'),'Scade',card.expiresAt);pair($('context'),'Stato',card.state);
-  $('reason').textContent=`Motivo: ${card.reason}`;grant(card.before,$('before'));grant(card.after,$('after'));$('details').textContent=JSON.stringify(card,null,2);$('review').hidden=false;
+  $('reason').textContent=`Motivo: ${card.reason}`;if(card.afterRoles){catalogue(card.beforeRoles,$('before'));catalogue(card.afterRoles,$('after'));}else{grant(card.before,$('before'));grant(card.after,$('after'));}$('details').textContent=JSON.stringify(card,null,2);$('review').hidden=false;
   controls(card.state==='PENDING');message(card.state==='PENDING'?'Verifica la modifica. Nessun permesso è ancora stato cambiato.':`Proposta ${card.state}. ${card.finalPolicyRef?'Policy pubblicata: '+card.finalPolicyRef:''}`);
  }
  async function decide(action){

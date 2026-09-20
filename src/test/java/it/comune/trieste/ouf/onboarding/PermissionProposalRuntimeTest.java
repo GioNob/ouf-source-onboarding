@@ -45,7 +45,7 @@ class PermissionProposalRuntimeTest {
  AuthorizationAdminService.Actor actor(PrincipalContext p){return new AuthorizationAdminService.Actor(p.subjectId(),p.tenantId(),"HUMAN","fixture:admin",UUID.randomUUID().toString(),p);}
  PrincipalContext person(String subject,String tenant,Set<String> roles,Set<String> scopes){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,null,"1",ISSUER,"gateway",scopes,new PrincipalContext.IdentityClaims(roles,"1",Set.of(),Instant.now()));}
  @BeforeEach void setup(){
-  db.sql("truncate ouf_authorization.permission_proposal,ouf_authorization.superadmin_history,ouf_authorization.superadmin_transfer,ouf_authorization.superadmin_binding,ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();
+  db.sql("truncate ouf_authorization.role_catalogue,ouf_authorization.permission_proposal,ouf_authorization.superadmin_history,ouf_authorization.superadmin_transfer,ouf_authorization.superadmin_binding,ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();
   now=Instant.now();root=person("admin","tenant-a",Set.of("ente:bootstrap"),Set.of("authorization.bootstrap","authorization.policy.admin"));proposer=person("giovanni","tenant-a",Set.of(),Set.of(PermissionProposalService.READ,PermissionProposalService.PROPOSE,PermissionProposalService.STATUS));
   descriptors=List.of(AuthorizationCapabilities.POLICY_ADMIN,new CapabilityDescriptor(PermissionProposalService.READ,"READ",PermissionProposalService.READ,Set.of(PrincipalContext.ActorType.HUMAN)),new CapabilityDescriptor(PermissionProposalService.PROPOSE,"COMMAND",PermissionProposalService.PROPOSE,Set.of(PrincipalContext.ActorType.HUMAN)),new CapabilityDescriptor(PermissionProposalService.STATUS,"READ",PermissionProposalService.STATUS,Set.of(PrincipalContext.ActorType.HUMAN)),new CapabilityDescriptor("ouf.system.status","READ","operations.status.read",Set.of(PrincipalContext.ActorType.HUMAN)));
   for(var c:descriptors)admin.register("authorization",c,actor(root));
@@ -160,4 +160,35 @@ class PermissionProposalRuntimeTest {
   assertThatThrownBy(()->proposals.decide(root,expired,0,new PermissionProposalService.Confirmation(card.proposedHash()),true)).hasMessage("AUTH_PROPOSAL_EXPIRED");assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
  }
 
+
+ OufRoleCatalogue.Snapshot catalogue(boolean assigned){
+  var role=new OufRoleCatalogue.Role("operator","Operatore",List.of(new OufRoleCatalogue.Permission("ouf.system.status",null)));
+  return new OufRoleCatalogue.Snapshot(ISSUER,List.of(role),assigned?List.of(new OufRoleCatalogue.Assignment("giovanni","operator","giovanni",null,now.minusSeconds(5),now.plusSeconds(3600)),new OufRoleCatalogue.Assignment("it-staff","operator",null,"ente:it",now.minusSeconds(5),now.plusSeconds(3600))):List.of());
+ }
+ @Test void roleCatalogueIsPublishedWithItsGrantsOnlyAfterThsConfirmation()throws Exception{
+  var change=new PermissionProposalService.Change("REPLACE_ROLES",null,null,"Assegnare operatore a persona e ruolo IAM",catalogue(true));
+  byte[] body=json.writeValueAsBytes(Map.of("Arguments",change));
+  var response=http.perform(post(API+"propose").header("X-OUF-Authorization-Receipt",receipt("propose",PermissionProposalService.PROPOSE,body,now.plusSeconds(30).getEpochSecond())).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk()).andReturn();
+  UUID id=UUID.fromString(json.readTree(response.getResponse().getContentAsString()).get("proposalId").asText());
+  assertThat(proposals.roleCatalogue(proposer).assignments()).isEmpty();
+  http.perform(get(THS+id).with(oauth2Login().clientRegistration(registration))).andExpect(status().isOk()).andExpect(jsonPath("$.card.afterRoles.assignments.length()").value(2));
+  var card=proposals.card(root,id);var confirm=json.writeValueAsString(new PermissionProposalService.Confirmation(card.proposedHash()));
+  http.perform(post(THS+id+"/confirm").with(oauth2Login().clientRegistration(registration)).with(csrf()).header("If-Match","\"0\"").contentType(MediaType.APPLICATION_JSON).content(confirm)).andExpect(status().isOk());
+  assertThat(proposals.roleCatalogue(proposer)).isEqualTo(catalogue(true));
+  var active=registry.load("permissions",2);assertThat(active.grants().stream().filter(g->g.grantId().startsWith(OufRoleCatalogue.PREFIX))).hasSize(2);
+  var tampered=new PolicyBundle("permissions",3,now,active.capabilities(),active.grants().stream().filter(g->!g.grantId().startsWith(OufRoleCatalogue.PREFIX)).toList());
+  assertThatThrownBy(()->admin.create(tampered,actor(root))).hasMessage("AUTH_ROLE_MANAGED_GRANTS_PROTECTED");
+  var revoke=proposals.propose(proposer,new PermissionProposalService.Change("REPLACE_ROLES",null,null,"Revoca assegnazioni",catalogue(false)),"revoke-roles");
+  var revCard=proposals.card(root,revoke.proposalId());proposals.decide(root,revoke.proposalId(),0,new PermissionProposalService.Confirmation(revCard.proposedHash()),true);
+  assertThat(proposals.roleCatalogue(proposer).assignments()).isEmpty();assertThat(registry.load("permissions",3).grants()).noneMatch(g->g.grantId().startsWith(OufRoleCatalogue.PREFIX));
+ }
+ @Test void rolePublicationRollbackAndStaleProposalsCannotChangeCatalogue(){
+  var change=new PermissionProposalService.Change("REPLACE_ROLES",null,null,"Role assignment",catalogue(true));
+  var proposal=proposals.propose(proposer,change,"roles-rollback");var card=proposals.card(root,proposal.proposalId());
+  new TransactionTemplate(transactions).executeWithoutResult(tx->{proposals.decide(root,proposal.proposalId(),0,new PermissionProposalService.Confirmation(card.proposedHash()),true);tx.setRollbackOnly();});
+  assertThat(proposals.roleCatalogue(proposer).assignments()).isEmpty();assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
+  var other=proposals.propose(proposer,change(),"independent");var otherCard=proposals.card(root,other.proposalId());proposals.decide(root,other.proposalId(),0,new PermissionProposalService.Confirmation(otherCard.proposedHash()),true);
+  assertThatThrownBy(()->proposals.decide(root,proposal.proposalId(),0,new PermissionProposalService.Confirmation(card.proposedHash()),true)).hasMessage("AUTH_ACTIVE_CHANGED_NEW_PROPOSAL_REQUIRED");
+  assertThat(proposals.roleCatalogue(proposer).assignments()).isEmpty();
+ }
 }
