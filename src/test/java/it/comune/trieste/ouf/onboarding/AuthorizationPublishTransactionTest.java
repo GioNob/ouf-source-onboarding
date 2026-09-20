@@ -27,7 +27,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest(properties = {
  "ouf.authorization.bootstrap.admin-issuer=fixture-issuer",
- "ouf.authorization.bootstrap.admin-subject=admin",
+ "ouf.authorization.bootstrap.superadmin-role=ente:bootstrap",
  "ouf.authorization.bootstrap.admin-tenant=tenant-a"
 })
 class AuthorizationPublishTransactionTest {
@@ -44,11 +44,11 @@ class AuthorizationPublishTransactionTest {
   @MockBean AuthorizationRuntimeSynchronizer runtimeSynchronizer;
 
   private final AuthorizationAdminService.Actor actor =
-      new AuthorizationAdminService.Actor("admin", "tenant-a", "HUMAN", "fixture:1", "tx-test", it.comune.trieste.ouf.authorization.TestAuthorization.principal("admin", "HUMAN", Set.of("authorization.bootstrap")).context());
+      new AuthorizationAdminService.Actor("admin", "tenant-a", "HUMAN", "fixture:1", "tx-test", SuperadminFixtures.principal("admin", "HUMAN", Set.of("authorization.bootstrap")).context());
 
   @BeforeEach
   void clean() {
-    db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
+    db.sql("truncate ouf_authorization.superadmin_history,ouf_authorization.superadmin_transfer,ouf_authorization.superadmin_binding,ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
     db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();
     reset(runtimeSynchronizer);
   }

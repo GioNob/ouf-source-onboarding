@@ -32,7 +32,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @SpringBootTest(properties = {
     "ouf.iam.enabled=true",
     "ouf.authorization.bootstrap.admin-issuer=https://auth.ouf-lab.it/realms/ouf",
-    "ouf.authorization.bootstrap.admin-subject=human:admin",
+    "ouf.authorization.bootstrap.superadmin-role=ente:bootstrap",
     "ouf.authorization.bootstrap.admin-tenant=ouf-lab",
     "ouf.iam.issuer=https://auth.ouf-lab.it/realms/ouf",
     "ouf.iam.audience=ouf-api-gateway",
@@ -55,7 +55,7 @@ class IamAuthorizationBootstrapIntegrationTest {
 
   @BeforeEach
   void clean() {
-    db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
+    db.sql("truncate ouf_authorization.superadmin_history,ouf_authorization.superadmin_transfer,ouf_authorization.superadmin_binding,ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
     db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();
   }
 
@@ -69,6 +69,7 @@ class IamAuthorizationBootstrapIntegrationTest {
     claims.put("ouf_actor_type", actor);
     claims.put("acr", "HUMAN".equals(actor) ? "urn:ouf:acr:human" : "client-credentials");
     claims.put("scope", scope);
+    claims.put("externalRoleRefs", List.of("ente:bootstrap"));
     if (clientIdentity) claims.put("client_id", "ouf-mcp-server");
     return new Jwt(
         "token",
@@ -112,11 +113,12 @@ class IamAuthorizationBootstrapIntegrationTest {
   }
 
   @Test
-  void anotherHumanWithBootstrapScopeCannotBecomeTheFirstAdministrator() throws Exception {
+  void humanWithoutDesignatedRoleCannotBootstrap() throws Exception {
     var original = token("HUMAN", "authorization.bootstrap", false);
     var claims = new HashMap<String, Object>(original.getClaims());
     claims.put("sub", "human:other");
     claims.put("ouf_subject", "human:other");
+    claims.put("externalRoleRefs", List.of("ente:other"));
     when(jwtDecoder.decode("other-human")).thenReturn(new Jwt("other-human", original.getIssuedAt(), original.getExpiresAt(), original.getHeaders(), claims));
     http.perform(post("/api/trusted-human/v1/authorization/capabilities")
         .header("Authorization", "Bearer other-human")

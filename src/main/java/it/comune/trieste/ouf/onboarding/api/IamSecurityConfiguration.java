@@ -86,7 +86,7 @@ public class IamSecurityConfiguration {
         throw new IllegalArgumentException("service principal claim is required");
       }
       Set<String> scopes = stringSet(jwt.getClaim("scope"));
-      Set<String> roles = stringSet(jwt.getClaim("external_role_refs"));
+      Set<String> roles = externalRoles(jwt);
       Set<String> amr = stringSet(jwt.getClaim("amr"));
       Instant authenticatedAt = instant(jwt.getClaim("auth_time"));
       var claims = new PrincipalContext.IdentityClaims(roles, acr, amr, authenticatedAt);
@@ -141,6 +141,27 @@ public class IamSecurityConfiguration {
       return Set.copyOf(result);
     }
     return Set.of();
+  }
+
+  private static Set<String> externalRoles(Jwt jwt) {
+    Object canonical=jwt.getClaim("externalRoleRefs"), legacy=jwt.getClaim("external_role_refs");
+    var roles=roleArray(canonical!=null?canonical:legacy);
+    if(canonical!=null && legacy!=null && !roles.equals(roleArray(legacy)))throw invalidRoles();
+    return roles;
+  }
+  private static org.springframework.security.oauth2.core.OAuth2AuthenticationException invalidRoles(){
+    return new org.springframework.security.oauth2.core.OAuth2AuthenticationException(new OAuth2Error("invalid_token","invalid external role claims",null));
+  }
+  private static Set<String> roleArray(Object raw){
+    if(raw==null)return Set.of();
+    if(!(raw instanceof Collection<?> values) || values.size()>32)throw invalidRoles();
+    var roles=new LinkedHashSet<String>();int length=0;
+    for(Object value:values){
+      if(!(value instanceof String role) || !it.comune.trieste.ouf.onboarding.authorization.BootstrapAdministrator.validRole(role) || !roles.add(role))throw invalidRoles();
+      length+=role.length()+1;
+    }
+    if(length>4097)throw invalidRoles();
+    return Set.copyOf(roles);
   }
 
   private static Instant instant(Object value) {

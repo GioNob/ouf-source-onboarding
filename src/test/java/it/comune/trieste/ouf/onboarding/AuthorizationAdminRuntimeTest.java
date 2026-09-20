@@ -23,7 +23,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 @SpringBootTest(properties = {
  "ouf.authorization.bootstrap.admin-issuer=fixture-issuer",
- "ouf.authorization.bootstrap.admin-subject=admin",
+ "ouf.authorization.bootstrap.superadmin-role=ente:bootstrap",
  "ouf.authorization.bootstrap.admin-tenant=tenant-a"
 }) @AutoConfigureMockMvc
 class AuthorizationAdminRuntimeTest {
@@ -32,20 +32,21 @@ class AuthorizationAdminRuntimeTest {
  @Autowired MockMvc http;@Autowired ObjectMapper json;@Autowired JdbcClient db;@Autowired AuthorizationPolicyRegistry registry;
  @MockBean AuthorizationRuntimeSynchronizer runtimeSynchronizer;
  private final String root="/api/trusted-human/v1/authorization";
- @BeforeEach void clean(){db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();}
- private RequestPostProcessor actor(String type,boolean writeProof){return r->{var caps=registry.active().isEmpty()?Set.of("authorization.bootstrap"):Set.of("authorization.policy.admin");TestAuthorization.bind(r,"admin",type,caps);r.setAttribute("ouf.statelessBearerWriteValidated",writeProof);return r;};}
+ @BeforeEach void clean(){db.sql("truncate ouf_authorization.superadmin_history,ouf_authorization.superadmin_transfer,ouf_authorization.superadmin_binding,ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();}
+ private RequestPostProcessor actor(String type,boolean writeProof){return r->{var caps=registry.active().isEmpty()?Set.of("authorization.bootstrap"):Set.of("authorization.policy.admin");TestAuthorization.bind(r,"admin",type,caps);r.setAttribute(ServletAuthorization.TRUSTED_PRINCIPAL,SuperadminFixtures.principal("admin",type,caps));r.setAttribute("ouf.statelessBearerWriteValidated",writeProof);return r;};}
  private CapabilityDescriptor cap(){return new CapabilityDescriptor("data.read","READ","data.read",Set.of(PrincipalContext.ActorType.HUMAN));}
  private CapabilityDescriptor adminCap(){return new CapabilityDescriptor("authorization.policy.admin","EXECUTE","authorization.policy.admin",Set.of(PrincipalContext.ActorType.HUMAN));}
  private PolicyBundle policy(long version){var now=Instant.now();return new PolicyBundle("admin-test",version,now,List.of(cap(),adminCap()),List.of(new Grant("bootstrap-admin","authorization.policy.admin","tenant-a","admin",null,null,now.minusSeconds(60),now.plusSeconds(3600)),new Grant("g1","data.read","tenant-a","reader",null,null,now.minusSeconds(60),now.plusSeconds(3600))));}
  private void register()throws Exception{http.perform(post(root+"/capabilities").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("ownerRef","authorization","descriptor",adminCap())))).andExpect(status().isCreated());http.perform(post(root+"/capabilities").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("ownerRef","udp","descriptor",cap())))).andExpect(status().isCreated());}
  private JsonNode create(long version)throws Exception{return json.readTree(http.perform(post(root+"/policies").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(policy(version)))).andExpect(status().isOk()).andExpect(header().string("ETag","\"0\"")).andReturn().getResponse().getContentAsByteArray());}
- @Test void bootstrapCannotCloseWithoutItsDesignatedAdministrator()throws Exception{
+ @Test void bootstrapPersistsRoleWithoutRequiringNominalGrant()throws Exception{
   register();var p=policy(1);
   var withoutAdmin=new PolicyBundle(p.bundleId(),p.version(),p.publishedAt(),p.capabilities(),p.grants().stream().filter(g->!g.capabilityId().equals("authorization.policy.admin")).toList());
   var draft=json.readTree(http.perform(post(root+"/policies").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(withoutAdmin))).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
-  http.perform(post(root+"/policies/"+draft.get("id").asText()+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isForbidden());
-  assertThat(admin.bootstrapOpen()).isTrue();assertThat(registry.active()).isEmpty();
-  assertThat(admin.get(java.util.UUID.fromString(draft.get("id").asText())).state()).isEqualTo("DRAFT");
+  http.perform(post(root+"/policies/"+draft.get("id").asText()+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isOk());
+  assertThat(admin.bootstrapOpen()).isFalse();assertThat(registry.active()).isPresent();
+  assertThat(db.sql("select role_ref from ouf_authorization.superadmin_binding").query(String.class).single()).isEqualTo("ente:bootstrap");
+  assertThat(admin.get(java.util.UUID.fromString(draft.get("id").asText())).state()).isEqualTo("PUBLISHED");
  }
  @Test void adminPublishAndRevocationAreVersionedAuditedAndImmutable()throws Exception{
   register();var draft=create(1);String id=draft.get("id").asText();
@@ -88,7 +89,7 @@ class AuthorizationAdminRuntimeTest {
   http.perform(post(root+"/policies").with(actor("HUMAN",true)).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(raw))).andExpect(status().isBadRequest());
  }
  @Test void concurrentPublishHasExactlyOneWinner()throws Exception{
-  register();var a=new it.comune.trieste.ouf.onboarding.authorization.AuthorizationAdminService.Actor("admin","tenant-a","HUMAN","fixture:1","concurrency",TestAuthorization.principal("admin","HUMAN",Set.of("authorization.bootstrap")).context());
+  register();var a=new it.comune.trieste.ouf.onboarding.authorization.AuthorizationAdminService.Actor("admin","tenant-a","HUMAN","fixture:1","concurrency",SuperadminFixtures.principal("admin","HUMAN",Set.of("authorization.bootstrap")).context());
   var first=admin.create(policy(1),a);var second=admin.create(policy(2),a);
   var start=new java.util.concurrent.CountDownLatch(1);
   try(var pool=java.util.concurrent.Executors.newFixedThreadPool(2)){
