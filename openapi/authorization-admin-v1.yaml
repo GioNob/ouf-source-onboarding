@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OUF Authorization administration",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "Trusted HUMAN authorization administration. Bootstrap designates a protected superadmin by trusted IAM issuer, tenant and organizational role. Ordinary policy bundles cannot modify that association. Role handover requires a version-bound proposal and confirmation by a verified holder of the target role. No MCP exposure; trusted write proof and authorization.policy.admin OAuth scope remain mandatory. See docs/OUF_ADMIN_BOOTSTRAP.md."
   },
   "security": [
@@ -811,6 +811,213 @@
           }
         ]
       }
+    },
+    "/api/trusted-human/v1/authorization/policies/{id}:preview": {
+      "post": {
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Non-authoritative review result; Cache-Control: no-store. No policy mutation; administrative audit only."
+          },
+          "400": {
+            "description": "Invalid or unknown input"
+          },
+          "403": {
+            "description": "Caller not authorized or scenario tenant mismatch"
+          },
+          "404": {
+            "description": "Draft unavailable in caller tenant"
+          },
+          "409": {
+            "description": "ACTIVE changed or draft not editable"
+          },
+          "412": {
+            "description": "Stale draft revision"
+          },
+          "413": {
+            "description": "Review diff over 200 changes or request over 5 MiB"
+          },
+          "428": {
+            "description": "Missing required revision/version pin"
+          }
+        },
+        "operationId": "preview_authorization_policy",
+        "description": "Owner HUMAN review only; not a publication, approval or IAM lookup. Requires current admin authority and trusted write proof.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/trusted-human/v1/authorization/policies/{id}:simulate": {
+      "post": {
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Non-authoritative review result; Cache-Control: no-store. No policy mutation; administrative audit only."
+          },
+          "400": {
+            "description": "Invalid or unknown input"
+          },
+          "403": {
+            "description": "Caller not authorized or scenario tenant mismatch"
+          },
+          "404": {
+            "description": "Draft unavailable in caller tenant"
+          },
+          "409": {
+            "description": "ACTIVE changed or draft not editable"
+          },
+          "412": {
+            "description": "Stale draft revision"
+          },
+          "413": {
+            "description": "Review diff over 200 changes or request over 5 MiB"
+          },
+          "428": {
+            "description": "Missing required revision/version pin"
+          }
+        },
+        "operationId": "simulate_authorization_policy",
+        "description": "Owner HUMAN review only; not a publication, approval or IAM lookup. Requires current admin authority and trusted write proof.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewScenario"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/trusted-human/v1/authorization/access": {
+      "get": {
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "responses": {
+          "200": {
+            "description": "Non-authoritative review result; Cache-Control: no-store. No policy mutation; administrative audit only."
+          },
+          "400": {
+            "description": "Invalid or unknown input"
+          },
+          "403": {
+            "description": "Caller not authorized or scenario tenant mismatch"
+          },
+          "404": {
+            "description": "Draft unavailable in caller tenant"
+          },
+          "409": {
+            "description": "ACTIVE changed or draft not editable"
+          },
+          "412": {
+            "description": "Stale draft revision"
+          },
+          "413": {
+            "description": "Review diff over 200 changes or request over 5 MiB"
+          },
+          "428": {
+            "description": "Missing required revision/version pin"
+          }
+        },
+        "operationId": "review_configured_grants",
+        "description": "Exactly one subjectId or externalRoleRef. Configured grants only, including expired/DENY; no inferred IAM role membership. Tenant fixed by caller. after requires matching policyRef. protectedRole is separate from ordinary grants.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subjectId",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "in": "query",
+            "name": "externalRoleRef",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "in": "query",
+            "name": "policyRef",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1167,6 +1374,173 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "ReviewScenario": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "hypotheticalPrincipal",
+          "resource",
+          "capabilityId",
+          "operation"
+        ],
+        "properties": {
+          "hypotheticalPrincipal": {
+            "type": "object",
+            "description": "Unverified hypothetical identity. Never used as the authenticated caller. Tenant must equal caller tenant.",
+            "additionalProperties": false,
+            "required": [
+              "subjectId",
+              "tenantId",
+              "actorType",
+              "authenticationContextRef",
+              "issuer",
+              "audience"
+            ],
+            "properties": {
+              "subjectId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "tenantId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "actorType": {
+                "enum": [
+                  "HUMAN",
+                  "SERVICE",
+                  "AI_AGENT"
+                ]
+              },
+              "servicePrincipalId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 256
+              },
+              "authenticationContextRef": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "issuer": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "audience": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "scopes": {
+                "type": "array",
+                "uniqueItems": true,
+                "maxItems": 128,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "claims": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "externalRoleRefs": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_:./-]{1,128}$"
+                    }
+                  },
+                  "acr": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "amr": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 128
+                    }
+                  },
+                  "authenticatedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          },
+          "resource": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "resourceType",
+              "tenantId"
+            ],
+            "properties": {
+              "resourceType": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "resourceId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 256
+              },
+              "tenantId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "organizationId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 256
+              },
+              "attributes": {
+                "type": "object",
+                "maxProperties": 64,
+                "propertyNames": {
+                  "maxLength": 128
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "maxLength": 1024
+                }
+              }
+            }
+          },
+          "capabilityId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "operation": {
+            "type": "string",
+            "maxLength": 32
           }
         }
       }

@@ -28,3 +28,12 @@ bootstrap latch, modify ordinary grants to impersonate superadmin, or edit the
 protected binding directly. A pending transfer leaves the current role active;
 cancel or replace an expired proposal and obtain a fresh target-role confirmation.
 The IAM authority remains responsible for identity recovery and role membership.
+
+## Review before authorization changes
+
+Use [AUTHORIZATION_REVIEW.md](AUTHORIZATION_REVIEW.md) to inspect configured grants,
+preview an exact draft revision and simulate a hypothetical context. A 409 means
+ACTIVE changed: reload/rebase through the governed lifecycle before reviewing
+again. A 412 means the draft revision changed. A 413 oversized diff must not be
+presented as a complete review. Simulation ALLOW is not an enforcement decision
+or proof of the user's real IAM memberships; never forward it as authorization.
