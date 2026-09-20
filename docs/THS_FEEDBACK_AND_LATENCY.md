@@ -68,6 +68,12 @@ Protocollo di misura successivo:
 Non introdurre retry automatici delle scritture, aumento cieco dei timeout, cache permissive, bypass del Gateway o rimozione di controlli Authorization per migliorare la latenza.
 
 
+### Misura strumentata della nuova sessione
+
+Una chiamata read-only a `ouf.operations.summary` eseguita dal connettore con l'identità `giovanni-chatgpt` è iniziata a `2026-09-20T20:17:49.919Z` ed è terminata a `2026-09-20T20:17:52.977Z`: **3055 ms** misurati attorno all'invocazione del tool. Il risultato è stato il diniego applicativo atteso `authorization denied`; non è stato creato né modificato alcun grant.
+
+Questa misura copre l'attesa della singola invocazione connettore osservabile dal chiamante, non il tempo totale di composizione della risposta ChatGPT. Deve ancora essere correlata con i log APISIX della stessa finestra UTC per separare pre-Gateway, Gateway/upstream e ritorno. Un diniego valido non va aggirato per ottenere un benchmark autorizzato: una futura lettura allow richiede un'assegnazione già autorizzata o una modifica approvata umanamente tramite THS.
+
 - THS tenant mapper must emit `tenant_id`, not `tenant-id`; the latter caused 403.
 - The `ouf-admin` account needs the trusted `ouf_actor_type=HUMAN` claim.
 - Multi-account connector calls require the actual account `link_id`; it is
