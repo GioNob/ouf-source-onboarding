@@ -19,4 +19,13 @@ class BootstrapAdministratorTest {
   assertThatThrownBy(()->bootstrap.requirePrincipal(p)).hasMessage("AUTH_BOOTSTRAP_SCOPE_REQUIRED");
   assertThatThrownBy(()->new BootstrapAdministrator("issuer","","tenant").requirePrincipal(p)).hasMessage("AUTH_BOOTSTRAP_ADMIN_NOT_CONFIGURED");
  }
+ @Test void nominalBootstrapDoesNotRequireAnOrganizationalRole(){
+  var nominal=new BootstrapAdministrator("issuer","","tenant","person-id");
+  var p=person("issuer","person-id","tenant",Set.of(),Set.of("authorization.bootstrap"));
+  assertThatCode(()->nominal.requirePrincipal(p)).doesNotThrowAnyException();
+  for(var wrong:Set.of(person("other","person-id","tenant",Set.of(),p.scopes()),person("issuer","other","tenant",Set.of(),p.scopes()),person("issuer","person-id","other",Set.of(),p.scopes())))
+   assertThatThrownBy(()->nominal.requirePrincipal(wrong)).hasMessage("AUTH_BOOTSTRAP_ADMIN_MISMATCH");
+  assertThatThrownBy(()->new BootstrapAdministrator("issuer","ente:director","tenant","person-id").requirePrincipal(p)).hasMessage("AUTH_BOOTSTRAP_ADMIN_NOT_CONFIGURED");
+  assertThatThrownBy(()->bootstrap.requirePrincipal(p)).hasMessage("AUTH_BOOTSTRAP_ADMIN_MISMATCH");
+ }
 }

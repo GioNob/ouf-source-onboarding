@@ -32,12 +32,12 @@ public class SuperadminApi {
   @ExceptionHandler(SecurityException.class) ResponseEntity<?> denied(SecurityException e){
     return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("code",e.getMessage()));
   }
-  public record Proposal(String targetRoleRef,String reason){}
+  public record Proposal(String targetRoleRef,String targetSubjectId,String reason){}
   @GetMapping("/superadmin") ResponseEntity<?> current(HttpServletRequest r){return binding(authority.current(principal(r,false)));}
   @PostMapping("/superadmin:adopt") ResponseEntity<?> adopt(HttpServletRequest r){return binding(authority.adopt(principal(r,true)));}
   @PostMapping("/superadmin/transfers") ResponseEntity<?> propose(@RequestHeader(value="If-Match",required=false)String etag,@RequestBody JsonNode raw,HttpServletRequest r){
     var p=principal(r,true);var body=policies.parse(raw,Proposal.class);
-    return transfer(authority.propose(p,revision(etag),body.targetRoleRef(),body.reason()));
+    return transfer(authority.propose(p,revision(etag),body.targetRoleRef(),body.targetSubjectId(),body.reason()));
   }
   @GetMapping("/superadmin/transfers/{id}") ResponseEntity<?> read(@PathVariable UUID id,HttpServletRequest r){return transfer(authority.read(id,principal(r,false)));}
   @PostMapping("/superadmin/transfers/{id}:accept") ResponseEntity<?> accept(@PathVariable UUID id,@RequestHeader(value="If-Match",required=false)String etag,HttpServletRequest r){return binding(authority.accept(id,revision(etag),principal(r,true)));}

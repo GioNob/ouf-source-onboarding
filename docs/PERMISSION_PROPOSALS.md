@@ -109,3 +109,11 @@ Proponente e approvatore possono essere la stessa persona se possiede entrambe l
 5. Proporre una modifica di prova; verificare PENDING e ACTIVE invariata. Aprire THS, confrontare i campi, confermare. Verificare PUBLISHED, nuova versione e grant effettivo. Provare anche rifiuto, scadenza/ACTIVE cambiata e assenza di scope.
 
 La CI esegue PostgreSQL reale, rollback/concorrenza/scadenza, CSRF e sessione OAuth2 simulata, interoperabilità Lua/JVM e browser Playwright. Il Gateway esegue anche APISIX reale con JWT/JWKS di test. Questo non sostituisce lo smoke test autenticato dell'installazione con IAM reale. Rollback applicativo conservando V27 e audit; eventuale revoca di un grant già pubblicato richiede una nuova operazione governata.
+
+## Superadmin senza modulo Organizzazione
+
+L'autorità protetta può essere designata tramite ruolo IAM o persona (`issuer`,
+`tenant`, `sub`). Il login THS nominale non richiede `externalRoleRefs`; quel claim
+serve quando la designazione è organizzativa. I permessi ordinari continuano a
+seguire il ciclo proposta, card, conferma e pubblicazione. Vedere
+[bootstrap e trasferimento](OUF_ADMIN_BOOTSTRAP.md).
