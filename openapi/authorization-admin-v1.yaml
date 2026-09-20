@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OUF Authorization administration",
-    "version": "1.0.0",
-    "description": "PET Authorization 1.5 sections 109.1-109.7. Platform policy administration via trusted HUMAN channel. No MCP exposure. Authentication and CSRF validation must be established by the deployment trusted adapter; headers are never authority. Bootstrap requires the installation-designated HUMAN principal (issuer, canonical subject, tenant). The first published policy must include an applicable nominal authorization.policy.admin grant for that principal; missing configuration or grant returns 403. Bootstrap remains permanently closed after the first successful publication. See docs/OUF_ADMIN_BOOTSTRAP.md."
+    "version": "1.1.0",
+    "description": "Trusted HUMAN authorization administration. Bootstrap designates a protected superadmin by trusted IAM issuer, tenant and organizational role. Ordinary policy bundles cannot modify that association. Role handover requires a version-bound proposal and confirmation by a verified holder of the target role. No MCP exposure; trusted write proof and authorization.policy.admin OAuth scope remain mandatory. See docs/OUF_ADMIN_BOOTSTRAP.md."
   },
   "security": [
     {
@@ -421,6 +421,396 @@
           }
         ]
       }
+    },
+    "/api/trusted-human/v1/authorization/superadmin": {
+      "get": {
+        "operationId": "get_superadmin",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-required-authority": "current protected role",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "description": "If-Match, when required, refers to the immutable transfer proposal revision. The proposal expires 15 minutes after creation.",
+        "responses": {
+          "200": {
+            "description": "Success with quoted revision ETag.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuperadminBinding"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload or ETag"
+          },
+          "401": {
+            "description": "Missing or invalid bearer"
+          },
+          "403": {
+            "description": "Wrong verified actor, role, issuer, authority, scope or write proof"
+          },
+          "404": {
+            "description": "Unknown or other-tenant transfer"
+          },
+          "409": {
+            "description": "Pending proposal, stale binding, terminal proposal, or already adopted"
+          },
+          "410": {
+            "description": "Proposal expired"
+          },
+          "412": {
+            "description": "Stale revision"
+          },
+          "428": {
+            "description": "If-Match missing"
+          }
+        }
+      }
+    },
+    "/api/trusted-human/v1/authorization/superadmin:adopt": {
+      "post": {
+        "operationId": "adopt_superadmin",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-required-authority": "configured role AND existing policy administrator, one time",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "description": "If-Match, when required, refers to the immutable transfer proposal revision. The proposal expires 15 minutes after creation.",
+        "responses": {
+          "200": {
+            "description": "Success with quoted revision ETag.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuperadminBinding"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload or ETag"
+          },
+          "401": {
+            "description": "Missing or invalid bearer"
+          },
+          "403": {
+            "description": "Wrong verified actor, role, issuer, authority, scope or write proof"
+          },
+          "404": {
+            "description": "Unknown or other-tenant transfer"
+          },
+          "409": {
+            "description": "Pending proposal, stale binding, terminal proposal, or already adopted"
+          },
+          "410": {
+            "description": "Proposal expired"
+          },
+          "412": {
+            "description": "Stale revision"
+          },
+          "428": {
+            "description": "If-Match missing"
+          }
+        }
+      }
+    },
+    "/api/trusted-human/v1/authorization/superadmin/transfers": {
+      "post": {
+        "operationId": "propose_superadmin_transfer",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-required-authority": "current protected role",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "description": "If-Match refers to the current binding revision.",
+        "responses": {
+          "200": {
+            "description": "Success with quoted revision ETag.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuperadminTransfer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload or ETag"
+          },
+          "401": {
+            "description": "Missing or invalid bearer"
+          },
+          "403": {
+            "description": "Wrong verified actor, role, issuer, authority, scope or write proof"
+          },
+          "404": {
+            "description": "Unknown or other-tenant transfer"
+          },
+          "409": {
+            "description": "Pending proposal, stale binding, terminal proposal, or already adopted"
+          },
+          "410": {
+            "description": "Proposal expired"
+          },
+          "412": {
+            "description": "Stale revision"
+          },
+          "428": {
+            "description": "If-Match missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuperadminTransferProposal"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/trusted-human/v1/authorization/superadmin/transfers/{id}": {
+      "get": {
+        "operationId": "read_superadmin_transfer",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-required-authority": "current or target role",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "description": "If-Match, when required, refers to the immutable transfer proposal revision. The proposal expires 15 minutes after creation.",
+        "responses": {
+          "200": {
+            "description": "Success with quoted revision ETag.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuperadminTransfer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload or ETag"
+          },
+          "401": {
+            "description": "Missing or invalid bearer"
+          },
+          "403": {
+            "description": "Wrong verified actor, role, issuer, authority, scope or write proof"
+          },
+          "404": {
+            "description": "Unknown or other-tenant transfer"
+          },
+          "409": {
+            "description": "Pending proposal, stale binding, terminal proposal, or already adopted"
+          },
+          "410": {
+            "description": "Proposal expired"
+          },
+          "412": {
+            "description": "Stale revision"
+          },
+          "428": {
+            "description": "If-Match missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/trusted-human/v1/authorization/superadmin/transfers/{id}:accept": {
+      "post": {
+        "operationId": "accept_superadmin_transfer",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-required-authority": "target role",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "description": "If-Match, when required, refers to the immutable transfer proposal revision. The proposal expires 15 minutes after creation.",
+        "responses": {
+          "200": {
+            "description": "Success with quoted revision ETag.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuperadminBinding"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload or ETag"
+          },
+          "401": {
+            "description": "Missing or invalid bearer"
+          },
+          "403": {
+            "description": "Wrong verified actor, role, issuer, authority, scope or write proof"
+          },
+          "404": {
+            "description": "Unknown or other-tenant transfer"
+          },
+          "409": {
+            "description": "Pending proposal, stale binding, terminal proposal, or already adopted"
+          },
+          "410": {
+            "description": "Proposal expired"
+          },
+          "412": {
+            "description": "Stale revision"
+          },
+          "428": {
+            "description": "If-Match missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/trusted-human/v1/authorization/superadmin/transfers/{id}:cancel": {
+      "post": {
+        "operationId": "cancel_superadmin_transfer",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-required-authority": "current protected role",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "description": "If-Match, when required, refers to the immutable transfer proposal revision. The proposal expires 15 minutes after creation.",
+        "responses": {
+          "200": {
+            "description": "Success with quoted revision ETag.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuperadminTransfer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload or ETag"
+          },
+          "401": {
+            "description": "Missing or invalid bearer"
+          },
+          "403": {
+            "description": "Wrong verified actor, role, issuer, authority, scope or write proof"
+          },
+          "404": {
+            "description": "Unknown or other-tenant transfer"
+          },
+          "409": {
+            "description": "Pending proposal, stale binding, terminal proposal, or already adopted"
+          },
+          "410": {
+            "description": "Proposal expired"
+          },
+          "412": {
+            "description": "Stale revision"
+          },
+          "428": {
+            "description": "If-Match missing"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -672,6 +1062,113 @@
           "capabilities",
           "grants"
         ]
+      },
+      "SuperadminBinding": {
+        "type": "object",
+        "required": [
+          "tenant",
+          "issuer",
+          "roleRef",
+          "revision"
+        ],
+        "properties": {
+          "tenant": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "roleRef": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "SuperadminTransferProposal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "targetRoleRef",
+          "reason"
+        ],
+        "properties": {
+          "targetRoleRef": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_:./-]{1,128}$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      },
+      "SuperadminTransfer": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant",
+          "issuer",
+          "sourceRole",
+          "targetRole",
+          "bindingRevision",
+          "revision",
+          "state",
+          "proposedBy",
+          "reason",
+          "expiresAt"
+        ],
+        "properties": {
+          "tenant": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "sourceRole": {
+            "type": "string"
+          },
+          "targetRole": {
+            "type": "string"
+          },
+          "proposedBy": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "bindingRevision": {
+            "type": "integer"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "ACCEPTED",
+              "CANCELLED"
+            ]
+          },
+          "acceptedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       }
     }
   }

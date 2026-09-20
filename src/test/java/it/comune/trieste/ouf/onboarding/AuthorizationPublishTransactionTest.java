@@ -109,6 +109,8 @@ class AuthorizationPublishTransactionTest {
     verifyNoInteractions(runtimeSynchronizer);
     assertThat(db.sql("select count(*) from ouf_authorization.active_policy_bundle").query(Long.class).single())
         .isZero();
+    assertThat(db.sql("select count(*) from ouf_authorization.superadmin_binding").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from ouf_authorization.superadmin_history").query(Long.class).single()).isZero();
     assertThat(db.sql("select completed from ouf_authorization.bootstrap_latch where singleton_key=true").query(Boolean.class).single())
         .isFalse();
   }

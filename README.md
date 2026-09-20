@@ -49,9 +49,10 @@ The machine-readable MCP-facing surface is defined in `openapi/onboarding-v1.yam
 
 It does not claim ownership of geospatial runtime ingestion, Authorization Policy Registry, the Ingestion Runtime implementation, the shared log store, or a production browser shell. Production IAM/session/CSRF/CSP/step-up controls and concrete Gateway/log-store/object-store routes remain environment bindings owned by Authorization, Gateway and platform operations.
 
-### Primo amministratore OUF
+### Superadmin OUF e bootstrap
 
-Il primo amministratore deve essere designato nella configurazione di bootstrap
-tramite issuer, subject canonico e tenant. Non serve un ruolo amministrativo OUF
-nell'IAM esterno. La prima policy deve attribuirgli un grant nominale attivo;
-vedere [configurazione e limiti dell'incremento](docs/OUF_ADMIN_BOOTSTRAP.md).
+Il bootstrap associa un ruolo organizzativo IAM, issuer e tenant all'autorità
+protetta di superadmin OUF. Gli admin ordinari non possono modificarla.
+Il superadmin può trasferirla con conferma di un titolare del ruolo destinatario.
+Configurazione, adozione sulle installazioni esistenti e contratto sono nella
+[guida di bootstrap e trasferimento](docs/OUF_ADMIN_BOOTSTRAP.md).

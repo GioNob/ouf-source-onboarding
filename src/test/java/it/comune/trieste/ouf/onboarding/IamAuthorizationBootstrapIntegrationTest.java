@@ -151,6 +151,44 @@ class IamAuthorizationBootstrapIntegrationTest {
   }
 
   @Test
+  void roleHandoverWorksThroughAuthenticatedBearerChain() throws Exception {
+    when(jwtDecoder.decode("bootstrap"))
+        .thenReturn(token("HUMAN", "authorization.bootstrap authorization.policy.admin", false));
+    String policy="{\"bundleId\":\"iam-role\",\"version\":1,\"publishedAt\":\"2026-09-20T00:00:00Z\",\"capabilities\":[],\"grants\":[]}";
+    var draft=json.readTree(http.perform(post("/api/trusted-human/v1/authorization/policies")
+        .header("Authorization","Bearer bootstrap").contentType(MediaType.APPLICATION_JSON).content(policy))
+        .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+    http.perform(post("/api/trusted-human/v1/authorization/policies/"+draft.get("id").asText()+":publish")
+        .header("Authorization","Bearer bootstrap").header("If-Match","\"0\""))
+        .andExpect(status().isOk());
+    var proposal=json.readTree(http.perform(post("/api/trusted-human/v1/authorization/superadmin/transfers")
+        .header("Authorization","Bearer bootstrap").header("If-Match","\"0\"")
+        .contentType(MediaType.APPLICATION_JSON).content("{\"targetRoleRef\":\"ente:director\",\"reason\":\"installation completed\"}"))
+        .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+    var base=token("HUMAN","authorization.policy.admin",false);
+    var claims=new HashMap<String,Object>(base.getClaims());claims.put("sub","director");claims.put("ouf_subject","director");claims.put("externalRoleRefs",List.of("ente:director"));
+    when(jwtDecoder.decode("director")).thenReturn(new Jwt("director",base.getIssuedAt(),base.getExpiresAt(),base.getHeaders(),claims));
+    http.perform(post("/api/trusted-human/v1/authorization/superadmin/transfers/"+proposal.get("id").asText()+":accept")
+        .header("Authorization","Bearer director").header("If-Match","\"0\""))
+        .andExpect(status().isOk());
+    http.perform(get("/api/trusted-human/v1/authorization/superadmin").header("Authorization","Bearer bootstrap")).andExpect(status().isForbidden());
+    http.perform(get("/api/trusted-human/v1/authorization/superadmin").header("Authorization","Bearer director")).andExpect(status().isOk());
+  }
+
+  @Test
+  void conflictingOrMalformedRoleClaimsAreRejected() throws Exception {
+    var base=token("HUMAN","authorization.bootstrap",false);
+    for(Object roles:List.of("ente:bootstrap",List.of("ente:bootstrap","ente:bootstrap"),List.of(42))) {
+      var claims=new HashMap<String,Object>(base.getClaims());claims.put("externalRoleRefs",roles);
+      when(jwtDecoder.decode("malformed")).thenReturn(new Jwt("malformed",base.getIssuedAt(),base.getExpiresAt(),base.getHeaders(),claims));
+      http.perform(get("/api/trusted-human/v1/authorization/capabilities").header("Authorization","Bearer malformed")).andExpect(status().isUnauthorized());
+    }
+    var claims=new HashMap<String,Object>(base.getClaims());claims.put("external_role_refs",List.of("ente:other"));
+    when(jwtDecoder.decode("conflicting")).thenReturn(new Jwt("conflicting",base.getIssuedAt(),base.getExpiresAt(),base.getHeaders(),claims));
+    http.perform(get("/api/trusted-human/v1/authorization/capabilities").header("Authorization","Bearer conflicting")).andExpect(status().isUnauthorized());
+  }
+
+  @Test
   void invalidBearerTokenReturns401() throws Exception {
     when(jwtDecoder.decode("invalid"))
         .thenThrow(new BadJwtException("invalid token"));
