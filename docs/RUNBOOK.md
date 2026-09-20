@@ -37,3 +37,7 @@ ACTIVE changed: reload/rebase through the governed lifecycle before reviewing
 again. A 412 means the draft revision changed. A 413 oversized diff must not be
 presented as a complete review. Simulation ALLOW is not an enforcement decision
 or proof of the user's real IAM memberships; never forward it as authorization.
+
+## Chatbot e THS per i permessi
+
+Configurazione IAM, sessione, chiavi, ciclo proposta/conferma e collaudo: [guida operativa](PERMISSION_PROPOSALS.md).

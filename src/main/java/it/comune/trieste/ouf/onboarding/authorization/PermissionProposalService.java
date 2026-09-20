@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class PermissionProposalService {
  public static final String READ="authorization.permissions.read", PROPOSE="authorization.permissions.propose", STATUS="authorization.proposal.read";
+ @org.springframework.beans.factory.annotation.Value("${ouf.authorization.ths.public-origin:}") private String publicOrigin;
  private final JdbcClient db;private final ObjectMapper json;private final CanonicalHash hash;
  private final AuthorizationPolicyRegistry registry;private final AuthorizationAdminService admin;private final AuthorizationReviewService review;private final SuperadminAuthority authority;
  public PermissionProposalService(JdbcClient db,ObjectMapper json,CanonicalHash hash,AuthorizationPolicyRegistry registry,AuthorizationAdminService admin,AuthorizationReviewService review,SuperadminAuthority authority){this.db=db;this.json=json;this.hash=hash;this.registry=registry;this.admin=admin;this.review=review;this.authority=authority;}
@@ -45,7 +46,13 @@ public class PermissionProposalService {
  }
  private Proposal load(UUID id,String tenant){return db.sql("select * from ouf_authorization.permission_proposal where proposal_id=:id and tenant_id=:tenant").param("id",id).param("tenant",tenant).query((r,n)->new Proposal(r.getObject("proposal_id",UUID.class),r.getString("tenant_id"),r.getString("proposed_by"),r.getString("request_hash"),r.getString("base_active_ref"),r.getString("base_hash"),r.getString("proposed_hash"),decode(r.getString("proposed_policy"),PolicyBundle.class),decode(r.getString("change_payload"),Change.class),r.getString("state"),r.getLong("revision"),r.getTimestamp("expires_at").toInstant(),r.getString("final_policy_ref"))).optional().orElseThrow(()->fail(HttpStatus.NOT_FOUND,"AUTH_PROPOSAL_NOT_FOUND"));}
  private String state(Proposal q){return q.state().equals("PENDING")&&!now().isBefore(q.expires())?"EXPIRED":q.state();}
- private Receipt receipt(Proposal q){return new Receipt(q.id(),q.revision(),state(q),q.expires(),"/trusted-human/authorization/?proposal="+q.id(),q.finalRef());}
+ private String approvalPath(UUID id){
+  if(publicOrigin==null||publicOrigin.isBlank())throw fail(HttpStatus.SERVICE_UNAVAILABLE,"AUTH_THS_ORIGIN_REQUIRED");
+  var uri=java.net.URI.create(publicOrigin);
+  if(!"https".equals(uri.getScheme())||uri.getHost()==null||uri.getRawUserInfo()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null||(uri.getPath()!=null&&!uri.getPath().isEmpty()&&!uri.getPath().equals("/")))throw new IllegalStateException("invalid THS HTTPS origin");
+  return publicOrigin.replaceAll("/+$","")+"/trusted-human/authorization/?proposal="+id;
+ }
+ private Receipt receipt(Proposal q){return new Receipt(q.id(),q.revision(),state(q),q.expires(),approvalPath(q.id()),q.finalRef());}
  @Transactional public Receipt propose(PrincipalContext p,Change change,String idempotency){
   var active=delegated(p,PROPOSE,"COMMAND");validate(change,p);
   if(idempotency==null||!idempotency.matches("[A-Za-z0-9_.:-]{1,128}"))throw new IllegalArgumentException("AUTH_IDEMPOTENCY_REQUIRED");

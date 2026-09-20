@@ -14,7 +14,7 @@ public class PermissionProposalApi {
  public PermissionProposalApi(PermissionDelegationVerifier verifier,PermissionProposalService service,AuthorizationAdminService admin,ObjectMapper json){this.verifier=verifier;this.service=service;this.admin=admin;this.json=json;}
  public record Query(String subjectId,String externalRoleRef,Integer limit,String after,String policyRef){}
  public record Status(UUID proposalId){}
- private <T>T body(byte[] raw,Class<T> type){try{return admin.parse(json.readTree(raw),type);}catch(java.io.IOException e){throw new IllegalArgumentException("invalid body",e);}}
+ private <T>T body(byte[] raw,Class<T> type){try{return admin.parse(json.readTree(raw).required("Arguments"),type);}catch(java.io.IOException e){throw new IllegalArgumentException("invalid body",e);}}
  private PermissionDelegationVerifier.Delegated caller(HttpServletRequest r,byte[] raw,String cap){return verifier.verify(r.getHeader("X-OUF-Authorization-Receipt"),r.getRequestURI(),cap,raw);}
  @PostMapping("/read") Object read(@RequestBody byte[] raw,HttpServletRequest r){var p=caller(r,raw,PermissionProposalService.READ).principal();var q=body(raw,Query.class);return service.access(p,q.subjectId(),q.externalRoleRef(),q.limit()==null?100:q.limit(),q.after(),q.policyRef());}
  @PostMapping("/propose") Object propose(@RequestBody byte[] raw,HttpServletRequest r){var d=caller(r,raw,PermissionProposalService.PROPOSE);return service.propose(d.principal(),body(raw,PermissionProposalService.Change.class),d.idempotencyKey());}

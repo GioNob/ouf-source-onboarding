@@ -32,7 +32,7 @@ import org.springframework.security.oauth2.core.*;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.TransactionTemplate;
 
-@SpringBootTest(properties={"ouf.authorization.bootstrap.admin-issuer=https://fixture/realms/ouf","ouf.authorization.bootstrap.superadmin-role=ente:bootstrap","ouf.authorization.bootstrap.admin-tenant=tenant-a","ouf.iam.enabled=true","ouf.iam.issuer=https://fixture/realms/ouf","ouf.iam.audience=gateway","ouf.authorization.ths.enabled=true","spring.security.oauth2.client.registration.ouf-ths.provider=fixture","spring.security.oauth2.client.registration.ouf-ths.client-id=ouf-ths","spring.security.oauth2.client.registration.ouf-ths.client-secret=test-only","spring.security.oauth2.client.registration.ouf-ths.authorization-grant-type=authorization_code","spring.security.oauth2.client.registration.ouf-ths.redirect-uri={baseUrl}/login/oauth2/code/{registrationId}","spring.security.oauth2.client.registration.ouf-ths.scope=openid,authorization.policy.admin","spring.security.oauth2.client.provider.fixture.authorization-uri=https://fixture/authorize","spring.security.oauth2.client.provider.fixture.token-uri=https://fixture/token","spring.security.oauth2.client.provider.fixture.jwk-set-uri=https://fixture/jwks","spring.security.oauth2.client.provider.fixture.user-info-uri=https://fixture/userinfo","spring.security.oauth2.client.provider.fixture.user-name-attribute=sub"})
+@SpringBootTest(properties={"ouf.authorization.ths.public-origin=https://ouf.test","ouf.authorization.bootstrap.admin-issuer=https://fixture/realms/ouf","ouf.authorization.bootstrap.superadmin-role=ente:bootstrap","ouf.authorization.bootstrap.admin-tenant=tenant-a","ouf.iam.enabled=true","ouf.iam.issuer=https://fixture/realms/ouf","ouf.iam.audience=gateway","ouf.authorization.ths.enabled=true","spring.security.oauth2.client.registration.ouf-ths.provider=fixture","spring.security.oauth2.client.registration.ouf-ths.client-id=ouf-ths","spring.security.oauth2.client.registration.ouf-ths.client-secret=test-only","spring.security.oauth2.client.registration.ouf-ths.authorization-grant-type=authorization_code","spring.security.oauth2.client.registration.ouf-ths.redirect-uri={baseUrl}/login/oauth2/code/{registrationId}","spring.security.oauth2.client.registration.ouf-ths.scope=openid,authorization.policy.admin","spring.security.oauth2.client.provider.fixture.authorization-uri=https://fixture/authorize","spring.security.oauth2.client.provider.fixture.token-uri=https://fixture/token","spring.security.oauth2.client.provider.fixture.jwk-set-uri=https://fixture/jwks","spring.security.oauth2.client.provider.fixture.user-info-uri=https://fixture/userinfo","spring.security.oauth2.client.provider.fixture.user-name-attribute=sub"})
 @AutoConfigureMockMvc
 class PermissionProposalRuntimeTest {
  static final String KEY="ab".repeat(32), ISSUER="https://fixture/realms/ouf", API="/api/internal/v1/authorization/permissions/", THS="/trusted-human/authorization/api/proposals/";
@@ -61,7 +61,7 @@ class PermissionProposalRuntimeTest {
   String payload=Base64.getUrlEncoder().withoutPadding().encodeToString(json.writeValueAsBytes(map));Mac mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(KEY.getBytes(StandardCharsets.US_ASCII),"HmacSHA256"));return payload+"."+Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(("ouf-authorization-owner-v1."+payload).getBytes(StandardCharsets.US_ASCII)));
  }
  @Test void delegatedHttpProposalThenSessionThsConfirmationPublishesExactlyOnce()throws Exception{
-  byte[] body=json.writeValueAsBytes(change());String proof=receipt("propose",PermissionProposalService.PROPOSE,body,now.plusSeconds(30).getEpochSecond());
+  byte[] body=json.writeValueAsBytes(Map.of("Arguments",change()));String proof=receipt("propose",PermissionProposalService.PROPOSE,body,now.plusSeconds(30).getEpochSecond());
   var response=http.perform(post(API+"propose").header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk()).andReturn();
   var result=json.readTree(response.getResponse().getContentAsString());UUID id=UUID.fromString(result.get("proposalId").asText());assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
   http.perform(get(THS+id).with(oauth2Login().clientRegistration(registration))).andExpect(status().isOk()).andExpect(jsonPath("$.card.after.subjectId").value("giovanni")).andExpect(jsonPath("$.csrfToken").isNotEmpty());
@@ -73,7 +73,7 @@ class PermissionProposalRuntimeTest {
   assertThat(proposals.status(proposer,id).finalPolicyRef()).isEqualTo("permissions:2");
  }
  @Test void receiptCannotBeForgedMovedOrReusedWithDifferentArguments()throws Exception{
-  byte[] body=json.writeValueAsBytes(change());var proof=receipt("propose",PermissionProposalService.PROPOSE,body,now.plusSeconds(30).getEpochSecond());
+  byte[] body=json.writeValueAsBytes(Map.of("Arguments",change()));var proof=receipt("propose",PermissionProposalService.PROPOSE,body,now.plusSeconds(30).getEpochSecond());
   http.perform(post(API+"propose").contentType(MediaType.APPLICATION_JSON).content(body).header("X-OUF-Gateway-Verified","true")).andExpect(status().isForbidden());
   http.perform(post(API+"propose").header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isForbidden());
   http.perform(post(API+"read").header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
@@ -112,4 +112,20 @@ class PermissionProposalRuntimeTest {
   var former=person("admin","tenant-a",Set.of(),Set.of("authorization.policy.admin"));
   assertThatThrownBy(()->proposals.decide(former,r.proposalId(),0,new PermissionProposalService.Confirmation(c.proposedHash()),true)).hasMessage("AUTH_ADMIN_REQUIRED");
  }
+ @Test void gatewayLuaReceiptIsAcceptedByJvmOwner() throws Exception {
+  String repo=System.getenv("OUF_GATEWAY_PAIRWISE_ROOT");
+  org.junit.jupiter.api.Assumptions.assumeTrue(repo!=null,"Gateway pairwise fixture runs in CI");
+  var builder=new ProcessBuilder("python3",repo+"/tests/permission_receipt_fixture.py");builder.environment().put("PYTHONPATH",repo);builder.redirectError(ProcessBuilder.Redirect.INHERIT);
+  var process=builder.start();try(var input=process.getOutputStream()){input.write(json.writeValueAsBytes(Map.of("issuer",ISSUER,"change",change())));}
+  var output=process.getInputStream().readAllBytes();assertThat(process.waitFor()).isZero();var fixture=json.readTree(output);
+  http.perform(post(API+"propose").header("X-OUF-Authorization-Receipt",fixture.get("receipt").asText()).contentType(MediaType.APPLICATION_JSON).content(fixture.get("body").asText())).andExpect(status().isOk()).andExpect(jsonPath("$.approvalPath").value(org.hamcrest.Matchers.startsWith("https://ouf.test/trusted-human/authorization/")));
+  assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
+ }
+ @Test void expiredProposalCannotPublish() {
+  var original=proposals.propose(proposer,change(),"expiry");UUID expired=UUID.randomUUID();
+  db.sql("insert into ouf_authorization.permission_proposal select (jsonb_populate_record(null::ouf_authorization.permission_proposal,to_jsonb(p)||jsonb_build_object('proposal_id',cast(:id as text),'idempotency_key','expired-copy','expires_at',clock_timestamp()-interval '1 second'))).* from ouf_authorization.permission_proposal p where proposal_id=:old").param("id",expired).param("old",original.proposalId()).update();
+  var card=proposals.card(root,expired);assertThat(card.state()).isEqualTo("EXPIRED");
+  assertThatThrownBy(()->proposals.decide(root,expired,0,new PermissionProposalService.Confirmation(card.proposedHash()),true)).hasMessage("AUTH_PROPOSAL_EXPIRED");assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
+ }
+
 }
