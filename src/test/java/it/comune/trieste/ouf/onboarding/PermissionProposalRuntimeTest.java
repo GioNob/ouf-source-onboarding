@@ -60,6 +60,38 @@ class PermissionProposalRuntimeTest {
   var map=new LinkedHashMap<String,Object>();map.put("v",1);map.put("purpose","authorization-proposal-owner");map.put("method","POST");map.put("path",API+mode);map.put("bodyHash",HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body)));map.put("capability",cap);map.put("iat",now.getEpochSecond());map.put("exp",expiry);map.put("issuer",ISSUER);map.put("audience","gateway");map.put("workload","ouf-mcp-server");map.put("subject","giovanni");map.put("tenant","tenant-a");map.put("acr","1");map.put("roles","");map.put("scope",String.join(" ",proposer.scopes()));map.put("idempotencyKey","tool-attempt");
   String payload=Base64.getUrlEncoder().withoutPadding().encodeToString(json.writeValueAsBytes(map));Mac mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(KEY.getBytes(StandardCharsets.US_ASCII),"HmacSHA256"));return payload+"."+Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(("ouf-authorization-owner-v1."+payload).getBytes(StandardCharsets.US_ASCII)));
  }
+ @Test void confidentialThsLoginUsesS256AndKeepsVerifierForTokenExchange()throws Exception{
+  assertThat(registration.getClientSecret()).isNotBlank();
+  assertThat(registration.getClientAuthenticationMethod()).isEqualTo(ClientAuthenticationMethod.CLIENT_SECRET_BASIC);
+  var response=http.perform(get("/oauth2/authorization/ouf-ths")).andExpect(status().is3xxRedirection()).andReturn();
+  String location=response.getResponse().getRedirectedUrl();
+  var query=org.springframework.web.util.UriComponentsBuilder.fromUriString(location).build().getQueryParams();
+  assertThat(query.getFirst("code_challenge_method")).isEqualTo("S256");
+  assertThat(query.getFirst("state")).isNotBlank();
+  assertThat(query).doesNotContainKey("code_verifier").doesNotContainKey("client_secret");
+  var callback=new org.springframework.mock.web.MockHttpServletRequest();
+  callback.setSession(response.getRequest().getSession(false));
+  callback.setParameter("state",java.net.URLDecoder.decode(query.getFirst("state"),StandardCharsets.UTF_8));
+  var saved=new org.springframework.security.oauth2.client.web.HttpSessionOAuth2AuthorizationRequestRepository().loadAuthorizationRequest(callback);
+  assertThat(saved).isNotNull();
+  String verifier=saved.getAttribute("code_verifier");
+  assertThat(verifier).matches("[A-Za-z0-9._~-]{43,128}");
+  String challenge=Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
+  assertThat(query.getFirst("code_challenge")).isEqualTo(challenge);
+  assertThat(location).doesNotContain(verifier).doesNotContain(registration.getClientSecret());
+  var authorizationResponse=org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationResponse.success("fixture-code")
+    .redirectUri(saved.getRedirectUri()).state(saved.getState()).build();
+  var exchange=new org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationExchange(saved,authorizationResponse);
+  var grant=new org.springframework.security.oauth2.client.endpoint.OAuth2AuthorizationCodeGrantRequest(registration,exchange);
+  var tokenRequest=new org.springframework.security.oauth2.client.endpoint.OAuth2AuthorizationCodeGrantRequestEntityConverter().convert(grant);
+  assertThat(tokenRequest).isNotNull();
+  var form=(org.springframework.util.MultiValueMap<?,?>)tokenRequest.getBody();
+  assertThat(form).isNotNull();
+  assertThat(form.get("code_verifier")).isEqualTo(List.of(verifier));
+  var second=http.perform(get("/oauth2/authorization/ouf-ths")).andExpect(status().is3xxRedirection()).andReturn();
+  var nextQuery=org.springframework.web.util.UriComponentsBuilder.fromUriString(second.getResponse().getRedirectedUrl()).build().getQueryParams();
+  assertThat(nextQuery.getFirst("code_challenge")).isNotEqualTo(challenge);
+ }
  @Test void delegatedHttpProposalThenSessionThsConfirmationPublishesExactlyOnce()throws Exception{
   byte[] body=json.writeValueAsBytes(Map.of("Arguments",change()));String proof=receipt("propose",PermissionProposalService.PROPOSE,body,now.plusSeconds(30).getEpochSecond());
   var response=http.perform(post(API+"propose").header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk()).andReturn();

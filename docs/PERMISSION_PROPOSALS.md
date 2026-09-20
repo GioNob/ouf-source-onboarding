@@ -27,6 +27,7 @@ Sul client chatbot assegnare i tre client scope sopra, con `Include in token sco
 Creare un client OIDC separato e riservato al backend THS, ad esempio `ouf-authorization-ths`:
 
 - Client authentication ON; Standard flow ON; Direct access grants e implicit flow OFF.
+- Require PKCE ON, metodo S256. Il backend THS abilita esplicitamente PKCE anche per il client riservato: il secret autentica l'applicazione, il verifier lega il codice alla richiesta originaria. Il verifier resta nella sessione server e non nel redirect al browser.
 - Valid redirect URI esatta: `https://HOST_OUF/login/oauth2/code/ouf-ths`, senza wildcard.
 - Scope `openid` e `authorization.policy.admin`; access token con audience Gateway, `tenant_id`, `ouf_actor_type=HUMAN`, `acr`, `externalRoleRefs` canonici. I mapper e il ruolo organizzativo provengono dall'IAM dell'Ente.
 - Il client secret rimane sul server Onboarding. Non inserirlo nel plugin chatbot o in JavaScript.
@@ -34,6 +35,16 @@ Creare un client OIDC separato e riservato al backend THS, ad esempio `ouf-autho
 Il nome della registration Spring è **ouf-ths**, indipendentemente dal client-id IAM. L'utente apre il link di approvazione: il backend avvia il login e conserva l'access token nella sessione lato server. Nel browser resta solo il cookie di sessione. Una sessione IAM SSO esistente può evitare un nuovo inserimento delle credenziali; non si presume una nuova MFA a ogni click.
 
 ## Configurazione Onboarding
+
+### Correzione del profilo iniziale e ordine di attivazione
+
+L'immagine `ouf-onboarding:72ccc2c` inizialmente preparata non abilita esplicitamente PKCE per il client riservato. Non attivare quella versione come profilo conforme al PET Authorization §6.1 (Authorization Code + PKCE). Preparare l'immagine contenente la correzione e poi imporre PKCE S256 sul client Keycloak, prima del collaudo umano. L'indicazione precedente di lasciare Require PKCE OFF è superata. Client ID, secret, callback e mapper rimangono validi.
+
+Per il laboratorio sono già stati confermati: secret autenticato da Keycloak, file `/opt/ouf/secrets/onboarding-ths.yaml` e chiave owner leggibili da UID/GID 10003:10003. La verifica di introspezione con token fittizio deve restituire HTTP 200 e `active:false`: verifica le credenziali del client, non il login umano o i grant OUF. HTTP 401 non autorizza a procedere; correggere il valore e verificarlo prima di sostituire il file. Non stampare né inviare secret in chat.
+
+Il file YAML può essere scritto come JSON (sottoinsieme YAML); montarlo read-only e caricarlo con `SPRING_CONFIG_ADDITIONAL_LOCATION=file:/run/secrets/onboarding-ths.yaml`. Conservare le variabili IAM/database già presenti nel container. Il solo file non modifica il servizio in esecuzione. Prima dello switch conservare backup di configurazione e database; mantenere il container precedente per rollback applicativo senza cancellare migrazioni, audit o proposte.
+
+Controllo PKCE: avviare il login e verificare `code_challenge_method=S256` e un `code_challenge` nel redirect IAM, senza `code_verifier` o secret. Completare il login con PKCE imposto su Keycloak. Il test runtime verifica il redirect della catena reale, la correlazione SHA-256 col verifier della sessione e il suo invio nella richiesta token; non sostituisce il collaudo con IAM reale.
 
 Esempio di configurazione applicativa, sostituire host/issuer/client e usare il secret manager dell'installazione per `THS_CLIENT_SECRET`:
 
