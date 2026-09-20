@@ -32,7 +32,7 @@ class SuperadminTransferRuntimeTest {
  @MockBean AuthorizationRuntimeSynchronizer runtime;
  private static final String ROOT="/api/trusted-human/v1/authorization";
  private PrincipalContext person(String subject,String role){return person(subject,role,"tenant-a","fixture-issuer");}
- private PrincipalContext person(String subject,String role,String tenant,String issuer){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,null,"auth",issuer,"aud",Set.of("authorization.bootstrap","authorization.policy.admin"),new PrincipalContext.IdentityClaims(Set.of(role),"1",Set.of(),Instant.now()));}
+ private PrincipalContext person(String subject,String role,String tenant,String issuer){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,null,"auth",issuer,"aud",Set.of("authorization.bootstrap","authorization.policy.admin"),new PrincipalContext.IdentityClaims(role==null?Set.of():Set.of(role),"1",Set.of(),Instant.now()));}
  private PrincipalContext installer(){return person("installer","ente:bootstrap");}
  private PrincipalContext successor(){return person("director","ente:director");}
  private AuthorizationAdminService.Actor actor(PrincipalContext p){return new AuthorizationAdminService.Actor(p.subjectId(),p.tenantId(),"HUMAN","test:authority",UUID.randomUUID().toString(),p);}
@@ -122,5 +122,30 @@ class SuperadminTransferRuntimeTest {
   assertThat(authority.adopt(installer()).roleRef()).isEqualTo("ente:bootstrap");
   assertThatThrownBy(()->authority.adopt(installer())).hasMessage("AUTH_SUPERADMIN_ALREADY_CONFIGURED");
   assertThat(admin.bootstrapOpen()).isFalse();
+ }
+ @Test void roleToPersonAndBackPreservesAuthorityUntilAcceptance() throws Exception {
+  boot();var nominee=person("nominee",null);
+  var result=http.perform(post(ROOT+"/superadmin/transfers").with(request(installer(),true)).header("If-Match","\"0\"").contentType(MediaType.APPLICATION_JSON)
+   .content("{\"targetSubjectId\":\"nominee\",\"reason\":\"retire organization module\"}"))
+   .andExpect(status().isOk()).andReturn();
+  var id=UUID.fromString(json.readTree(result.getResponse().getContentAsString()).get("id").asText());
+  assertThat(authority.isSuperadmin(installer())).isTrue();assertThat(authority.isSuperadmin(nominee)).isFalse();
+  assertThatThrownBy(()->authority.accept(id,0,person("other",null))).hasMessage("AUTH_TARGET_SUBJECT_REQUIRED");
+  assertThatThrownBy(()->authority.accept(id,0,person("nominee",null,"tenant-a","other-issuer"))).hasMessage("AUTH_TARGET_SUBJECT_REQUIRED");
+  new TransactionTemplate(transactions).executeWithoutResult(tx->{authority.accept(id,0,nominee);tx.setRollbackOnly();});
+  assertThat(authority.isSuperadmin(installer())).isTrue();
+  var binding=authority.accept(id,0,nominee);
+  assertThat(binding.subjectId()).isEqualTo("nominee");assertThat(binding.roleRef()).isNull();
+  assertThat(authority.isSuperadmin(installer())).isFalse();assertThat(authority.isSuperadmin(nominee)).isTrue();
+  var next=authority.propose(nominee,1,"ente:director",null,"restore role designation");
+  authority.accept(next.id(),0,successor());
+  assertThat(authority.isSuperadmin(nominee)).isFalse();assertThat(authority.isSuperadmin(successor())).isTrue();
+  assertThat(authority.binding("tenant-a").orElseThrow().subjectId()).isNull();
+ }
+ @Test void ambiguousOrEmptySuccessorDoesNotCreateTransfer(){
+  boot();
+  assertThatThrownBy(()->authority.propose(installer(),0,"ente:director","nominee","both")).hasMessage("AUTH_TRANSFER_INVALID");
+  assertThatThrownBy(()->authority.propose(installer(),0,null,null,"neither")).hasMessage("AUTH_TRANSFER_INVALID");
+  assertThat(db.sql("select count(*) from ouf_authorization.superadmin_transfer").query(Long.class).single()).isZero();
  }
 }

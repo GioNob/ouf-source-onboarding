@@ -1,3 +1,59 @@
+## Estensione approvata: superadmin nominale o organizzativo
+
+Il bootstrap e il trasferimento ammettono esattamente una designazione:
+- ruolo organizzativo attestato dall'IAM (`superadmin-role`);
+- persona identificata dall'IAM (`superadmin-subject`, valore esatto del claim `sub`).
+
+Entrambe restano circoscritte a `admin-issuer` e `admin-tenant`. OUF non crea
+utenti, password o una directory organizzativa. La modalità nominale non richiede
+il modulo Organizzazione né un claim di ruolo esterno. Email e nomi non sono
+identificatori autorizzativi. Configurare entrambi i selettori è un errore;
+la scomparsa dei ruoli IAM non attiva alcun fallback nominale.
+
+Esempio nominale (sostituire i valori con quelli verificati dell'installazione):
+```yaml
+ouf:
+  authorization:
+    bootstrap:
+      admin-issuer: https://iam.example/realms/comune
+      admin-tenant: comune
+      superadmin-subject: subject-immutabile-della-persona
+      superadmin-role: ""
+```
+
+Per il bootstrap organizzativo usare `superadmin-role` e lasciare vuoto
+`superadmin-subject`. Su installazioni esistenti l'adozione richiede sia
+l'identità configurata sia il permesso amministrativo della policy attiva.
+La configurazione non riapre il bootstrap e non sostituisce un binding esistente.
+
+### Tutte le direzioni di trasferimento
+
+Sono supportate persona → persona, persona → ruolo, ruolo → ruolo e ruolo → persona.
+L'API di proposta accetta `targetSubjectId` **oppure** `targetRoleRef`, con
+`reason` e `If-Match`. Issuer e tenant restano quelli del binding corrente.
+La nuova persona deve accettare con il proprio subject; per un ruolo deve
+accettare una persona che ne presenti il claim IAM. Restano necessari il login
+umano verificato, lo scope amministrativo e la prova di scrittura fidata.
+
+Il titolare corrente mantiene i poteri fino all'accettazione atomica. Proposta,
+annullamento, scadenza (15 minuti), concorrenza e rollback non lasciano il tenant
+senza titolare. Completare il passaggio ruolo → persona **prima** di dismettere
+il modulo Organizzazione: questa procedura non è un recupero automatico dopo
+la perdita del ruolo.
+
+### Migrazione e rollback
+
+V28 aggiunge selettori nominali preservando i binding organizzativi, lo storico
+append-only e le proposte esistenti. Eseguire backup DB prima dell'aggiornamento.
+Dopo l'adozione di un binding nominale usare soltanto binari compatibili con V28;
+un rollback al vecchio codice role-only non è supportato. Non cancellare binding,
+storico o migrazioni per riaprire il bootstrap.
+
+Le sezioni seguenti descrivono il caso organizzativo originario; dove indicano
+il ruolo richiesto, per una designazione nominale vale il subject configurato.
+
+---
+
 # Superadmin OUF per ruolo IAM: bootstrap e trasferimento
 
 ## Decisione e perimetro
