@@ -24,7 +24,11 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+ "ouf.authorization.bootstrap.admin-issuer=fixture-issuer",
+ "ouf.authorization.bootstrap.superadmin-role=ente:bootstrap",
+ "ouf.authorization.bootstrap.admin-tenant=tenant-a"
+})
 @AutoConfigureMockMvc
 class AuthorizationBootstrapServerBindingTest {
   @DynamicPropertySource
@@ -41,7 +45,7 @@ class AuthorizationBootstrapServerBindingTest {
 
   @BeforeEach
   void clean() {
-    db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
+    db.sql("truncate ouf_authorization.superadmin_history,ouf_authorization.superadmin_transfer,ouf_authorization.superadmin_binding,ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
     db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();
   }
 
@@ -56,7 +60,7 @@ class AuthorizationBootstrapServerBindingTest {
           assertThat(request.getUserPrincipal()).isNull();
           request.setAttribute(
               ServletAuthorization.TRUSTED_PRINCIPAL,
-              TestAuthorization.principal("human:admin", "HUMAN", Set.of("authorization.bootstrap")));
+              SuperadminFixtures.principal("human:admin", "HUMAN", Set.of("authorization.bootstrap")));
           request.setAttribute("ouf.statelessBearerWriteValidated", Boolean.TRUE);
           return request;
         })

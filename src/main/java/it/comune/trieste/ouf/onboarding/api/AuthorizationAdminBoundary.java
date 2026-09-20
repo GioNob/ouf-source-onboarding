@@ -19,12 +19,19 @@ public class AuthorizationAdminBoundary extends OncePerRequestFilter {
  @Override protected boolean shouldNotFilter(HttpServletRequest r){return !r.getRequestURI().startsWith(r.getContextPath()+"/api/trusted-human/v1/authorization");}
  @Override protected void doFilterInternal(HttpServletRequest r,HttpServletResponse response,FilterChain chain)throws ServletException,IOException {
   try {
-   if(service.bootstrapOpen()){
+   String path=r.getRequestURI().substring(r.getContextPath().length());
+   boolean superadminPath=path.equals("/api/trusted-human/v1/authorization/superadmin") || path.startsWith("/api/trusted-human/v1/authorization/superadmin/") || path.equals("/api/trusted-human/v1/authorization/superadmin:adopt");
+   if(superadminPath){
+    var p=ServletAuthorization.principal(r).context();
+    if(p.actorType()!=PrincipalContext.ActorType.HUMAN || !p.scopes().contains("authorization.policy.admin"))throw new SecurityException("HUMAN_ADMIN_SCOPE_REQUIRED");
+    // Endpoint service checks current or target role, tenant, revision and expiry.
+   }else if(service.bootstrapOpen()){
     var principal=ServletAuthorization.principal(r).context();
     if(principal.actorType()!=PrincipalContext.ActorType.HUMAN)throw new SecurityException("HUMAN_REQUIRED");
     if(!principal.scopes().contains("authorization.bootstrap"))throw new SecurityException("AUTH_BOOTSTRAP_SCOPE_REQUIRED");
+    service.requireBootstrapPrincipal(principal);
    } else {
-    ServletAuthorization.require(r,"authorization.policy.admin",true);
+    if(!service.isSuperadmin(ServletAuthorization.principal(r).context()))ServletAuthorization.require(r,"authorization.policy.admin",true);
    }
    if(!"GET".equals(r.getMethod())&&!"HEAD".equals(r.getMethod()))TrustedWriteProof.require(r);
   }catch(SecurityException e){response.sendError(403,"Authorization administration denied");return;}

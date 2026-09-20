@@ -31,6 +31,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(properties = {
     "ouf.iam.enabled=true",
+    "ouf.authorization.bootstrap.admin-issuer=https://auth.ouf-lab.it/realms/ouf",
+    "ouf.authorization.bootstrap.superadmin-role=ente:bootstrap",
+    "ouf.authorization.bootstrap.admin-tenant=ouf-lab",
     "ouf.iam.issuer=https://auth.ouf-lab.it/realms/ouf",
     "ouf.iam.audience=ouf-api-gateway",
     "ouf.iam.actor-type-claim=ouf_actor_type"
@@ -52,7 +55,7 @@ class IamAuthorizationBootstrapIntegrationTest {
 
   @BeforeEach
   void clean() {
-    db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
+    db.sql("truncate ouf_authorization.superadmin_history,ouf_authorization.superadmin_transfer,ouf_authorization.superadmin_binding,ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
     db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();
   }
 
@@ -66,6 +69,7 @@ class IamAuthorizationBootstrapIntegrationTest {
     claims.put("ouf_actor_type", actor);
     claims.put("acr", "HUMAN".equals(actor) ? "urn:ouf:acr:human" : "client-credentials");
     claims.put("scope", scope);
+    claims.put("externalRoleRefs", List.of("ente:bootstrap"));
     if (clientIdentity) claims.put("client_id", "ouf-mcp-server");
     return new Jwt(
         "token",
@@ -109,6 +113,20 @@ class IamAuthorizationBootstrapIntegrationTest {
   }
 
   @Test
+  void humanWithoutDesignatedRoleCannotBootstrap() throws Exception {
+    var original = token("HUMAN", "authorization.bootstrap", false);
+    var claims = new HashMap<String, Object>(original.getClaims());
+    claims.put("sub", "human:other");
+    claims.put("ouf_subject", "human:other");
+    claims.put("externalRoleRefs", List.of("ente:other"));
+    when(jwtDecoder.decode("other-human")).thenReturn(new Jwt("other-human", original.getIssuedAt(), original.getExpiresAt(), original.getHeaders(), claims));
+    http.perform(post("/api/trusted-human/v1/authorization/capabilities")
+        .header("Authorization", "Bearer other-human")
+        .contentType(MediaType.APPLICATION_JSON).content(registration("iam.other-human")))
+        .andExpect(status().isForbidden());
+  }
+
+  @Test
   void serviceCannotUseBootstrapEvenWithBootstrapScope() throws Exception {
     when(jwtDecoder.decode("service-bootstrap"))
         .thenReturn(token("SERVICE", "authorization.bootstrap", true));
@@ -130,6 +148,44 @@ class IamAuthorizationBootstrapIntegrationTest {
         .contentType(MediaType.APPLICATION_JSON)
         .content(registration("iam.human-no-bootstrap")))
         .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void roleHandoverWorksThroughAuthenticatedBearerChain() throws Exception {
+    when(jwtDecoder.decode("bootstrap"))
+        .thenReturn(token("HUMAN", "authorization.bootstrap authorization.policy.admin", false));
+    String policy="{\"bundleId\":\"iam-role\",\"version\":1,\"publishedAt\":\"2026-09-20T00:00:00Z\",\"capabilities\":[],\"grants\":[]}";
+    var draft=json.readTree(http.perform(post("/api/trusted-human/v1/authorization/policies")
+        .header("Authorization","Bearer bootstrap").contentType(MediaType.APPLICATION_JSON).content(policy))
+        .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+    http.perform(post("/api/trusted-human/v1/authorization/policies/"+draft.get("id").asText()+":publish")
+        .header("Authorization","Bearer bootstrap").header("If-Match","\"0\""))
+        .andExpect(status().isOk());
+    var proposal=json.readTree(http.perform(post("/api/trusted-human/v1/authorization/superadmin/transfers")
+        .header("Authorization","Bearer bootstrap").header("If-Match","\"0\"")
+        .contentType(MediaType.APPLICATION_JSON).content("{\"targetRoleRef\":\"ente:director\",\"reason\":\"installation completed\"}"))
+        .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+    var base=token("HUMAN","authorization.policy.admin",false);
+    var claims=new HashMap<String,Object>(base.getClaims());claims.put("sub","director");claims.put("ouf_subject","director");claims.put("externalRoleRefs",List.of("ente:director"));
+    when(jwtDecoder.decode("director")).thenReturn(new Jwt("director",base.getIssuedAt(),base.getExpiresAt(),base.getHeaders(),claims));
+    http.perform(post("/api/trusted-human/v1/authorization/superadmin/transfers/"+proposal.get("id").asText()+":accept")
+        .header("Authorization","Bearer director").header("If-Match","\"0\""))
+        .andExpect(status().isOk());
+    http.perform(get("/api/trusted-human/v1/authorization/superadmin").header("Authorization","Bearer bootstrap")).andExpect(status().isForbidden());
+    http.perform(get("/api/trusted-human/v1/authorization/superadmin").header("Authorization","Bearer director")).andExpect(status().isOk());
+  }
+
+  @Test
+  void conflictingOrMalformedRoleClaimsAreRejected() throws Exception {
+    var base=token("HUMAN","authorization.bootstrap",false);
+    for(Object roles:List.of("ente:bootstrap",List.of("ente:bootstrap","ente:bootstrap"),List.of(42))) {
+      var claims=new HashMap<String,Object>(base.getClaims());claims.put("externalRoleRefs",roles);
+      when(jwtDecoder.decode("malformed")).thenReturn(new Jwt("malformed",base.getIssuedAt(),base.getExpiresAt(),base.getHeaders(),claims));
+      http.perform(get("/api/trusted-human/v1/authorization/capabilities").header("Authorization","Bearer malformed")).andExpect(status().isUnauthorized());
+    }
+    var claims=new HashMap<String,Object>(base.getClaims());claims.put("external_role_refs",List.of("ente:other"));
+    when(jwtDecoder.decode("conflicting")).thenReturn(new Jwt("conflicting",base.getIssuedAt(),base.getExpiresAt(),base.getHeaders(),claims));
+    http.perform(get("/api/trusted-human/v1/authorization/capabilities").header("Authorization","Bearer conflicting")).andExpect(status().isUnauthorized());
   }
 
   @Test

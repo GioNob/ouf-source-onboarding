@@ -25,7 +25,11 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+ "ouf.authorization.bootstrap.admin-issuer=fixture-issuer",
+ "ouf.authorization.bootstrap.superadmin-role=ente:bootstrap",
+ "ouf.authorization.bootstrap.admin-tenant=tenant-a"
+})
 class AuthorizationPublishTransactionTest {
   @DynamicPropertySource
   static void db(DynamicPropertyRegistry r) {
@@ -40,11 +44,11 @@ class AuthorizationPublishTransactionTest {
   @MockBean AuthorizationRuntimeSynchronizer runtimeSynchronizer;
 
   private final AuthorizationAdminService.Actor actor =
-      new AuthorizationAdminService.Actor("admin", "tenant-a", "HUMAN", "fixture:1", "tx-test");
+      new AuthorizationAdminService.Actor("admin", "tenant-a", "HUMAN", "fixture:1", "tx-test", SuperadminFixtures.principal("admin", "HUMAN", Set.of("authorization.bootstrap")).context());
 
   @BeforeEach
   void clean() {
-    db.sql("truncate ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
+    db.sql("truncate ouf_authorization.superadmin_history,ouf_authorization.superadmin_transfer,ouf_authorization.superadmin_binding,ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();
     db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();
     reset(runtimeSynchronizer);
   }
@@ -54,20 +58,25 @@ class AuthorizationPublishTransactionTest {
         "data.read", "READ", "data.read", Set.of(PrincipalContext.ActorType.HUMAN));
   }
 
+  private CapabilityDescriptor adminCapability() {
+    return new CapabilityDescriptor("authorization.policy.admin", "EXECUTE", "authorization.policy.admin", Set.of(PrincipalContext.ActorType.HUMAN));
+  }
+
   private PolicyBundle policy(long version) {
     var now = Instant.now();
     return new PolicyBundle(
         "tx-test",
         version,
         now,
-        List.of(capability()),
-        List.of(new Grant(
+        List.of(capability(), adminCapability()),
+        List.of(new Grant("bootstrap-admin", "authorization.policy.admin", "tenant-a", "admin", null, null, now.minusSeconds(60), now.plusSeconds(3600)), new Grant(
             "g1", "data.read", "tenant-a", "reader", null, null,
             now.minusSeconds(60), now.plusSeconds(3600))));
   }
 
   private AuthorizationAdminService.Draft prepareDraft() {
     admin.register("udp", capability(), actor);
+    admin.register("authorization", adminCapability(), actor);
     return admin.create(policy(1), actor);
   }
 
@@ -100,6 +109,8 @@ class AuthorizationPublishTransactionTest {
     verifyNoInteractions(runtimeSynchronizer);
     assertThat(db.sql("select count(*) from ouf_authorization.active_policy_bundle").query(Long.class).single())
         .isZero();
+    assertThat(db.sql("select count(*) from ouf_authorization.superadmin_binding").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from ouf_authorization.superadmin_history").query(Long.class).single()).isZero();
     assertThat(db.sql("select completed from ouf_authorization.bootstrap_latch where singleton_key=true").query(Boolean.class).single())
         .isFalse();
   }

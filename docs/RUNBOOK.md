@@ -19,3 +19,12 @@ An unresolved `BREAKING` or `UNKNOWN` surveillance issue blocks activation. Reso
 ## Protected log export
 
 Exports are HUMAN_USER-only, purpose-bound and expire. A failed export may be retried by the worker while attempts remain. Never expose `artifact`, storage paths, credentials or Authorization context through status APIs. Investigate every unexpected download using `protected_log_access_audit`.
+
+## OUF superadmin role and handover
+
+Use [OUF_ADMIN_BOOTSTRAP.md](OUF_ADMIN_BOOTSTRAP.md) for initial designation,
+one-time adoption on existing installations and role handover. Do not reset the
+bootstrap latch, modify ordinary grants to impersonate superadmin, or edit the
+protected binding directly. A pending transfer leaves the current role active;
+cancel or replace an expired proposal and obtain a fresh target-role confirmation.
+The IAM authority remains responsible for identity recovery and role membership.
