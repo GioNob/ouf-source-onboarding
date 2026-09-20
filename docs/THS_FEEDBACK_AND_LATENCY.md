@@ -48,7 +48,25 @@ Slow Gateway/upstream timings require investigation of IAM, application and DB
 spans before altering connection reuse, retry or timeout settings. Do not disable
 authorization, bypass Gateway or send bearer tokens through diagnostic chat output.
 
-## Configuration lessons and verified baseline
+### Correlazione osservata nella sessione del 20 settembre
+
+Una chiamata iniziata dal lato ChatGPT alle `2026-09-20T12:27:38.168Z` ha avuto durata osservata di **16.728 s**. Nella finestra temporale corrispondente APISIX ha registrato un `POST /mcp` con `request_time=0.052 s` e `upstream_time=0.052 s`; la chiamata interna `/internal/capabilities/v1/execute` annidata ha avuto circa `0.010 s` totale e `0.006 s` upstream.
+
+Questa è una **correlazione temporale**, non una distributed trace completa. Il prefisso timestamp di `docker logs --timestamps` può essere successivo all'istante della richiesta APISIX e non va usato da solo come start time. I 10 ms della execute sono contenuti nei 52 ms del `/mcp`: non sommarli.
+
+L'evidenza colloca la maggior parte del tempo osservato fuori dall'intervallo HTTP registrato dal Gateway per quella richiesta, ma non attribuisce quel tempo a una singola causa. Restano possibili scheduling/selezione tool lato ChatGPT, discovery, routing account/`link_id`, elaborazione del connettore, rete e generazione della risposta. Il problema resta **APERTO** fino a un campione ripetibile correlato end-to-end.
+
+Protocollo di misura successivo:
+1. finestra tranquilla e un solo account/connettore selezionato;
+2. una sola lettura autorizzata, senza modifiche di policy;
+3. registrare UTC inizio/fine e durata percepita dal connettore;
+4. correlare localmente la singola riga `/mcp` e la execute annidata;
+5. distinguere cold/warm e prima/dopo riconnessione;
+6. raccogliere un campione dichiarato prima di calcolare p50/p95;
+7. mantenere distinti HTTP status e risultato MCP, perché HTTP 200 può contenere `isError=true`.
+
+Non introdurre retry automatici delle scritture, aumento cieco dei timeout, cache permissive, bypass del Gateway o rimozione di controlli Authorization per migliorare la latenza.
+
 
 - THS tenant mapper must emit `tenant_id`, not `tenant-id`; the latter caused 403.
 - The `ouf-admin` account needs the trusted `ouf_actor_type=HUMAN` claim.
