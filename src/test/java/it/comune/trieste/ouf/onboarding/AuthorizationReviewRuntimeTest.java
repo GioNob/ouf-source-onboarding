@@ -59,6 +59,14 @@ class AuthorizationReviewRuntimeTest {
   registry.publishAndActivate(bundle(3,List.of()),"fixture");
   assertThatThrownBy(()->review.grants(root,"giovanni",null,1,"a",first.policyRef())).hasMessage("AUTH_ACTIVE_CHANGED_RESTART_REVIEW");
  }
+ @Test void nominalSuperadminRoleFilterDoesNotCrash()throws Exception{
+  db.sql("update ouf_authorization.superadmin_binding set role_ref=null,subject_id='installer' where tenant_id='tenant-a'").update();
+  var page=review.grants(root,null,"ente:staff",100,null,null);
+  assertThat(page.grants()).isEmpty();assertThat(page.protectedRole()).isNull();
+  http.perform(get(ROOT+"/access").with(request(root,false)).param("externalRoleRef","ente:staff"))
+    .andExpect(status().isOk()).andExpect(jsonPath("$.protectedRole").doesNotExist());
+ }
+
  @Test void previewAndSimulationShowRevocationAndRoleGrantWithoutChangingActiveOrDraft()throws Exception{
   var d=admin.create(bundle(2,List.of(role("staff-status","ALLOW"))),actor(root));
   var p=review.preview(root,d.id(),0);assertThat(p.authoritative()).isFalse();assertThat(p.grantChanges()).hasSize(3);
