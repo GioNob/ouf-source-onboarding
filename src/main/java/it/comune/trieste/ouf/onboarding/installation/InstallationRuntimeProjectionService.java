@@ -27,6 +27,9 @@ public class InstallationRuntimeProjectionService {
       String publicApiBaseUrl,
       String internalServiceRef) {}
 
+  public record IamProjection(
+      Map<String,String> workloadClients) {}
+
   public record McpProjection(
       Map<String,String> environment,
       Map<String,String> secretReferences) {}
@@ -37,6 +40,7 @@ public class InstallationRuntimeProjectionService {
       String checksum,
       CaddyProjection caddy,
       GatewayProjection gateway,
+      IamProjection iam,
       McpProjection mcp) {}
 
   public Projection project(String installationId, long revision) {
@@ -51,6 +55,15 @@ public class InstallationRuntimeProjectionService {
     String issuerHost = host(issuer, "INSTALLATION_ISSUER_HOST_INVALID");
     String apiHost = host(api, "INSTALLATION_API_HOST_INVALID");
     String mcpClientId = required(p, "/iam/workloadClients/mcpServer");
+
+    Map<String,String> workloadClients = new TreeMap<>();
+    JsonNode workloadNode = p.at("/iam/workloadClients");
+    if (workloadNode.isObject()) {
+      workloadNode.fields().forEachRemaining(e -> {
+        if (e.getValue().isTextual() && !e.getValue().asText().isBlank())
+          workloadClients.put(e.getKey(), e.getValue().asText());
+      });
+    }
 
     Map<String,String> refs = new TreeMap<>();
     JsonNode refNode = p.at("/secrets/references");
@@ -94,6 +107,7 @@ public class InstallationRuntimeProjectionService {
         source.checksum(),
         caddy,
         gateway,
+        new IamProjection(Map.copyOf(workloadClients)),
         new McpProjection(Map.copyOf(env), Map.copyOf(secretRefs)));
   }
 

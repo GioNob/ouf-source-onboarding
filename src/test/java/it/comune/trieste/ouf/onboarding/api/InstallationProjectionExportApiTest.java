@@ -27,6 +27,8 @@ class InstallationProjectionExportApiTest {
             "gateway-audience",
             "https://api.example.test",
             "service://gateway:9080"),
+        new InstallationRuntimeProjectionService.IamProjection(
+            Map.of("mcpServer", "mcp-workload")),
         new InstallationRuntimeProjectionService.McpProjection(
             Map.of("MCP_OIDC_CLIENT_ID", "mcp-workload"),
             Map.of("MCP_OIDC_CLIENT_SECRET_FILE", "/run/secrets/mcp-client-secret")));

@@ -65,6 +65,9 @@ class InstallationRuntimeProjectionTest {
     assertThat(projection.gateway().requiredAudience()).isEqualTo("ouf-api-gateway");
     assertThat(projection.gateway().publicApiBaseUrl()).isEqualTo("https://api.ouf-lab.it");
 
+    assertThat(projection.iam().workloadClients())
+        .containsEntry("mcpServer", "ouf-mcp-server");
+
     assertThat(projection.mcp().environment())
         .containsEntry("MCP_OIDC_CLIENT_ID", "ouf-mcp-server")
         .containsEntry("MCP_OIDC_TOKEN_ENDPOINT",
@@ -85,5 +88,22 @@ class InstallationRuntimeProjectionTest {
         .doesNotContain("client_secret")
         .doesNotContain("Bearer ")
         .doesNotContain("password=");
+  }
+  @Test
+  void projectsAdditionalWorkloadBindingsWithoutSecretValues() throws Exception {
+    var lab = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(Files.readString(
+        Path.of("contracts/installation/examples/ouf-lab-v1.json")));
+    ((com.fasterxml.jackson.databind.node.ObjectNode) lab.path("iam").path("workloadClients"))
+        .put("ingestion", "ouf-ingestion");
+
+    var revision = configurations.create(lab, actor());
+    var projection = projections.project(revision.installationId(), revision.revision());
+
+    assertThat(projection.iam().workloadClients())
+        .containsEntry("mcpServer", "ouf-mcp-server")
+        .containsEntry("ingestion", "ouf-ingestion");
+    assertThat(json.writeValueAsString(projection))
+        .doesNotContain("client_secret")
+        .doesNotContain("Bearer ");
   }
 }
