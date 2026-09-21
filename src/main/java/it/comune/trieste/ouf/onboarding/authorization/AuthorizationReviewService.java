@@ -55,7 +55,7 @@ public class AuthorizationReviewService {
     .filter(g->subject!=null?subject.equals(g.subjectId()):g.constraints()!=null&&role.equals(g.constraints().externalRoleRef()))
     .filter(g->after==null||g.grantId().compareTo(after)>0).sorted(Comparator.comparing(Grant::grantId)).limit(limit+1L).toList();
   boolean more=found.size()>limit;var page=more?found.subList(0,limit):found;
-  var binding=role==null?null:authority.binding(caller.tenantId()).filter(b->b.roleRef().equals(role)).orElse(null);
+  var binding=role==null?null:authority.binding(caller.tenantId()).filter(b->Objects.equals(b.roleRef(),role)).orElse(null);
   // The selector is not an IAM lookup; expired and DENY grants are intentionally visible for review.
   audit("REVIEW_GRANTS",ref(active),caller,active);
   return new GrantPage(ref(active),hash.of(active),"CONFIGURED_GRANTS_NOT_EFFECTIVE_PERMISSIONS",page,more?page.getLast().grantId():null,binding);
