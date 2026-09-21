@@ -24,7 +24,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 @AutoConfigureMockMvc
 class AuthorizationReviewRuntimeTest {
  @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));}
- @Autowired AuthorizationReviewService review;@Autowired AuthorizationAdminService admin;@Autowired AuthorizationPolicyRegistry registry;
+ @Autowired AuthorizationReviewService review;@Autowired AuthorizationAdminService admin;@Autowired AuthorizationPolicyRegistry registry;@Autowired SuperadminAuthority authority;
  @Autowired JdbcClient db;@Autowired MockMvc http;@Autowired ObjectMapper json;
  @MockBean AuthorizationRuntimeSynchronizer runtime;
  static final String ROOT="/api/trusted-human/v1/authorization";
@@ -60,7 +60,11 @@ class AuthorizationReviewRuntimeTest {
   assertThatThrownBy(()->review.grants(root,"giovanni",null,1,"a",first.policyRef())).hasMessage("AUTH_ACTIVE_CHANGED_RESTART_REVIEW");
  }
  @Test void nominalSuperadminRoleFilterDoesNotCrash()throws Exception{
-  db.sql("update ouf_authorization.superadmin_binding set role_ref=null,subject_id='installer' where tenant_id='tenant-a'").update();
+  var current=authority.binding("tenant-a").orElseThrow();
+  var transfer=authority.propose(root,current.revision(),null,"installer","Switch test binding to nominal superadmin");
+  authority.accept(transfer.id(),transfer.revision(),root);
+  assertThat(authority.binding("tenant-a").orElseThrow().roleRef()).isNull();
+
   var page=review.grants(root,null,"ente:staff",100,null,null);
   assertThat(page.grants()).isEmpty();assertThat(page.protectedRole()).isNull();
   http.perform(get(ROOT+"/access").with(request(root,false)).param("externalRoleRef","ente:staff"))
