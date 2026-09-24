@@ -11,10 +11,66 @@ import os
 from pathlib import Path
 import stat
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 ACTORS = {"HUMAN", "SERVICE", "AI_AGENT"}
+ISSUER = "https://auth.ouf-lab.it/realms/ouf"
+
+
+def device_login():
+    def post(url, values):
+        data = urllib.parse.urlencode(values).encode("ascii")
+        req = urllib.request.Request(url, data=data, method="POST",
+                                     headers={"Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                return response.status, json.load(response)
+        except urllib.error.HTTPError as exc:
+            try:
+                payload = json.load(exc)
+                error = payload.get("error", "")
+            except (ValueError, UnicodeError):
+                error = ""
+            return exc.code, {"error": error}
+    with urllib.request.urlopen(ISSUER + "/.well-known/openid-configuration", timeout=20) as response:
+        metadata = json.load(response)
+    if metadata.get("issuer") != ISSUER:
+        raise ValueError("unexpected OIDC issuer")
+    device = metadata.get("device_authorization_endpoint")
+    token_endpoint = metadata.get("token_endpoint")
+    if not all(isinstance(url, str) and url.startswith(ISSUER + "/protocol/openid-connect/")
+               for url in (device, token_endpoint)):
+        raise ValueError("unexpected OIDC endpoints")
+    status, start = post(device, {"client_id": "ouf-human-admin",
+                                  "scope": "openid authorization.policy.admin"})
+    if status != 200 or not all(start.get(key) for key in
+                                ("device_code", "user_code", "verification_uri", "expires_in")):
+        raise RuntimeError("DEVICE_AUTHORIZATION_FAILED")
+    if not str(start["verification_uri"]).startswith("https://auth.ouf-lab.it/"):
+        raise ValueError("unexpected verification URI")
+    print("OPEN_IN_BROWSER=" + start["verification_uri"], flush=True)
+    print("ENTER_DEVICE_CODE=" + str(start["user_code"]), flush=True)
+    print("Do not paste the code or token into chat.", flush=True)
+    interval = max(5, min(30, int(start.get("interval", 5))))
+    deadline = time.monotonic() + min(600, int(start["expires_in"]))
+    while time.monotonic() < deadline:
+        time.sleep(interval)
+        status, result = post(token_endpoint, {
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "client_id": "ouf-human-admin", "device_code": start["device_code"]})
+        if status == 200:
+            token = result.get("access_token")
+            if not isinstance(token, str) or not token:
+                raise RuntimeError("TOKEN_MISSING")
+            return token
+        if result.get("error") == "slow_down":
+            interval = min(30, interval + 5)
+        elif result.get("error") != "authorization_pending":
+            raise RuntimeError("DEVICE_LOGIN_NOT_COMPLETED")
+    raise RuntimeError("DEVICE_LOGIN_EXPIRED")
 
 
 def request(url, token, method="GET", body=None):
@@ -37,6 +93,7 @@ def main():
     p.add_argument("--manifest", required=True, type=Path)
     p.add_argument("--endpoint", default="https://api.ouf-lab.it/api/trusted-human/v1/authorization/capabilities")
     p.add_argument("--token-file", type=Path)
+    p.add_argument("--device-login", action="store_true")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--apply", action="store_true")
@@ -69,13 +126,16 @@ def main():
     if not args.check and not args.apply:
         print("NO_NETWORK_OR_WRITES=true")
         return
-    if args.token_file is None:
-        raise ValueError("--token-file required for --check and --apply")
-    info = args.token_file.lstat()
-    if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
-            or info.st_uid != os.geteuid()):
-        raise ValueError("token file must be regular, owned by caller, mode 0600")
-    token = args.token_file.read_text(encoding="ascii").strip()
+    if args.device_login == (args.token_file is not None):
+        raise ValueError("choose exactly one of --device-login and --token-file")
+    if args.device_login:
+        token = device_login()
+    else:
+        info = args.token_file.lstat()
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != os.geteuid()):
+            raise ValueError("token file must be regular, owned by caller, mode 0600")
+        token = args.token_file.read_text(encoding="ascii").strip()
     if not token or len(token) > 16384:
         raise ValueError("invalid token file")
     existing = {}
@@ -102,9 +162,16 @@ def main():
         row = existing.get(ident)
         if row is None:
             missing.append(ident)
-        elif (row.get("owner_ref") != entry["ownerRef"]
-              or not isinstance(row.get("descriptor"), dict)
-              or {**row["descriptor"], "allowedActors": sorted(row["descriptor"].get("allowedActors", []))}
+            continue
+        descriptor = row.get("descriptor")
+        if isinstance(descriptor, dict) and descriptor.get("type") == "jsonb" and isinstance(descriptor.get("value"), str):
+            descriptor = descriptor["value"]
+        if isinstance(descriptor, str):
+            descriptor = json.loads(descriptor)
+        if (row.get("owner_ref") != entry["ownerRef"]
+              or not isinstance(descriptor, dict)
+              or not isinstance(descriptor.get("allowedActors"), list)
+              or {**descriptor, "allowedActors": sorted(descriptor.get("allowedActors", []))}
               != {**entry["descriptor"], "allowedActors": sorted(entry["descriptor"]["allowedActors"])}):
             raise ValueError(f"SEMANTIC_CONFLICT={ident}")
     print(f"ALREADY_MATCHED={len(desired)-len(missing)} MISSING={len(missing)}")
