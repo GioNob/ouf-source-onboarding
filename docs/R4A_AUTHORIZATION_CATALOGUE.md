@@ -10,12 +10,12 @@ Il tentativo di proporre un grant HUMAN temporaneo tramite `authorization.permis
 
 ```bash
 git -C /opt/ouf/onboarding fetch origin codex/r4a-authorization-catalogue
-git -C /opt/ouf/onboarding merge-base --is-ancestor d381bcce72eb0eadd907bd3b32e5e5409b6f15fc FETCH_HEAD
+git -C /opt/ouf/onboarding merge-base --is-ancestor 66dfc3adec21515b6f4ef705cee61e1454056b9c FETCH_HEAD
 set -o pipefail
 git -C /opt/ouf/onboarding show d381bcce72eb0eadd907bd3b32e5e5409b6f15fc:scripts/r4a_authorization_catalogue_preflight.py | sudo python3 -
 ```
 
-Output consentito: `ACTIVE_POLICY_REF`, `SEARCH_REGISTERED`, `SEARCH_IN_ACTIVE_BUNDLE` e `NO_POLICY_CHANGED=true`. In caso di `BLOCKED`, non dedurre lo stato: verificare il binding Postgres in privato. Nessun INSERT o UPDATE SQL fa parte della procedura.
+Output consentito: `ACTIVE_POLICY_REF`, `SEARCH_REGISTERED`, `SEARCH_IN_ACTIVE_BUNDLE` e `NO_POLICY_CHANGED=true`. I primi tentativi si sono fermati a `DATABASE_QUERY` e `SCHEMA_CHECK`: il database inizialmente scelto dal container PostgreSQL non conteneva tutte le tabelle Authorization. La versione corrente ricava il nome del database dal binding `OUF_ONB_DB_URL` del container Onboarding, senza stamparlo. In caso di `BLOCKED`, usare soltanto `STAGE` per la diagnosi e non dedurre lo stato di registrazione. Nessun INSERT o UPDATE SQL fa parte della procedura.
 
 ## Passi successivi, dipendenti dalla diagnosi
 
