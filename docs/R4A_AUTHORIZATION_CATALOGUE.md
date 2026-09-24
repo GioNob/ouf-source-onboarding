@@ -10,7 +10,7 @@ Il tentativo di proporre un grant HUMAN temporaneo tramite `authorization.permis
 
 ```bash
 git -C /opt/ouf/onboarding fetch origin codex/r4a-authorization-catalogue
-test "$(git -C /opt/ouf/onboarding rev-parse FETCH_HEAD)" = d381bcce72eb0eadd907bd3b32e5e5409b6f15fc
+git -C /opt/ouf/onboarding merge-base --is-ancestor d381bcce72eb0eadd907bd3b32e5e5409b6f15fc FETCH_HEAD
 set -o pipefail
 git -C /opt/ouf/onboarding show d381bcce72eb0eadd907bd3b32e5e5409b6f15fc:scripts/r4a_authorization_catalogue_preflight.py | sudo python3 -
 ```
