@@ -39,13 +39,23 @@ def main() -> None:
         db = env.get("POSTGRES_DB", user)
         if not user or not db:
             raise ValueError("Database binding missing")
-        stage = "DATABASE_QUERY"
-        query = subprocess.run(
-            ["docker", "exec", "--user", "postgres", "ouf-postgres",
-             "psql", "-X", "-v", "ON_ERROR_STOP=1", "-A", "-t",
-             "-F", "|", "-U", user, "-d", db, "-c", SQL],
-            check=True, capture_output=True, text=True,
-        )
+        base = ["docker", "exec", "--user", "postgres", "ouf-postgres",
+                "psql", "-X", "-v", "ON_ERROR_STOP=1", "-A", "-t",
+                "-F", "|", "-U", user, "-d", db, "-c"]
+        stage = "DB_CONNECTION"
+        ping = subprocess.run(base + ["select 1"], check=True, capture_output=True, text=True)
+        if ping.stdout.strip() != "1":
+            raise ValueError("Unexpected connection probe")
+        stage = "SCHEMA_CHECK"
+        schema = subprocess.run(base + [
+            "select (to_regclass('ouf_authorization.capability_registration') is not null)::text,"
+            "(to_regclass('ouf_authorization.active_policy_bundle') is not null)::text,"
+            "(to_regclass('ouf_authorization.policy_bundle') is not null)::text"
+        ], check=True, capture_output=True, text=True)
+        if schema.stdout.strip() != "true|true|true":
+            raise ValueError("Required tables unavailable")
+        stage = "POLICY_QUERY"
+        query = subprocess.run(base + [SQL], check=True, capture_output=True, text=True)
         stage = "RESULT_PARSE"
         lines = query.stdout.strip().splitlines()
         if len(lines) != 1:
