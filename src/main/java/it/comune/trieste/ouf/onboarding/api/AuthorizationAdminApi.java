@@ -37,7 +37,7 @@ public class AuthorizationAdminApi {
  private ResponseEntity<AuthorizationAdminService.Draft> response(AuthorizationAdminService.Draft d){return ResponseEntity.ok().eTag(Long.toString(d.revision())).body(d);}
  public record Registration(String ownerRef,CapabilityDescriptor descriptor){}
  @PostMapping("/capabilities") @ResponseStatus(HttpStatus.CREATED) void register(@RequestBody com.fasterxml.jackson.databind.JsonNode input,HttpServletRequest r){var a=actor(r,true);var body=service.parse(input,Registration.class);service.register(body.ownerRef(),body.descriptor(),a);}
- @GetMapping("/capabilities") Object capabilities(@RequestParam(defaultValue="100") int limit,HttpServletRequest r){actor(r,false);return service.capabilities(limit);}
+ @GetMapping("/capabilities") Object capabilities(@RequestParam(defaultValue="100") int limit,@RequestParam(defaultValue="0") int offset,HttpServletRequest r){actor(r,false);return service.capabilities(limit,offset);}
  @PostMapping("/policies") ResponseEntity<?> create(@RequestBody com.fasterxml.jackson.databind.JsonNode p,HttpServletRequest r){var a=actor(r,true);return response(service.create(service.parse(p,PolicyBundle.class),a));}
  @GetMapping("/policies/{id}") ResponseEntity<?> get(@PathVariable UUID id,HttpServletRequest r){var a=actor(r,false);return response(service.get(id,a));}
  @PutMapping("/policies/{id}") ResponseEntity<?> replace(@PathVariable UUID id,@RequestHeader(value="If-Match",required=false) String etag,@RequestBody com.fasterxml.jackson.databind.JsonNode p,HttpServletRequest r){var a=actor(r,true);return response(service.replace(id,revision(etag),service.parse(p,PolicyBundle.class),a));}
