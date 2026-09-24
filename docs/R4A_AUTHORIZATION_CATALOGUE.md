@@ -37,4 +37,13 @@ Sul PC o sul server, in un checkout aggiornato di questo repository:
 python3 scripts/r4a_register_capabilities.py --manifest catalogue/r4a-udp-search.json
 ```
 
-Il comando sopra convalida localmente e non effettua richieste di rete. Le modalità `--check` e `--apply` richiedono `--token-file` con un bearer HUMAN Keycloak del client `ouf-human-admin`, salvato in un file regolare di proprietà dell'utente che esegue lo script e permessi 0600. **Non incollare il token in terminale condiviso, chat, URL o repository.** La procedura per ottenere il token con Device Authorization Grant e verificare la route Gateway rimane un gate aperto: non lanciare `--apply` finché il percorso non è collaudato. Il batch non sostituisce draft, preview/simulate e publish tramite canale HUMAN.
+Il comando sopra convalida localmente e non effettua richieste di rete. Le modalità `--check` e `--apply` accettano `--device-login` (Device Authorization Grant del client HUMAN `ouf-human-admin`, token solo in memoria) oppure `--token-file` con bearer HUMAN in file regolare di proprietà dell'utente, permessi 0600. Il codice dispositivo mostrato localmente va inserito soltanto nella pagina IAM indicata dallo script; non inviare codice né token in chat. La login Device Grant è documentata nell'accettazione IAM del 18 settembre. **Prima di usare `--apply`, distribuire il runtime Onboarding con GET paginato, completare il CI, collaudare il percorso della route Gateway con `--check` e verificare il preview del piano.** Non incollare il token in terminale condiviso, chat, URL o repository. Il batch non sostituisce draft, preview/simulate e publish tramite canale HUMAN.
+
+Esempio dopo l'attivazione del runtime paginato, nel terminale SSH `oufadmin` sul server in `/opt/ouf/onboarding` (oppure in un checkout locale aggiornato):
+
+```bash
+python3 scripts/r4a_register_capabilities.py --manifest catalogue/r4a-udp-search.json --check --device-login
+python3 scripts/r4a_register_capabilities.py --manifest catalogue/r4a-udp-search.json --apply --device-login
+```
+
+Ogni invocazione Device Grant richiede un accesso HUMAN separato. Lo script stampa URL di verifica e codice dispositivo nel proprio terminale, mai l'access token. La prima invocazione non scrive nulla; la seconda effettua solo POST delle capability mancanti. Un runtime non paginato potrebbe restituire una pagina ripetuta: lo script la rifiuta, senza iniziare le scritture.
