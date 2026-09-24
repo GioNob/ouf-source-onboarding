@@ -7,6 +7,7 @@ bundle JSON, or grant payloads. No SQL mutations or policy publication.
 import json
 import os
 import subprocess
+from urllib.parse import urlsplit
 
 CAPABILITY = "urban.object.search"
 SQL = """
@@ -36,9 +37,23 @@ def main() -> None:
         stage = "DATABASE_BINDING"
         env = dict(item.split("=", 1) for item in inspected[0]["Config"]["Env"] if "=" in item)
         user = env.get("POSTGRES_USER", "postgres")
-        db = env.get("POSTGRES_DB", user)
-        if not user or not db:
-            raise ValueError("Database binding missing")
+        stage = "ONBOARDING_BINDING"
+        onboarding = subprocess.run(
+            ["docker", "inspect", "ouf-onboarding"], check=True, capture_output=True, text=True
+        )
+        service = json.loads(onboarding.stdout)
+        if len(service) != 1 or not service[0]["State"]["Running"]:
+            raise ValueError("Onboarding not running")
+        service_env = dict(item.split("=", 1) for item in service[0]["Config"]["Env"] if "=" in item)
+        jdbc = service_env.get("OUF_ONB_DB_URL", "")
+        if not jdbc.startswith("jdbc:postgresql://"):
+            raise ValueError("Onboarding database URL missing")
+        parsed = urlsplit(jdbc.removeprefix("jdbc:"))
+        db = parsed.path.lstrip("/")
+        if parsed.hostname not in ("ouf-postgres", "127.0.0.1", "localhost") or not db or "/" in db:
+            raise ValueError("Unexpected database binding")
+        if not user:
+            raise ValueError("Database role missing")
         base = ["docker", "exec", "--user", "postgres", "ouf-postgres",
                 "psql", "-X", "-v", "ON_ERROR_STOP=1", "-A", "-t",
                 "-F", "|", "-U", user, "-d", db, "-c"]
