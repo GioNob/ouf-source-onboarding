@@ -1,0 +1,13 @@
+[
+  {
+    "ownerRef": "udp",
+    "descriptor": {
+      "capabilityId": "urban.object.search",
+      "operation": "SEARCH",
+      "requiredScope": "urban.object.search",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  }
+]
