@@ -24,3 +24,17 @@ Output consentito: `ACTIVE_POLICY_REF`, `SEARCH_REGISTERED`, `SEARCH_IN_ACTIVE_B
 3. Solo dopo refresh del bundle nei consumer, proporre un grant limitato a tenant `ouf-lab`, subject HUMAN `giovanni-chatgpt` e intervallo breve, con `resourceType=capability`; la proposta dura 15 minuti e richiede conferma separata nel Trusted Approval Workspace. Per risultati su oggetti UDP occorrono eventuali grant specifici `resourceType=object` per oggetti di test, con policy di proprietà minimizzate. La lettura `authorization.permissions.read` restituisce grant configurati, non decisioni effettive.
 
 Questa guida registra il gate ma **non dichiara già automatizzato** l'export sicuro del bundle ACTIVE, la creazione della bozza e la preview tramite THS. Sono residui di R-INSTALL. Non riutilizzare le credenziali di un altro modulo, non pubblicare token e non attivare il tool MCP fino al collaudo positivo e negativo.
+
+## Registrazione in serie, ripetibile
+
+Manifest versionato: `catalogue/r4a-udp-search.json`. Il comando `scripts/r4a_register_capabilities.py` valida tutti i descriptor e gli owner, confronta il catalogo prima di scrivere, rifiuta collisioni semantiche e registra solo le capability assenti. Ogni POST rimane una scrittura separata con audit dell'attore HUMAN; una mancata riuscita non è una transazione globale: rilanciare `--check` e quindi `--apply` per riprendere, verificando gli eventuali conflitti. Nessuna esecuzione pubblica automaticamente un PolicyBundle o concede un grant.
+
+L'API GET usa `limit=200&offset=N`; l'implementazione paginata in questo PR va distribuita **prima** della riconciliazione di cataloghi grandi. Non usare lo script contro il vecchio runtime per un catalogo di 200+ voci: il controllo sulle pagine duplicate arresta la procedura. Manifest di altri moduli devono essere ricavati dai rispettivi contratti PET e approvati dal proprietario semantico; non inventare capability a partire dai soli nomi delle route. Le differenze di descriptor richiedono nuovo capabilityId o una decisione versionata, perché la registrazione esistente è immutabile.
+
+Sul PC o sul server, in un checkout aggiornato di questo repository:
+
+```bash
+python3 scripts/r4a_register_capabilities.py --manifest catalogue/r4a-udp-search.json
+```
+
+Il comando sopra convalida localmente e non effettua richieste di rete. Le modalità `--check` e `--apply` richiedono `--token-file` con un bearer HUMAN Keycloak del client `ouf-human-admin`, salvato in un file regolare di proprietà dell'utente che esegue lo script e permessi 0600. **Non incollare il token in terminale condiviso, chat, URL o repository.** La procedura per ottenere il token con Device Authorization Grant e verificare la route Gateway rimane un gate aperto: non lanciare `--apply` finché il percorso non è collaudato. Il batch non sostituisce draft, preview/simulate e publish tramite canale HUMAN.
