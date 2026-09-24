@@ -47,3 +47,37 @@ python3 scripts/r4a_register_capabilities.py --manifest catalogue/r4a-udp-search
 ```
 
 Ogni invocazione Device Grant richiede un accesso HUMAN separato. Lo script stampa URL di verifica e codice dispositivo nel proprio terminale, mai l'access token. La prima invocazione non scrive nulla; la seconda effettua solo POST delle capability mancanti. Un runtime non paginato potrebbe restituire una pagina ripetuta: lo script la rifiuta, senza iniziare le scritture.
+
+
+## Lifecycle PolicyBundle automatizzato
+
+Il workflow HUMAN non deve più ricostruire a mano il bundle ACTIVE né leggere direttamente il database. L'endpoint
+`GET /api/trusted-human/v1/authorization/policies/active` restituisce al policy administrator il bundle ACTIVE completo
+con `policyRef` e `contentHash`, con `Cache-Control: no-store`. È HUMAN-only e non è esposto MCP.
+
+Lo script `scripts/r4a_authorization_lifecycle.py` usa esclusivamente la Trusted Human Surface e implementa un workflow
+ripetibile e fail-closed:
+
+1. `--plan` (default): legge ACTIVE, confronta il manifest e calcola la versione successiva; nessuna scrittura.
+2. `--draft`: clona tutte le capability e tutti i grant, aggiunge soltanto i descriptor mancanti, crea il draft e
+   richiede immediatamente `:preview`. Se preview rimuove capability o modifica grant, il comando fallisce.
+3. `--preview`: ripete la verifica read-only del draft salvato.
+4. `--simulate --scenario <file>`: esegue una simulazione ipotetica owner-side senza produrre decisioni enforceable.
+5. `--publish --confirm-publish`: ripete preview, pubblica con ETag e verifica il nuovo ACTIVE; rifiuta cambi di grant o
+   del set di capability rispetto al piano.
+6. `--verify`: verifica nuovamente ACTIVE e preservazione dei grant.
+
+Le fasi mutanti usano un file di stato locale 0600 che contiene solo identificativi, revisioni e hash, mai bearer token.
+Il Device Grant resta HUMAN e ogni invocazione autentica separatamente. Esempio:
+
+```bash
+python3 scripts/r4a_authorization_lifecycle.py --manifest catalogue/r4a-udp-search.json --plan --device-login
+python3 scripts/r4a_authorization_lifecycle.py --manifest catalogue/r4a-udp-search.json --draft --state-file /tmp/r4a-policy.state --device-login
+python3 scripts/r4a_authorization_lifecycle.py --preview --state-file /tmp/r4a-policy.state --device-login
+# simulate con uno scenario esplicito prima del publish
+python3 scripts/r4a_authorization_lifecycle.py --publish --confirm-publish --state-file /tmp/r4a-policy.state --device-login
+python3 scripts/r4a_authorization_lifecycle.py --verify --state-file /tmp/r4a-policy.state --device-login
+```
+
+Registrazione del catalogo, publication del PolicyBundle e grant restano azioni distinte. Lo script non concede permessi e
+non sostituisce il Trusted Approval Workspace per i grant.

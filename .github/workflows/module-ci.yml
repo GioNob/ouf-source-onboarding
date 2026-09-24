@@ -42,6 +42,8 @@ jobs:
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Verify frozen rc3 contract pin
         run: sh scripts/verify-contract-freeze.sh
+      - name: Verify R4a Authorization lifecycle planner
+        run: python -m unittest tests/test_r4a_authorization_lifecycle.py
       - name: Compile, test and package
         run: |
           bash scripts/install-authorization-sdk.sh
