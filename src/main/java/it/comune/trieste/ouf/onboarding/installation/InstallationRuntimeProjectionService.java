@@ -37,6 +37,9 @@ public class InstallationRuntimeProjectionService {
   public record OnboardingProjection(
       Map<String,String> environment) {}
 
+  public record ServicesProjection(
+      Map<String,String> bindings) {}
+
   public record Projection(
       String installationId,
       long revision,
@@ -45,7 +48,8 @@ public class InstallationRuntimeProjectionService {
       GatewayProjection gateway,
       IamProjection iam,
       McpProjection mcp,
-      OnboardingProjection onboarding) {}
+      OnboardingProjection onboarding,
+      ServicesProjection services) {}
 
   public Projection project(String installationId, long revision) {
     var source = configurations.get(installationId, revision);
@@ -60,6 +64,15 @@ public class InstallationRuntimeProjectionService {
     String apiHost = host(api, "INSTALLATION_API_HOST_INVALID");
     String mcpClientId = required(p, "/iam/workloadClients/mcpServer");
     String tenantId = required(p, "/organization/tenantId");
+
+    Map<String,String> serviceBindings = new TreeMap<>();
+    JsonNode serviceNode = p.at("/networking/serviceBindings");
+    if (serviceNode.isObject()) {
+      serviceNode.fields().forEachRemaining(e -> {
+        if (e.getValue().isTextual() && !e.getValue().asText().isBlank())
+          serviceBindings.put(e.getKey(), e.getValue().asText());
+      });
+    }
 
     Map<String,String> workloadClients = new TreeMap<>();
     JsonNode workloadNode = p.at("/iam/workloadClients");
@@ -117,7 +130,8 @@ public class InstallationRuntimeProjectionService {
         gateway,
         new IamProjection(Map.copyOf(workloadClients)),
         new McpProjection(Map.copyOf(env), Map.copyOf(secretRefs)),
-        new OnboardingProjection(Map.copyOf(onboardingEnv)));
+        new OnboardingProjection(Map.copyOf(onboardingEnv)),
+        new ServicesProjection(Map.copyOf(serviceBindings)));
   }
 
   public Projection projectActive(String installationId) {
