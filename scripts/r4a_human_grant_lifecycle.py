@@ -64,6 +64,15 @@ def check_no_equivalent(policy, wanted):
             raise ValueError("EQUIVALENT_GRANT_REQUIRES_REVIEW")
 
 
+def review_preview(base, token, state):
+    value = lifecycle.preview(base, token, state)
+    change = value["grantChanges"][0]
+    desired = state["desiredGrants"][GRANT_ID]
+    if lifecycle.normalize_grant(change["after"]) != lifecycle.normalize_grant(desired):
+        raise ValueError("PREVIEW_GRANT_CONTENT_MISMATCH")
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("plan", "draft", "preview", "publish", "verify"))
@@ -106,7 +115,7 @@ def main():
             "capabilitiesHash": lifecycle.digest(policy["capabilities"]),
             "baselineGrantsHash": lifecycle.digest(policy["grants"]),
         }
-        lifecycle.preview(base, token, state)
+        review_preview(base, token, state)
         lifecycle.write_state(args.state_file, state)
         print("DRAFT_ID=" + state["draftId"])
         print("PREVIEW_GRANT_ADDS=" + GRANT_ID)
@@ -119,7 +128,7 @@ def main():
     if state.get("desiredGrants") != {GRANT_ID: wanted} or state.get("addedGrantIds") != [GRANT_ID]:
         raise ValueError("STATE_GRANT_MISMATCH")
     if args.mode == "preview":
-        lifecycle.preview(base, token, state)
+        review_preview(base, token, state)
         print("PREVIEW_OK=true")
         print("NO_WRITES=true")
         return
@@ -131,7 +140,7 @@ def main():
         return
     if not args.confirm_publish:
         raise ValueError("CONFIRM_PUBLISH_REQUIRED")
-    lifecycle.preview(base, token, state)
+    review_preview(base, token, state)
     status, value, _ = lifecycle.request(base, token, f"/policies/{state['draftId']}:publish",
                                          "POST", etag=state["revision"])
     if status != 200 or value.get("state") != "PUBLISHED":
