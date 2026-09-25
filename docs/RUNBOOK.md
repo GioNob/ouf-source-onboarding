@@ -92,3 +92,18 @@ scope is already bound in the opposite category; resolve that drift through
 review rather than silently moving or removing it. Confirm fresh token scope
 claims without printing token material. OAuth scope and Authorization grant
 remain separate acceptance gates.
+
+
+### HUMAN Device Flow gate
+
+For the R4a human token acceptance, `ouf-human-admin` is a public OIDC
+client. The live lab client may have Device Authorization Grant disabled.
+Use `scripts/r4a_keycloak_human_device_client.py` in `plan`, `apply`,
+`verify` order from a green commit. The helper changes only
+`oauth2DeviceAuthorizationGrantEnabled` on the exact client, preserves
+its existing configuration, and fails if its public OIDC identity contract
+has changed. Do not enable direct access grants or standard flow to work
+around this gate. After verification, request the optional
+`ouf.onboarding.configuration.write` scope in a new HUMAN Device Flow,
+verify the token claim without printing the token, and separately verify
+the governed Authorization grant before any mutating Onboarding call.
