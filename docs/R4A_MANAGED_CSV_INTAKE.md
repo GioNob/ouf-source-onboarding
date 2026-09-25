@@ -42,6 +42,12 @@ versionati da commit CI verde in `plan`/`--check` prima di ogni `apply`:
 - `scripts/r4a_keycloak_workload_client.py --container ouf-keycloak
   --client-id ouf-onboarding` per il nuovo client confidenziale con service
   account, audience Gateway e claim SERVICE; non stampare o rigenerare secret;
+- `scripts/r4a_keycloak_workload_secret_file.py plan/apply/verify` salva il
+  secret corrente del solo client `ouf-onboarding` in
+  `/opt/ouf/secrets/onboarding-client-secret` con permessi 0600, senza
+  stamparlo, ruotarlo o sovrascrivere un file esistente. `apply` richiede
+  root e la sessione `kcadm` valida; se il file esiste ma il token renewal
+  fallisce, fermarsi e riconciliare il secret tramite la procedura IAM;
 - `scripts/r4a_keycloak_client_scope_binding.py` per i quattro scope HUMAN
   come OPTIONAL di `ouf-human-admin` e read DEFAULT di `ouf-onboarding`
   e `ouf-ingestion`;
