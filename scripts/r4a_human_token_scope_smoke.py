@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import base64
+import argparse
 import json
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 ISSUER = "https://auth.ouf-lab.it/realms/ouf"
 CLIENT = "ouf-human-admin"
@@ -61,7 +63,34 @@ def acceptance(claims, requested_at):
     }
 
 
+def check_onboarding(token):
+    source_id = "r4a-nonexistent-" + str(uuid.uuid4())
+    url = "https://api.ouf-lab.it/api/onboarding/v1/sources/" + source_id + "/onboarding-versions"
+    request = urllib.request.Request(url, data=b'{"configuration":{}}', method="POST", headers={
+        "Authorization": "Bearer " + token, "Content-Type": "application/json",
+        "Accept": "application/problem+json", "X-Correlation-ID": str(uuid.uuid4()),
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            status, body = response.status, json.load(response)
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        try:
+            body = json.load(exc)
+        except (ValueError, OSError):
+            body = {}
+    code = body.get("code") if isinstance(body, dict) else None
+    print("ONBOARDING_HTTP_STATUS=" + str(status))
+    print("ONBOARDING_OWNER_CODE=" + str(code))
+    if status != 404 or code != "ONB_NOT_FOUND":
+        raise SmokeError("ONBOARDING_GATEWAY_ACCEPTANCE_FAILED")
+    print("ONBOARDING_AUTHORIZED_NO_WRITE=true")
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check-onboarding", action="store_true")
+    args = parser.parse_args()
     with urllib.request.urlopen(ISSUER + "/.well-known/openid-configuration", timeout=15) as response:
         metadata = json.load(response)
     if metadata.get("issuer") != ISSUER:
@@ -102,6 +131,8 @@ def main():
         if not all(outcome.values()):
             raise SmokeError("TOKEN_ACCEPTANCE_FAILED")
         print("TOKEN_ACCEPTANCE=PASS")
+        if args.check_onboarding:
+            check_onboarding(token)
         return
     raise SmokeError("DEVICE_CODE_EXPIRED")
 
