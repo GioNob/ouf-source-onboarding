@@ -8,6 +8,10 @@ Inspect `ouf_onboarding_job_backlog` and `ouf_onboarding_failed_jobs`, then the 
 
 Gateway/object-store and shared log-store failures must surface as `ONB_DEPENDENCY_FAILURE` with a correlation identifier. Keep the frozen onboarding version unchanged, verify Gateway route health, Authorization context propagation and the opaque object/log reference, then retry within the bounded job policy. Activation remains atomic and must never be partially repaired in the database.
 
+For the R4a real CSV intake, including the MinIO bucket, dedicated workload
+identity, Gateway routes, capability and grant bootstrap, acceptance and
+rollback, follow [R4A_MANAGED_CSV_INTAKE.md](R4A_MANAGED_CSV_INTAKE.md).
+
 ## Database failover and restore
 
 Stop write traffic, verify PostgreSQL recovery/PITR completion, run `flyway validate`, then restore API and worker replicas. Confirm one ACTIVE bundle per source, append-only audit triggers, expired lease recovery and checksum resolution of historical publications before reopening write traffic.
