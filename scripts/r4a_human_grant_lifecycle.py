@@ -69,7 +69,9 @@ def check_no_equivalent(policy, wanted):
 def review_preview(base, token, state):
     value = lifecycle.preview(base, token, state)
     change = value["grantChanges"][0]
-    desired = state["desiredGrants"][state["addedGrantIds"][0]]
+    desired = state["desiredGrants"].get(change.get("grantId"))
+    if desired is None:
+        raise ValueError("PREVIEW_GRANT_ID_MISMATCH")
     if lifecycle.normalize_grant(change["after"]) != lifecycle.normalize_grant(desired):
         raise ValueError("PREVIEW_GRANT_CONTENT_MISMATCH")
     return value
