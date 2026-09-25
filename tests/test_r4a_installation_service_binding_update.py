@@ -38,3 +38,11 @@ def test_parse_bindings_is_closed_and_deterministic():
             assert False
         except m.LifecycleError:
             pass
+
+
+def test_script_reads_payload_from_revision_endpoint():
+    raw=SCRIPT.read_text()
+    assert '/active' in raw
+    assert '/revisions/{a.expected_source_revision}' in raw
+    assert 'revision_view.get("payload")' in raw
+    assert 'active.get("payload")' not in raw
