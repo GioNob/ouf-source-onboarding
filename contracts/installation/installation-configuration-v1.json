@@ -18,81 +18,217 @@
     "lifecycle"
   ],
   "properties": {
-    "schemaVersion": {"const": "1.0"},
-    "installationId": {"type": "string", "minLength": 1},
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "installationId": {
+      "type": "string",
+      "minLength": 1
+    },
     "organization": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["organizationId", "displayName", "tenantId", "timezone"],
+      "required": [
+        "organizationId",
+        "displayName",
+        "tenantId",
+        "timezone"
+      ],
       "properties": {
-        "organizationId": {"type": "string", "minLength": 1},
-        "displayName": {"type": "string", "minLength": 1},
-        "tenantId": {"type": "string", "minLength": 1},
-        "timezone": {"type": "string", "minLength": 1}
+        "organizationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "environment": {
       "type": "string",
-      "enum": ["dev", "test", "staging", "production"]
+      "enum": [
+        "dev",
+        "test",
+        "staging",
+        "production"
+      ]
     },
     "networking": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["backendNetwork", "edgeNetwork", "gatewayControlNetwork", "internalDnsStrategy"],
+      "required": [
+        "backendNetwork",
+        "edgeNetwork",
+        "gatewayControlNetwork",
+        "internalDnsStrategy"
+      ],
       "properties": {
-        "backendNetwork": {"type": "string", "minLength": 1},
-        "edgeNetwork": {"type": "string", "minLength": 1},
-        "gatewayControlNetwork": {"type": "string", "minLength": 1},
-        "internalDnsStrategy": {"enum": ["REVERSE_PROXY_ALIAS", "CLUSTER_DNS", "ENTERPRISE_DNS"]}
+        "backendNetwork": {
+          "type": "string",
+          "minLength": 1
+        },
+        "edgeNetwork": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gatewayControlNetwork": {
+          "type": "string",
+          "minLength": 1
+        },
+        "internalDnsStrategy": {
+          "enum": [
+            "REVERSE_PROXY_ALIAS",
+            "CLUSTER_DNS",
+            "ENTERPRISE_DNS"
+          ]
+        },
+        "serviceBindings": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9._-]{1,128}$"
+          }
+        }
       }
     },
     "iam": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["issuerUrl", "tokenEndpoint", "realm", "humanAdminClientId", "gatewayAudience"],
+      "required": [
+        "issuerUrl",
+        "tokenEndpoint",
+        "realm",
+        "humanAdminClientId",
+        "gatewayAudience"
+      ],
       "properties": {
-        "issuerUrl": {"type": "string", "format": "uri", "pattern": "^https://"},
-        "tokenEndpoint": {"type": "string", "format": "uri", "pattern": "^https://"},
-        "realm": {"type": "string", "minLength": 1},
-        "humanAdminClientId": {"type": "string", "minLength": 1},
-        "gatewayAudience": {"type": "string", "minLength": 1},
+        "issuerUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "tokenEndpoint": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "realm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "humanAdminClientId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gatewayAudience": {
+          "type": "string",
+          "minLength": 1
+        },
         "workloadClients": {
           "type": "object",
-          "additionalProperties": {"type": "string", "minLength": 1}
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "enterpriseCaRef": {"type": ["string", "null"]}
+        "enterpriseCaRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "gateway": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["publicApiBaseUrl", "publicMcpPath", "tlsTermination", "internalServiceRef"],
+      "required": [
+        "publicApiBaseUrl",
+        "publicMcpPath",
+        "tlsTermination",
+        "internalServiceRef"
+      ],
       "properties": {
-        "publicApiBaseUrl": {"type": "string", "format": "uri", "pattern": "^https://"},
-        "publicMcpPath": {"const": "/mcp"},
-        "tlsTermination": {"enum": ["CADDY", "INGRESS", "EXTERNAL_LOAD_BALANCER"]},
-        "internalServiceRef": {"type": "string", "minLength": 1}
+        "publicApiBaseUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "publicMcpPath": {
+          "const": "/mcp"
+        },
+        "tlsTermination": {
+          "enum": [
+            "CADDY",
+            "INGRESS",
+            "EXTERNAL_LOAD_BALANCER"
+          ]
+        },
+        "internalServiceRef": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "persistence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["postgresServiceRef", "moduleDatabases", "objectStorage"],
+      "required": [
+        "postgresServiceRef",
+        "moduleDatabases",
+        "objectStorage"
+      ],
       "properties": {
-        "postgresServiceRef": {"type": "string", "minLength": 1},
+        "postgresServiceRef": {
+          "type": "string",
+          "minLength": 1
+        },
         "moduleDatabases": {
           "type": "object",
           "minProperties": 1,
-          "additionalProperties": {"type": "string", "minLength": 1}
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "objectStorage": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["mode"],
+          "required": [
+            "mode"
+          ],
           "properties": {
-            "mode": {"enum": ["S3_COMPATIBLE", "FILESYSTEM", "NONE"]},
-            "endpoint": {"type": ["string", "null"]},
-            "bucket": {"type": ["string", "null"]}
+            "mode": {
+              "enum": [
+                "S3_COMPATIBLE",
+                "FILESYSTEM",
+                "NONE"
+              ]
+            },
+            "endpoint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bucket": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         }
       }
@@ -100,33 +236,76 @@
     "secrets": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "references"],
+      "required": [
+        "provider",
+        "references"
+      ],
       "properties": {
-        "provider": {"enum": ["FILES", "KUBERNETES_SECRETS", "EXTERNAL_SECRET_STORE"]},
+        "provider": {
+          "enum": [
+            "FILES",
+            "KUBERNETES_SECRETS",
+            "EXTERNAL_SECRET_STORE"
+          ]
+        },
         "references": {
           "type": "object",
-          "additionalProperties": {"type": "string", "minLength": 1}
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },
     "observability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["metricsEnabled", "logSink"],
+      "required": [
+        "metricsEnabled",
+        "logSink"
+      ],
       "properties": {
-        "metricsEnabled": {"type": "boolean"},
-        "logSink": {"type": "string", "minLength": 1},
-        "alertDestination": {"type": ["string", "null"]}
+        "metricsEnabled": {
+          "type": "boolean"
+        },
+        "logSink": {
+          "type": "string",
+          "minLength": 1
+        },
+        "alertDestination": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "lifecycle": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["revision", "status", "checksum"],
+      "required": [
+        "revision",
+        "status",
+        "checksum"
+      ],
       "properties": {
-        "revision": {"type": "integer", "minimum": 1},
-        "status": {"enum": ["DRAFT", "VALIDATED", "ACTIVE", "SUPERSEDED", "REVOKED"]},
-        "checksum": {"type": "string", "minLength": 1}
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "DRAFT",
+            "VALIDATED",
+            "ACTIVE",
+            "SUPERSEDED",
+            "REVOKED"
+          ]
+        },
+        "checksum": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     }
   }
