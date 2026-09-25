@@ -99,8 +99,9 @@ remain separate acceptance gates.
 For the R4a human token acceptance, `ouf-human-admin` is a public OIDC
 client. The live lab client may have Device Authorization Grant disabled.
 Use `scripts/r4a_keycloak_human_device_client.py` in `plan`, `apply`,
-`verify` order from a green commit. The helper changes only
-`oauth2DeviceAuthorizationGrantEnabled` on the exact client, preserves
+`verify` order from a green commit. The helper checks the effective Keycloak client attribute
+`oauth2.device.authorization.grant.enabled` and changes only that attribute
+when missing on the exact client; it preserves
 its existing configuration, and fails if its public OIDC identity contract
 has changed. Do not enable direct access grants or standard flow to work
 around this gate. After verification, request the optional
