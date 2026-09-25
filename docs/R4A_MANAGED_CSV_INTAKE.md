@@ -95,6 +95,14 @@ prima che il backend e le due capability rispondano secondo contratto.
 
 ## Accettazione da eseguire sul VPS
 
+- Trasferire il CSV originale dal PC al VPS con un canale autenticato in una
+  directory privata di `oufadmin`. Il file della chat non è già presente sul
+  VPS. Fare `sha256sum` e verificare 509 byte prima di ogni richiesta.
+- Da SSH `oufadmin`, eseguire `scripts/r4a_managed_csv_smoke.py --csv
+  <PERCORSO_CSV_PRIVATO> --subject-id <SUBJECT_IAM_VERIFICATO>`. Aprire solo
+  sul browser del PC l'URL Device Flow mostrato e inserire il codice sul
+  sito IAM; non copiare codice o token in chat. Lo script non riprova
+  automaticamente l'upload dopo un esito HTTP incerto.
 - `sha256sum` del file trasferito identico all'hash sopra; 509 byte.
 - Upload autenticato via Gateway: HTTP 201, `staging_ref` valido,
   `content_hash` `sha256:` identico, `size_bytes=509`; nessun token/file nei log.
