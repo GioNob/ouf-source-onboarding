@@ -7,11 +7,12 @@ Stato: codice candidato; CI e bootstrap lab sono gate separati. Il CSV allegato
 Non pubblicare il file nel repository. Preservare i byte originali, compreso
 il BOM, durante il trasferimento sul VPS e confrontare l'hash prima dell'upload.
 
-**Gate architetturali aperti (2026-09-25):** lo smoke qui sotto esercita route
-Gateway con un client HTTP HUMAN, non il plugin MCP. I tool per upload tramite
-attachment governato, profiling, preview, onboarding e ingestion non sono ancora
-pubblicati dal MCP Server. In particolare i manifest Gateway correnti hanno
-`mcp.toolEligible=false` per le capability managed-file. Non abilitare un tool
+**Gate architetturali aperti:** lo smoke qui sotto esercita route Gateway con
+un client HTTP HUMAN, non il plugin MCP. Il binding candidato per profile e
+preview è versionato nei PR MCP e Gateway e usa una ricevuta HUMAN firmata
+verificata dall'owner, ma non è attivo sul lab. I tool per upload tramite
+attachment governato, creazione onboarding e ingestion non sono ancora
+pubblicati nel plugin live. Non abilitare un tool
 che accetti byte/base64 o URL di storage dall'agente come scorciatoia: il
 contratto T25 richiede un attachment flow con identità HUMAN verificata. La
 pubblicazione Semantic/THS, ingestion, UDP e search non sono ancora dimostrate.

@@ -42,21 +42,19 @@ public class ManagedFileMcpApi {
     var job=files.requestProfile(asset,delegated.idempotencyKey());
     return ResponseEntity.accepted().body(Map.of("jobId",job.get("jobId"),"status",job.get("status")));
   }
-  @PostMapping("/status") public Map<String,Object> status(@RequestBody byte[] raw,HttpServletRequest request){
-    String owner=subject(raw,request,"ouf.managed-source.preview");
-    JsonNode args=arguments(raw,"assetId","jobId");
-    UUID asset=UUID.fromString(args.get("assetId").asText());
-    files.requireOwner(asset,owner);
-    var job=files.profileJob(asset,UUID.fromString(args.get("jobId").asText()));
-    Map<String,Object> safe=new LinkedHashMap<>();
-    for(String key:new String[]{"jobId","status","resultRef","errorCode"})safe.put(key,job.get(key));
-    return safe;
-  }
   @PostMapping("/preview") public Map<String,Object> preview(@RequestBody byte[] raw,HttpServletRequest request){
     String owner=subject(raw,request,"ouf.managed-source.preview");
-    JsonNode args=arguments(raw,"assetId","profileId");
+    JsonNode args;
+    try {args=arguments(raw,"assetId","profileId");}
+    catch(IllegalArgumentException ex){args=arguments(raw,"assetId","jobId");}
     UUID asset=UUID.fromString(args.get("assetId").asText());
     files.requireOwner(asset,owner);
+    if(args.has("jobId")){
+      var job=files.profileJob(asset,UUID.fromString(args.get("jobId").asText()));
+      Map<String,Object> safe=new LinkedHashMap<>();
+      for(String key:new String[]{"jobId","status","resultRef","errorCode"})safe.put(key,job.get(key));
+      return safe;
+    }
     return files.preview(asset,UUID.fromString(args.get("profileId").asText()));
   }
   @ExceptionHandler(SecurityException.class) ResponseEntity<?> denied(){
