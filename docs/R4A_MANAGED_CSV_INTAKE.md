@@ -7,6 +7,28 @@ Stato: codice candidato; CI e bootstrap lab sono gate separati. Il CSV allegato
 Non pubblicare il file nel repository. Preservare i byte originali, compreso
 il BOM, durante il trasferimento sul VPS e confrontare l'hash prima dell'upload.
 
+**Gate architetturali aperti (2026-09-25):** lo smoke qui sotto esercita route
+Gateway con un client HTTP HUMAN, non il plugin MCP. I tool per upload tramite
+attachment governato, profiling, preview, onboarding e ingestion non sono ancora
+pubblicati dal MCP Server. In particolare i manifest Gateway correnti hanno
+`mcp.toolEligible=false` per le capability managed-file. Non abilitare un tool
+che accetti byte/base64 o URL di storage dall'agente come scorciatoia: il
+contratto T25 richiede un attachment flow con identità HUMAN verificata. La
+pubblicazione Semantic/THS, ingestion, UDP e search non sono ancora dimostrate.
+
+L'endpoint Onboarding usa una copia temporanea su disco con digest incrementale
+e limite di 10 MiB, senza tenere l'intero upload in heap. Il buffering delle
+richieste da parte dell'APISIX del lab resta da verificare/configurare prima di
+certificare il requisito T25 di streaming attraverso il Gateway. Non attivare
+queste route in produzione con tale gate aperto.
+
+Gli hostname `ouf-onboarding`, `ouf-apisix` e `ouf-minio` sotto sono binding
+DNS privati del lab nella stessa rete Docker; non rappresentano il contratto
+per un Gateway su macchina/rete diversa. Quel deployment richiede endpoint
+approvati per installazione, TLS con verifica del certificato, firewall/egress
+e prove negative di accesso diretto agli owner. Un cambio di dominio pubblico
+usa la proiezione dell'installazione: nessun hostname del lab è requisito PET.
+
 ## Confini e ordine
 
 1. `POST /api/managed-sources/v1/files` è una chiamata HUMAN autenticata dal
@@ -105,7 +127,10 @@ prima che il backend e le due capability rispondano secondo contratto.
   directory privata di `oufadmin`. Il file della chat non è già presente sul
   VPS. Fare `sha256sum` e verificare 509 byte prima di ogni richiesta.
 - Da SSH `oufadmin`, eseguire `scripts/r4a_managed_csv_smoke.py --csv
-  <PERCORSO_CSV_PRIVATO> --subject-id <SUBJECT_IAM_VERIFICATO>`. Aprire solo
+  <PERCORSO_CSV_PRIVATO> --subject-id <SUBJECT_IAM_VERIFICATO>
+  --issuer <iam.issuerUrl> --gateway-base-url <gateway.publicApiBaseUrl>
+  --audience <gateway.requiredAudience> --client-id <CLIENT_HUMAN_VERIFICATO>`.
+  I quattro binding derivano dalla proiezione approvata dell'Ente. Aprire solo
   sul browser del PC l'URL Device Flow mostrato e inserire il codice sul
   sito IAM; non copiare codice o token in chat. Lo script non riprova
   automaticamente l'upload dopo un esito HTTP incerto.

@@ -4,7 +4,8 @@ import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
-import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
@@ -37,13 +38,13 @@ public class MinioManagedFileStagingStore implements ManagedFileStagingStore {
   // Visible for storage tests without reading any real credentials.
   MinioManagedFileStagingStore(MinioClient minio,String bucket){this.minio=minio;this.bucket=bucket;}
 
-  @Override public String put(byte[] content,String mediaType){
-    if(content==null||content.length==0||content.length>MAX_BYTES)throw new IllegalArgumentException("file exceeds staging limit");
+  @Override public String put(InputStream content,long size,String mediaType) throws IOException {
+    if(content==null||size<=0||size>MAX_BYTES)throw new IllegalArgumentException("file exceeds staging limit");
     if(!"text/csv".equals(mediaType))throw new IllegalArgumentException("unsupported staging media type");
     String id=UUID.randomUUID().toString();
     try {
       minio.putObject(PutObjectArgs.builder().bucket(bucket).object("managed-files/"+id)
-          .stream(new ByteArrayInputStream(content),content.length,-1).contentType(mediaType).build());
+          .stream(content,size,-1).contentType(mediaType).build());
       return PREFIX+id;
     } catch(Exception e){throw new DomainFailure(HttpStatus.BAD_GATEWAY,"ONB_STAGING_WRITE_FAILED","Managed file staging write failed");}
   }
