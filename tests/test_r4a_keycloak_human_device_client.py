@@ -41,5 +41,16 @@ def test_apply_preserves_other_client_settings(monkeypatch, capsys):
     monkeypatch.setattr(device, "run", run)
     monkeypatch.setattr(sys, "argv", ["script", "apply"])
     device.main()
-    assert updated == [{**original, "oauth2DeviceAuthorizationGrantEnabled": True}]
+    assert updated == [{**original, "attributes": {"existing": "value",
+                                             "oauth2.device.authorization.grant.enabled": "true"}}]
+    assert "VERIFY=PASS" in capsys.readouterr().out
+
+
+def test_existing_device_attribute_skips_write(monkeypatch, capsys):
+    client = {"id": "uuid", "clientId": "ouf-human-admin", "attributes":
+              {"oauth2.device.authorization.grant.enabled": "true"}}
+    monkeypatch.setattr(device, "exact_client", lambda *args: client)
+    monkeypatch.setattr(device, "run", lambda *args, **kwargs: pytest.fail("unexpected write"))
+    monkeypatch.setattr(sys, "argv", ["script", "apply"])
+    device.main()
     assert "VERIFY=PASS" in capsys.readouterr().out
