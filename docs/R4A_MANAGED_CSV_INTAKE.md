@@ -21,8 +21,12 @@ il BOM, durante il trasferimento sul VPS e confrontare l'hash prima dell'upload.
    workload `ouf-onboarding` letto da `/run/ouf-onboarding-auth/token` a ogni
    richiesta. Ingestion usa il proprio client e token, con la stessa read
    capability. Non riutilizzare il token Ingestion per il worker Onboarding.
-4. Profiling/preview e create-onboarding richiedono route HUMAN governate
-   ulteriori prima del giro completo. La semantica live non ha ancora
+4. Profiling/preview e create-onboarding usano le route HUMAN
+   `POST` e `GET /api/onboarding/v1/managed-files/*`. La route POST richiede
+   a bordo lo scope `ouf.managed-source.file.profile`; il backend richiede
+   inoltre la capability distinta `ouf.managed-source.onboarding.create` per
+   create-onboarding. La GET richiede `ouf.managed-source.preview` sia a bordo
+   che nel backend. La semantica live non ha ancora
    publication set: DRAFT, review e pubblicazione Semantic precedono ACTIVE.
 
 ## Bootstrap lab, prima delle modifiche runtime
@@ -32,21 +36,25 @@ InstallationProjection attiva e la snapshot APISIX. Eseguire i seguenti tool
 versionati da commit CI verde in `plan`/`--check` prima di ogni `apply`:
 
 - `scripts/r4a_keycloak_client_scope_catalogue.py` per
-  `ouf.managed-source.file.upload` e `ouf.internal.object-storage.read`;
+  `ouf.managed-source.file.upload`, `ouf.managed-source.file.profile`,
+  `ouf.managed-source.preview`, `ouf.managed-source.onboarding.create`
+  e `ouf.internal.object-storage.read`;
 - `scripts/r4a_keycloak_workload_client.py --container ouf-keycloak
   --client-id ouf-onboarding` per il nuovo client confidenziale con service
   account, audience Gateway e claim SERVICE; non stampare o rigenerare secret;
-- `scripts/r4a_keycloak_client_scope_binding.py` per upload OPTIONAL di
-  `ouf-human-admin` e read DEFAULT di `ouf-onboarding` e `ouf-ingestion`;
+- `scripts/r4a_keycloak_client_scope_binding.py` per i quattro scope HUMAN
+  come OPTIONAL di `ouf-human-admin` e read DEFAULT di `ouf-onboarding`
+  e `ouf-ingestion`;
 - `scripts/r4a_register_capabilities.py --manifest
   catalogue/r4a-managed-file-intake.json --check --device-login` per
-  verificare le due capability nell'Authorization Registry;
+  verificare le cinque capability nell'Authorization Registry;
 - `scripts/r4a_service_grant_lifecycle.py` con manifest
   `catalogue/r4a-managed-file-read-grants.json` e
-  `scripts/r4a_human_grant_lifecycle.py --grant-id
-  grant-managed-file-upload-human-admin --capability
-  ouf.managed-source.file.upload --subject-id <SUBJECT_VERIFICATO>` per
-  pianificare grant add-only. Applicare/publish solo dopo preview esatta;
+  `scripts/r4a_human_grant_lifecycle.py --grants-file
+  catalogue/r4a-managed-file-human-grants.json --subject-id
+  <SUBJECT_VERIFICATO>` per pianificare i quattro grant HUMAN in una sola
+  draft/preview/publish add-only;
+  Applicare/publish solo dopo preview esatta;
   preservare i grant esistenti. Verificare la scadenza prima del deploy.
 
 I secret del client workload e di un account MinIO limitato al bucket
@@ -78,7 +86,9 @@ audience, scope, attore, scadenza e tenant senza stampare il token.
 Compilare `ouf-config` dal checkout Gateway verde, applicare la proiezione
 attiva e materializzare `onboarding-managed-file-read` col tool
 `tools/materialize_apisix_internal_m2m_routes.py` e
-`trusted-human-managed-file-upload` col materializer HUMAN Onboarding.
+`trusted-human-managed-file-upload`,
+`trusted-human-managed-file-actions-post` e
+`trusted-human-managed-file-preview-get` col materializer HUMAN Onboarding.
 Gli installer APISIX creano snapshot private, readback e prova anonima
 401/403, con restore automatico in caso di errore. Non installare le route
 prima che il backend e le due capability rispondano secondo contratto.

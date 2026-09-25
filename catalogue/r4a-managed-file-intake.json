@@ -16,5 +16,32 @@
       "requiredScope": "ouf.internal.object-storage.read",
       "allowedActors": ["SERVICE"]
     }
+  },
+  {
+    "ownerRef": "onboarding",
+    "descriptor": {
+      "capabilityId": "ouf.managed-source.file.profile",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.managed-source.file.profile",
+      "allowedActors": ["HUMAN"]
+    }
+  },
+  {
+    "ownerRef": "onboarding",
+    "descriptor": {
+      "capabilityId": "ouf.managed-source.preview",
+      "operation": "READ",
+      "requiredScope": "ouf.managed-source.preview",
+      "allowedActors": ["HUMAN"]
+    }
+  },
+  {
+    "ownerRef": "onboarding",
+    "descriptor": {
+      "capabilityId": "ouf.managed-source.onboarding.create",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.managed-source.onboarding.create",
+      "allowedActors": ["HUMAN"]
+    }
   }
 ]

@@ -40,6 +40,30 @@ def test_upload_grant_is_distinct_and_add_only():
         human.grant(subject, wanted["validFrom"], wanted["validUntil"], "bad/id", wanted["capabilityId"])
 
 
+def test_managed_file_manifest_adds_four_distinct_human_grants():
+    rows = human.manifest(Path(__file__).parents[1] / "catalogue/r4a-managed-file-human-grants.json",
+                          "b93d8cf6-cd14-4ee6-91d7-84cd76c4f500",
+                          "2026-09-25T00:00:00Z", "2026-10-25T00:00:00Z")
+    assert len(rows) == 4
+    assert {g["capabilityId"] for g in rows} == {
+        "ouf.managed-source.file.upload", "ouf.managed-source.file.profile",
+        "ouf.managed-source.preview", "ouf.managed-source.onboarding.create"}
+    assert all(g["servicePrincipalId"] is None and g["subjectId"] == rows[0]["subjectId"] for g in rows)
+
+
+def test_preview_checks_each_added_human_grant(monkeypatch):
+    rows = human.manifest(Path(__file__).parents[1] / "catalogue/r4a-managed-file-human-grants.json",
+                          "b93d8cf6-cd14-4ee6-91d7-84cd76c4f500",
+                          "2026-09-25T00:00:00Z", "2026-10-25T00:00:00Z")
+    state = {"addedGrantIds": [g["grantId"] for g in rows],
+             "desiredGrants": {g["grantId"]: g for g in rows}}
+    changed = [{"grantId": g["grantId"], "after": g, "before": None} for g in rows]
+    changed[-1]["after"] = {**rows[-1], "subjectId": "wrong"}
+    monkeypatch.setattr(human.lifecycle, "preview", lambda *args: {"grantChanges": changed})
+    with pytest.raises(ValueError, match="PREVIEW_GRANT_CONTENT_MISMATCH"):
+        human.review_preview("base", "token", state)
+
+
 def test_preview_requires_exact_added_grant(monkeypatch):
     wanted = human.grant("b93d8cf6-cd14-4ee6-91d7-84cd76c4f500",
                          "2026-09-25T00:00:00Z", "2026-10-25T00:00:00Z")
