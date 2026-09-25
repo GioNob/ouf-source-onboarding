@@ -41,3 +41,36 @@ or proof of the user's real IAM memberships; never forward it as authorization.
 ## Chatbot e THS per i permessi
 
 Configurazione IAM, sessione, chiavi, ciclo proposta/conferma e collaudo: [guida operativa](PERMISSION_PROPOSALS.md).
+
+
+## Keycloak client-scope bootstrap per capability OUF
+
+Quando una capability richiede uno scope OAuth omonimo, distinguere due operazioni:
+1. creazione/reconciliation del client scope nel realm;
+2. binding del client scope al client workload/HUMAN come DEFAULT o OPTIONAL.
+
+Non usare sequenze `kcadm` one-off come procedura definitiva.
+
+Per creare o riallineare un client scope OIDC usare:
+
+`scripts/r4a_keycloak_client_scope_catalogue.py`
+
+Il tool:
+- supporta `plan`, `apply`, `verify`;
+- usa matching esatto per nome;
+- imposta `protocol=openid-connect`;
+- imposta `include.in.token.scope=true`;
+- imposta `display.on.consent.screen=false`;
+- preserva attributi extra;
+- non stampa token, password o client secret;
+- fallisce esplicitamente se la sessione kcadm è scaduta.
+
+Esempio logico R4a:
+- creare/reconciliare `ouf.onboarding.configuration.write`;
+- creare/reconciliare `ouf.ingestion.configuration.attest`;
+- bindare `ouf.onboarding.configuration.write` a `ouf-human-admin` come OPTIONAL;
+- bindare `ouf.ingestion.configuration.attest` a `ouf-ingestion` come DEFAULT;
+- emettere token nuovi e verificare il claim `scope`;
+- solo dopo eseguire acceptance applicativa.
+
+OAuth scope e Authorization grant sono gate distinti: la presenza di uno non sostituisce l'altro.
