@@ -44,6 +44,8 @@ jobs:
         run: sh scripts/verify-contract-freeze.sh
       - name: Verify R4a Authorization lifecycle planner
         run: python -m unittest tests/test_r4a_authorization_lifecycle.py
+      - name: Verify Keycloak scope and binding reconciliation
+        run: python -m pytest -q tests/test_r4a_keycloak_client_scope_catalogue.py tests/test_r4a_keycloak_client_scope_binding.py
       - name: Compile, test and package
         run: |
           bash scripts/install-authorization-sdk.sh
