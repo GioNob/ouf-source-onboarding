@@ -8,6 +8,12 @@ import sys
 
 from r4a_keycloak_client_scope_catalogue import ScopeError, get_json, run, validate_name
 
+DEVICE_ATTRIBUTE = "oauth2.device.authorization.grant.enabled"
+
+
+def device_enabled(client):
+    return str((client.get("attributes") or {}).get(DEVICE_ATTRIBUTE)).lower() == "true"
+
 
 def exact_client(container, realm, client_id):
     rows = get_json(container, "get", "clients", "-r", realm, "-q", f"clientId={client_id}")
@@ -38,7 +44,7 @@ def main():
         raise ScopeError("UNSUPPORTED_CLIENT")
 
     client = exact_client(args.container, args.realm, args.client)
-    enabled = client.get("oauth2DeviceAuthorizationGrantEnabled") is True
+    enabled = device_enabled(client)
     print("MODE=" + args.mode)
     print("CLIENT=" + args.client)
     print("DEVICE_FLOW_ENABLED=" + str(enabled).lower())
@@ -49,11 +55,11 @@ def main():
         raise ScopeError("VERIFY_DEVICE_FLOW_DISABLED")
     if args.mode == "apply" and not enabled:
         updated = dict(client)
-        updated["oauth2DeviceAuthorizationGrantEnabled"] = True
+        updated["attributes"] = {**(updated.get("attributes") or {}), DEVICE_ATTRIBUTE: "true"}
         run(args.container, "update", f"clients/{client['id']}", "-r", args.realm, "-f", "-",
             input_text=json.dumps(updated, separators=(",", ":")))
     after = exact_client(args.container, args.realm, args.client)
-    if after.get("oauth2DeviceAuthorizationGrantEnabled") is not True:
+    if not device_enabled(after):
         raise ScopeError("VERIFY_DEVICE_FLOW_DISABLED")
     print("VERIFY=PASS")
     print("SECRETS_PRINTED=false")
