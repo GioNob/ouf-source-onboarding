@@ -113,6 +113,8 @@ public class IamSecurityConfiguration {
             "/api/trusted-human/v1/installations/**",
             "/api/trusted-human/v1/approval-challenges/**",
             "/api/onboarding/v1/sources/**",
+            "/api/managed-sources/v1/files",
+            "/api/internal/v1/onboarding/managed-files/content",
             "/api/internal/v1/onboarding/compatibility/ingestion-runtime",
             "/api/internal/v1/authorization/policy-bundle/**").authenticated()
         .anyRequest().permitAll());
