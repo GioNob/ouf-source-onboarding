@@ -74,3 +74,21 @@ Esempio logico R4a:
 - solo dopo eseguire acceptance applicativa.
 
 OAuth scope e Authorization grant sono gate distinti: la presenza di uno non sostituisce l'altro.
+
+
+### Keycloak client-scope binding
+
+After the scopes pass catalogue `verify`, use
+`scripts/r4a_keycloak_client_scope_binding.py` with `plan`, `apply`, then
+`verify` for each exact client/scope pair:
+
+- `--client ouf-human-admin --scope ouf.onboarding.configuration.write --binding optional`
+- `--client ouf-ingestion --scope ouf.ingestion.configuration.attest --binding default`
+
+Run the versioned helper from a green commit with the existing interactive
+`kcadm` admin session; never put its password in shell arguments or logs.
+The helper adds only the requested missing binding. It blocks when the same
+scope is already bound in the opposite category; resolve that drift through
+review rather than silently moving or removing it. Confirm fresh token scope
+claims without printing token material. OAuth scope and Authorization grant
+remain separate acceptance gates.
