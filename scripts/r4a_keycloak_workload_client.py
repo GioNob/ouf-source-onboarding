@@ -85,7 +85,7 @@ MAPPERS={
 class ProvisionError(RuntimeError): pass
 
 def run(kc, args, stdin=None):
-    cmd=[kc,*args]
+    cmd=[*(kc if isinstance(kc,tuple) else (kc,)),*args]
     p=subprocess.run(cmd,input=stdin,text=True,capture_output=True)
     if p.returncode!=0:
         msg=(p.stderr or p.stdout).strip().replace("\n"," | ")
@@ -185,11 +185,13 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument("mode",choices=("plan","apply","verify"))
     p.add_argument("--kcadm",default="/opt/keycloak/bin/kcadm.sh")
+    p.add_argument("--container",default=None,help="Execute kcadm in this Docker container")
     p.add_argument("--realm",default="ouf")
     p.add_argument("--client-id",required=True)
     a=p.parse_args()
 
-    before=inspect(a.kcadm,a.realm,a.client_id)
+    kc=("docker","exec","-i",a.container,a.kcadm) if a.container else a.kcadm
+    before=inspect(kc,a.realm,a.client_id)
     drift=(not before["exists"] or before["clientDrift"] or before["missingScopes"] or before["mapperDrift"])
     print("CLIENT_ID="+a.client_id)
     print("EXISTS="+str(before["exists"]).lower())
@@ -203,9 +205,9 @@ def main():
         print("NO_WRITES=true")
         return
     if a.mode=="apply":
-        reconcile(a.kcadm,a.realm,a.client_id)
+        reconcile(kc,a.realm,a.client_id)
 
-    after=inspect(a.kcadm,a.realm,a.client_id)
+    after=inspect(kc,a.realm,a.client_id)
     remaining=(not after["exists"] or after["clientDrift"] or after["missingScopes"] or after["mapperDrift"])
     print("VERIFY="+("PASS" if not remaining else "FAIL"))
     print("SECRET_PRINTED=false")

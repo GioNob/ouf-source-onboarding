@@ -28,6 +28,18 @@ def test_equivalent_grant_with_another_id_blocks_duplicate():
         human.check_no_equivalent({"grants": [{**wanted, "grantId": "other"}]}, wanted)
 
 
+def test_upload_grant_is_distinct_and_add_only():
+    subject = "b93d8cf6-cd14-4ee6-91d7-84cd76c4f500"
+    wanted = human.grant(subject, "2026-09-25T00:00:00Z", "2026-10-25T00:00:00Z",
+                         "grant-managed-file-upload-human-admin", "ouf.managed-source.file.upload")
+    assert wanted["capabilityId"] == "ouf.managed-source.file.upload"
+    assert wanted["grantId"] == "grant-managed-file-upload-human-admin"
+    assert wanted["subjectId"] == subject
+    assert wanted["servicePrincipalId"] is None
+    with pytest.raises(ValueError, match="INVALID_GRANT_OR_CAPABILITY"):
+        human.grant(subject, wanted["validFrom"], wanted["validUntil"], "bad/id", wanted["capabilityId"])
+
+
 def test_preview_requires_exact_added_grant(monkeypatch):
     wanted = human.grant("b93d8cf6-cd14-4ee6-91d7-84cd76c4f500",
                          "2026-09-25T00:00:00Z", "2026-10-25T00:00:00Z")

@@ -42,15 +42,17 @@ def human_token(subject_id):
     return token
 
 
-def grant(subject_id, valid_from, valid_until):
+def grant(subject_id, valid_from, valid_until, grant_id=GRANT_ID, capability=CAPABILITY):
     if not SUBJECT_RE.fullmatch(subject_id):
         raise ValueError("INVALID_SUBJECT_ID")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", grant_id) or not re.fullmatch(r"[A-Za-z0-9._-]+", capability):
+        raise ValueError("INVALID_GRANT_OR_CAPABILITY")
     start = datetime.fromisoformat(valid_from.replace("Z", "+00:00"))
     end = datetime.fromisoformat(valid_until.replace("Z", "+00:00"))
     if start.tzinfo is None or end.tzinfo is None or not start < end:
         raise ValueError("INVALID_VALIDITY")
     return {
-        "grantId": GRANT_ID, "capabilityId": CAPABILITY, "tenantId": "ouf-lab",
+        "grantId": grant_id, "capabilityId": capability, "tenantId": "ouf-lab",
         "subjectId": subject_id, "servicePrincipalId": None, "organizationId": None,
         "validFrom": valid_from, "validUntil": valid_until, "constraints": None,
     }
@@ -58,7 +60,7 @@ def grant(subject_id, valid_from, valid_until):
 
 def check_no_equivalent(policy, wanted):
     for row in policy["grants"]:
-        if row.get("grantId") != GRANT_ID and all(
+        if row.get("grantId") != wanted["grantId"] and all(
             row.get(key) == wanted[key] for key in ("subjectId", "capabilityId", "tenantId")
         ):
             raise ValueError("EQUIVALENT_GRANT_REQUIRES_REVIEW")
@@ -67,7 +69,7 @@ def check_no_equivalent(policy, wanted):
 def review_preview(base, token, state):
     value = lifecycle.preview(base, token, state)
     change = value["grantChanges"][0]
-    desired = state["desiredGrants"][GRANT_ID]
+    desired = state["desiredGrants"][state["addedGrantIds"][0]]
     if lifecycle.normalize_grant(change["after"]) != lifecycle.normalize_grant(desired):
         raise ValueError("PREVIEW_GRANT_CONTENT_MISMATCH")
     return value
@@ -77,12 +79,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("plan", "draft", "preview", "publish", "verify"))
     parser.add_argument("--subject-id", required=True)
+    parser.add_argument("--grant-id", default=GRANT_ID)
+    parser.add_argument("--capability", default=CAPABILITY)
     parser.add_argument("--valid-from", default="2026-09-25T00:00:00Z")
     parser.add_argument("--valid-until", default="2026-10-25T00:00:00Z")
     parser.add_argument("--state-file", type=Path)
     parser.add_argument("--confirm-publish", action="store_true")
     args = parser.parse_args()
-    wanted = grant(args.subject_id, args.valid_from, args.valid_until)
+    wanted = grant(args.subject_id, args.valid_from, args.valid_until, args.grant_id, args.capability)
     token = human_token(args.subject_id)
     base = lifecycle.DEFAULT_BASE
 
@@ -91,7 +95,7 @@ def main():
         policy, missing = lifecycle.plan(current, [wanted])
         check_no_equivalent(policy, wanted)
         print("ACTIVE_POLICY_REF=" + current["policyRef"])
-        print("GRANT_ID=" + GRANT_ID)
+        print("GRANT_ID=" + args.grant_id)
         print("SUBJECT_MATCH=true")
         print("ADD_GRANTS=" + str(len(missing)))
         print("EXISTING_GRANTS_PRESERVED=true")
@@ -111,21 +115,21 @@ def main():
         state = {
             "draftId": draft["id"], "revision": int(etag),
             "targetPolicyRef": candidate["bundleId"] + ":" + str(candidate["version"]),
-            "addedGrantIds": [GRANT_ID], "desiredGrants": {GRANT_ID: wanted},
+            "addedGrantIds": [args.grant_id], "desiredGrants": {args.grant_id: wanted},
             "capabilitiesHash": lifecycle.digest(policy["capabilities"]),
             "baselineGrantsHash": lifecycle.digest(policy["grants"]),
         }
         review_preview(base, token, state)
         lifecycle.write_state(args.state_file, state)
         print("DRAFT_ID=" + state["draftId"])
-        print("PREVIEW_GRANT_ADDS=" + GRANT_ID)
+        print("PREVIEW_GRANT_ADDS=" + args.grant_id)
         print("POLICY_NOT_PUBLISHED=true")
         return
 
     if args.state_file is None:
         raise ValueError("STATE_FILE_REQUIRED")
     state = lifecycle.read_state(args.state_file)
-    if state.get("desiredGrants") != {GRANT_ID: wanted} or state.get("addedGrantIds") != [GRANT_ID]:
+    if state.get("desiredGrants") != {args.grant_id: wanted} or state.get("addedGrantIds") != [args.grant_id]:
         raise ValueError("STATE_GRANT_MISMATCH")
     if args.mode == "preview":
         review_preview(base, token, state)
