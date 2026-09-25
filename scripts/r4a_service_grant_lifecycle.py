@@ -16,6 +16,14 @@ DEFAULT_BASE="https://api.ouf-lab.it/api/trusted-human/v1/authorization"
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"))
 def digest(v): return hashlib.sha256(canonical(v).encode()).hexdigest()
 
+def normalize_grant(g):
+    if not isinstance(g,dict): return g
+    value=dict(g)
+    # AuthorizationPolicy.Grant serializes constraints with NON_NULL, so a
+    # semantically null constraint may be absent in API responses.
+    value.setdefault("constraints",None)
+    return value
+
 def manifest(path):
     rows=json.loads(path.read_text())
     if not isinstance(rows,list) or not rows: raise ValueError("manifest must be nonempty array")
@@ -82,12 +90,12 @@ def write_state(path,state):
 
 def plan(active_view,desired):
     p=active_view["policy"]
-    byid={g["grantId"]:g for g in p["grants"]}
+    byid={g["grantId"]:normalize_grant(g) for g in p["grants"]}
     missing=[]
     for g in desired:
         old=byid.get(g["grantId"])
         if old is None: missing.append(g)
-        elif old!=g: raise ValueError("GRANT_SEMANTIC_CONFLICT="+g["grantId"])
+        elif old!=normalize_grant(g): raise ValueError("GRANT_SEMANTIC_CONFLICT="+g["grantId"])
     capids={c["capabilityId"] for c in p["capabilities"]}
     for g in desired:
         if g["capabilityId"] not in capids: raise ValueError("CAPABILITY_NOT_ACTIVE="+g["capabilityId"])
@@ -108,9 +116,9 @@ def verify(active_view,state):
     p=active_view["policy"]
     if active_view.get("policyRef")!=state["targetPolicyRef"]: raise ValueError("ACTIVE_REF_MISMATCH")
     if digest(p["capabilities"])!=state["capabilitiesHash"]: raise ValueError("CAPABILITIES_CHANGED")
-    byid={g["grantId"]:g for g in p["grants"]}
+    byid={g["grantId"]:normalize_grant(g) for g in p["grants"]}
     for gid,wanted in state["desiredGrants"].items():
-        if byid.get(gid)!=wanted: raise ValueError("GRANT_NOT_ACTIVE="+gid)
+        if byid.get(gid)!=normalize_grant(wanted): raise ValueError("GRANT_NOT_ACTIVE="+gid)
     baseline=[g for g in p["grants"] if g["grantId"] not in state["addedGrantIds"]]
     if digest(baseline)!=state["baselineGrantsHash"]: raise ValueError("EXISTING_GRANTS_CHANGED")
 
