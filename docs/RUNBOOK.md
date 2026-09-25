@@ -108,3 +108,17 @@ around this gate. After verification, request the optional
 `ouf.onboarding.configuration.write` scope in a new HUMAN Device Flow,
 verify the token claim without printing the token, and separately verify
 the governed Authorization grant before any mutating Onboarding call.
+
+
+### HUMAN token acceptance without exporting bearer
+
+After Device Flow `verify` passes, run
+`python3 scripts/r4a_human_token_scope_smoke.py` in a server terminal. Open
+the displayed verification URI on the operator PC, enter the displayed
+short-lived code there, and authenticate as `ouf-admin`. Do not paste the
+code or the terminal's intermediate output into chat. The tool requests the
+optional `ouf.onboarding.configuration.write` scope and prints only
+boolean checks of issuer, client, HUMAN actor, expected username, Gateway
+audience, exact scope, freshness and expiry. It never prints or stores the
+access token; it does not grant an OUF Authorization capability. Do not use
+this smoke to send the HUMAN bearer to an AI client.
