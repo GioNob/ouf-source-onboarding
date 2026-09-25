@@ -139,3 +139,15 @@ invocation. The state file contains policy material and must remain mode
 0600. Inspect the plan/preview and obtain the operator's affirmative
 publication decision before using `publish --confirm-publish`. An OAuth
 scope in a JWT does not substitute for this ACTIVE grant.
+
+
+### No-write authenticated Onboarding acceptance
+
+Once the HUMAN OAuth scope and Authorization grant are ACTIVE, run
+`scripts/r4a_human_token_scope_smoke.py --check-onboarding`. This issues a
+fresh HUMAN token in memory and posts a valid version request to a fresh
+random source ID that does not exist. The owner must return HTTP 404 with
+`ONB_NOT_FOUND`; this proves Gateway reachability and fine-grained owner
+Authorization before the source lookup. A Gateway-level 404 or a 401/403
+does not pass. The request creates no source, version or publication.
+The smoke prints only status and error code, never bearer material.
