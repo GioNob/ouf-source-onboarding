@@ -40,6 +40,20 @@ class ManagedFileAuthorizationTest {
     verifyNoInteractions(files);
   }
 
+  @Test void profileCannotBeQueuedForAnotherUsersAsset(){
+    var files=mock(ManagedFileService.class);
+    var actors=mock(TrustedActorResolver.class);
+    var request=new MockHttpServletRequest();
+    UUID asset=UUID.randomUUID();
+    when(actors.requireHuman(request,"ouf.managed-source.file.profile"))
+        .thenReturn(new OnboardingService.Actor("human:bob","HUMAN_USER",Set.of("ouf.managed-source.file.profile")));
+    doThrow(new DomainFailure(HttpStatus.FORBIDDEN,"ONB_FILE_OWNER_DENIED","Managed file is not owned"))
+        .when(files).requireOwner(asset,"human:bob");
+    assertThatThrownBy(()->new ManagedFileApi(files,actors).requestProfile(asset,"key",request))
+        .isInstanceOf(DomainFailure.class).hasMessageContaining("not owned");
+    verify(files,never()).requestProfile(any(),any());
+  }
+
   @Test void assetPreviewDoesNotExposeStorageReferenceOrUploadedBy(){
     var files=mock(ManagedFileService.class);
     var actors=mock(TrustedActorResolver.class);

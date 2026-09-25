@@ -50,6 +50,9 @@ usa la proiezione dell'installazione: nessun hostname del lab è requisito PET.
    create-onboarding. La GET richiede `ouf.managed-source.preview` sia a bordo
    che nel backend. La semantica live non ha ancora
    publication set: DRAFT, review e pubblicazione Semantic precedono ACTIVE.
+   Onboarding verifica anche che il subject HUMAN proprietario dell'asset
+   corrisponda a chi invoca profile, status, preview e create-onboarding;
+   possedere uno scope non concede accesso ai file di altri utenti.
 
 ## Bootstrap lab, prima delle modifiche runtime
 

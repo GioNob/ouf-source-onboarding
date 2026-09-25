@@ -20,6 +20,14 @@ class ManagedFileRuntimeTest {
   @Autowired SemanticGapService gaps; @Autowired ManagedFileService files; @Autowired ManagedFileProfiler profiler; @Autowired OnboardingService onboarding; @Autowired CanonicalHash hashes; @Autowired JdbcClient db;
   OnboardingService.Actor human=new OnboardingService.Actor("human:test","HUMAN_USER");OnboardingService.Actor ingestion=new OnboardingService.Actor("service:ingestion","SERVICE",Set.of("ouf.ingestion.configuration.attest"));
   @BeforeEach void clean(){db.sql("truncate table ouf_onboarding.audit_event,ouf_onboarding.consumer_compatibility_attestation,ouf_onboarding.approval_decision,ouf_onboarding.approval_challenge,ouf_onboarding.published_configuration,ouf_onboarding.file_profile_job,ouf_onboarding.onboarding_version,ouf_onboarding.file_profile,ouf_onboarding.managed_file_asset,ouf_onboarding.source restart identity cascade").update();}
+  @Test void humanCapabilityDoesNotRevealAnotherUsersStagedAsset(){
+    byte[] csv="cinema,indirizzo\nA,Trieste\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.register(null,"object://staging/owned.csv",hashes.ofBytes(csv),"text/csv",csv.length,"human:alice","retention://30d").get("asset_id");
+    files.requireOwner(asset,"human:alice");
+    assertThatThrownBy(()->files.requireOwner(asset,"human:bob"))
+        .isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class)
+        .hasMessageContaining("not owned");
+  }
   @Test @SuppressWarnings("unchecked") void accessTableWithoutGeometryCreatesDraftWithCompositeKeysAndRelationshipEvidence(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory)throws Exception{
     it.comune.trieste.ouf.pairwise.ManagedFormatsPublisherFixture.main(new String[]{directory.toString()});
     for(String filename:List.of("assets.mdb","assets.accdb")){
