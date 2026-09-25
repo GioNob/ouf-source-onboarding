@@ -25,13 +25,20 @@ public class PermissionDelegationVerifier {
  }
  private SecurityException denied(){return new SecurityException("AUTH_OWNER_RECEIPT_INVALID");}
  public Delegated verify(String proof,String path,String capability,byte[] body){
+  return verifyBound(proof,path,capability,body,"authorization-proposal-owner","ouf-authorization-owner-v1.");
+ }
+ /** Managed-file receipts use a distinct purpose and MAC domain. */
+ public Delegated verifyManagedFile(String proof,String path,String capability,byte[] body){
+  return verifyBound(proof,path,capability,body,"managed-file-owner","ouf-managed-file-owner-v1.");
+ }
+ private Delegated verifyBound(String proof,String path,String capability,byte[] body,String purpose,String macDomain){
   try{
    if(key.length!=64||issuer.isBlank()||audience.isBlank()||proof==null||proof.length()>16384||body.length>65536)throw denied();
    var parts=proof.split("\\.",-1);if(parts.length!=2||!parts[0].matches("[A-Za-z0-9_-]+")||!parts[1].matches("[A-Za-z0-9_-]+"))throw denied();
    var mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(key,"HmacSHA256"));
-   if(!MessageDigest.isEqual(mac.doFinal(("ouf-authorization-owner-v1."+parts[0]).getBytes(StandardCharsets.US_ASCII)),Base64.getUrlDecoder().decode(parts[1])))throw denied();
+   if(!MessageDigest.isEqual(mac.doFinal((macDomain+parts[0]).getBytes(StandardCharsets.US_ASCII)),Base64.getUrlDecoder().decode(parts[1])))throw denied();
    var r=json.readValue(Base64.getUrlDecoder().decode(parts[0]),Receipt.class);var now=Instant.now().getEpochSecond();
-   if(r.v()!=1||!"authorization-proposal-owner".equals(r.purpose())||!"POST".equals(r.method())||!path.equals(r.path())||!capability.equals(r.capability())||r.iat()>now||r.exp()<=now||r.exp()<=r.iat()||r.exp()-r.iat()>30||!issuer.equals(r.issuer())||!audience.equals(r.audience())||!workload.equals(r.workload())||!HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body)).equals(r.bodyHash()))throw denied();
+   if(r.v()!=1||!purpose.equals(r.purpose())||!"POST".equals(r.method())||!path.equals(r.path())||!capability.equals(r.capability())||r.iat()>now||r.exp()<=now||r.exp()<=r.iat()||r.exp()-r.iat()>30||!issuer.equals(r.issuer())||!audience.equals(r.audience())||!workload.equals(r.workload())||!HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body)).equals(r.bodyHash()))throw denied();
    var roles=new TreeSet<String>();if(r.roles()!=null&&!r.roles().isEmpty())for(String role:r.roles().split(" ",-1)){if(!BootstrapAdministrator.validRole(role)||!roles.add(role)||roles.size()>32)throw denied();}
    if(r.scope()==null||r.scope().length()>8192)throw denied();var scopes=new HashSet<>(Arrays.asList(r.scope().split(" +")));if(!scopes.contains(capability))throw denied();
    return new Delegated(new PrincipalContext(r.subject(),r.tenant(),PrincipalContext.ActorType.HUMAN,r.workload(),r.acr(),r.issuer(),r.audience(),scopes,new PrincipalContext.IdentityClaims(roles,r.acr(),Set.of(),null)),r.idempotencyKey());
