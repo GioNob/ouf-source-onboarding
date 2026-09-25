@@ -111,6 +111,8 @@ public class IamSecurityConfiguration {
         .requestMatchers(
             "/api/trusted-human/v1/authorization/**",
             "/api/trusted-human/v1/installations/**",
+            "/api/trusted-human/v1/approval-challenges/**",
+            "/api/onboarding/v1/sources/**",
             "/api/internal/v1/authorization/policy-bundle/**").authenticated()
         .anyRequest().permitAll());
     http.oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(trustedJwtAuthenticationConverter)));
