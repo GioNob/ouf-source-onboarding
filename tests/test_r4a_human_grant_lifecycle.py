@@ -26,3 +26,14 @@ def test_equivalent_grant_with_another_id_blocks_duplicate():
                          "2026-09-25T00:00:00Z", "2026-10-25T00:00:00Z")
     with pytest.raises(ValueError, match="EQUIVALENT_GRANT_REQUIRES_REVIEW"):
         human.check_no_equivalent({"grants": [{**wanted, "grantId": "other"}]}, wanted)
+
+
+def test_preview_requires_exact_added_grant(monkeypatch):
+    wanted = human.grant("b93d8cf6-cd14-4ee6-91d7-84cd76c4f500",
+                         "2026-09-25T00:00:00Z", "2026-10-25T00:00:00Z")
+    state = {"desiredGrants": {human.GRANT_ID: wanted}}
+    monkeypatch.setattr(human.lifecycle, "preview", lambda *args: {
+        "grantChanges": [{"grantId": human.GRANT_ID, "before": None,
+                          "after": {**wanted, "subjectId": "another-subject"}}]})
+    with pytest.raises(ValueError, match="PREVIEW_GRANT_CONTENT_MISMATCH"):
+        human.review_preview("base", "token", state)
