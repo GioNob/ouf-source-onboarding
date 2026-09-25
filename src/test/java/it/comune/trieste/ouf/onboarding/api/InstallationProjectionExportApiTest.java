@@ -33,7 +33,9 @@ class InstallationProjectionExportApiTest {
             Map.of("MCP_OIDC_CLIENT_ID", "mcp-workload"),
             Map.of("MCP_OIDC_CLIENT_SECRET_FILE", "/run/secrets/mcp-client-secret")),
         new InstallationRuntimeProjectionService.OnboardingProjection(
-            Map.of("OUF_RUNTIME_PUBLICATIONS_TENANT_ID", "tenant-a")));
+            Map.of("OUF_RUNTIME_PUBLICATIONS_TENANT_ID", "tenant-a")),
+        new InstallationRuntimeProjectionService.ServicesProjection(
+            Map.of("ouf-semantic-registry", "semantic-runtime")));
   }
 
   private MockHttpServletRequest request(String actor, Set<String> capabilities) {
