@@ -160,8 +160,17 @@ def main():
     status,active,_=http_json("GET",f"/api/trusted-human/v1/installations/{a.installation_id}/active",token,correlation=corr)
     if status!=200 or active.get("revision")!=a.expected_source_revision:
         raise LifecycleError("ACTIVE_SOURCE_REVISION_CHANGED")
-    source=active.get("payload")
-    if not isinstance(source,dict): raise LifecycleError("ACTIVE_PAYLOAD_MISSING")
+    status,revision_view,_=http_json(
+        "GET",
+        f"/api/trusted-human/v1/installations/{a.installation_id}/revisions/{a.expected_source_revision}",
+        token,correlation=corr)
+    if status!=200:
+        raise LifecycleError("ACTIVE_REVISION_READ_HTTP_"+str(status))
+    if revision_view.get("revision")!=a.expected_source_revision:
+        raise LifecycleError("ACTIVE_REVISION_READ_MISMATCH")
+    source=revision_view.get("payload")
+    if not isinstance(source,dict):
+        raise LifecycleError("ACTIVE_PAYLOAD_MISSING")
 
     candidate=derive(source,bindings);verify_only_change(source,candidate,bindings)
 
