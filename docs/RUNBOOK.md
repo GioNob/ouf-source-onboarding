@@ -122,3 +122,20 @@ boolean checks of issuer, client, HUMAN actor, expected username, Gateway
 audience, exact scope, freshness and expiry. It never prints or stores the
 access token; it does not grant an OUF Authorization capability. Do not use
 this smoke to send the HUMAN bearer to an AI client.
+
+
+### Named HUMAN grant for Onboarding configuration
+
+Use `scripts/r4a_human_grant_lifecycle.py` for the exact IAM subject ID
+resolved from Keycloak username `ouf-admin`. The script requires a fresh
+Device Flow token for `authorization.policy.admin`, checks its subject and
+HUMAN claim against that ID, and keeps bearer material only in memory.
+The add-only lifecycle is `plan → draft → preview → publish → verify` over
+the trusted-HUMAN Authorization owner API. It refuses duplicate equivalent
+grants, capability absence and unexpected changes in preview; it preserves
+all existing capabilities and grants. The default lab validity is
+2026-09-25T00:00:00Z through 2026-10-25T00:00:00Z and is explicit in each
+invocation. The state file contains policy material and must remain mode
+0600. Inspect the plan/preview and obtain the operator's affirmative
+publication decision before using `publish --confirm-publish`. An OAuth
+scope in a JWT does not substitute for this ACTIVE grant.
