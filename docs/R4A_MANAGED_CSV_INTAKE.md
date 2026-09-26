@@ -263,6 +263,15 @@ deploy sono attesi `ORIGINAL_CONTAINERS_PRESENT=true`,
 `MINIO_CREDENTIAL_FILES_SAFE=true`, `TOKEN_DIRECTORY_SAFE=true`,
 `ONBOARDING_STAGING_ENV_KEYS_PRESENT=false` e
 `ONBOARDING_STAGING_MOUNTS_PRESENT=false`.
+Il preflight sul lab ha confermato lo snapshot SHA-256 sopra, container
+originali presenti, directory private e file MinIO/token sicuri, rete e
+utente runtime corretti, nessun env o mount di staging presente e nessuna
+scrittura. La build dal tree Git `e0509e8d48146d20d2134eb27c8b1a40be6c9141`
+ha prodotto l'immagine candidata `ouf-onboarding:r4a-e0509e8`, image ID
+`sha256:8ca287241c4dd7753fe23a300c1b5764aab9485021efd626f5db6fee8356f920`;
+la label revision coincide. I workflow CI del precedente commit funzionale
+`834574f34e1034d275068baf5b54108b08ad5fc6` sono verdi. La presenza
+dell'immagine non dimostra salute dell'applicazione né funzionalità di staging.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
