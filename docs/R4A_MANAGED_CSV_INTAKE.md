@@ -318,6 +318,23 @@ Il codice MinIO è stato allineato al bootstrap già passato: legge
 `MINIO_ROOT_USER_FILE` solo se leggibile e, altrimenti, usa
 `MINIO_ROOT_USER`; l'eventuale prossimo errore include soltanto il codice
 numerico di uscita del comando, senza stderr o argomenti.
+Il gate corretto sul lab ha restituito `ORIGINAL_RUNNING=true`,
+`CANDIDATE_STOPPED=true`, `BACKUP_ARCHIVE_VALID=true`,
+`FLYWAY_VERSION=29`, `MINIO_STAGING_BUCKET_EMPTY=true`,
+`NO_PERSISTENT_WRITES=true` e `SECRETS_PRINTED=false`.
+`scripts/r4a_onboarding_rollout.py plan/apply/rollback --db-dump <DUMP>`
+usa il container candidato già verificato per ricreare `ouf-onboarding`
+con l'alias Docker esplicito dopo avere fermato temporaneamente
+`ouf-onboarding-r4a-smoke`. Conserva l'originale fermo sotto
+`ouf-onboarding-pre-r4a-e0509e8`, registra gli ID in un file privato 0600,
+controlla `/actuator/health/readiness` dalla namespace di rete del nuovo
+container e tenta il rollback automatico dei container in caso di errore.
+Il rollback mantiene il dump DB disponibile ma non ripristina il DB da solo:
+V30 e V31 aggiungono tabelle, e l'eventuale necessità di un restore richiede
+la verifica delle scritture intervenute. Non caricare il CSV reale prima di
+aver verificato backup degli oggetti, retention, route Gateway e limiti del
+flusso. Conservare il container originale e il dump fino alla chiusura del
+gate di accettazione.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
