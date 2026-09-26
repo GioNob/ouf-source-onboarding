@@ -364,8 +364,26 @@ ora richiedono il tag `ouf-onboarding:r4a-e6b7647` e la label di origine
 `e6b7647abb983db5cae1365730b891a4dc46797e`; ottengono l'image ID da
 `docker inspect` e verificano l'identità del candidato. Il secondo rollout
 userà `ouf-onboarding-pre-r4a-e6b7647` come nome dell'originale fermo.
-L'immagine corretta non è stata ancora costruita sul VPS né il nuovo rollout
-eseguito. La CI del commit di correzione va verificata prima della build.
+Sul VPS l'immagine corretta `ouf-onboarding:r4a-e6b7647` è stata costruita
+con image ID `sha256:9a760cce36307a3a543a97c77aacee216709e2fbf5421dbe8b38ef2b6f0b5d79`
+e label della revisione `e6b7647abb983db5cae1365730b891a4dc46797e`.
+La riconciliazione del tentativo fallito è PASS; lo stato è archiviato in
+`/etc/ouf/deploy-snapshots/r4a-onboarding-rollout-failed-e0509e8.json`.
+Un backup aggiornato dello schema V31, salvato in
+`/etc/ouf/deploy-snapshots/r4a-onboarding-20260926T134401Z-a7aa6a67.dump`,
+ha superato il ripristino in un database temporaneo.
+Il gate corretto nel commit `bb9acb8d864dbef621066970461027d09a5c40e2`
+verifica l'immagine effettiva e blocca Flyway sotto V31 o bucket non vuoto:
+sul VPS ha restituito originale attivo, candidato fermo, backup valido,
+`FLYWAY_VERSION=31`, `MINIO_STAGING_BUCKET_EMPTY=true` e nessuna scrittura.
+Entrambe le CI di tale commit sono PASS. Il piano è PASS e il secondo
+`apply` ha restituito `LIVE_IMAGE_MATCH=true` e `LIVE_READINESS=PASS`;
+conserva l'originale sotto `ouf-onboarding-pre-r4a-e6b7647` e segnala
+`SMOKE_CONTAINER_STOPPED=true`. Il database non è stato ripristinato.
+Prima delle route Gateway verificare nuovamente identità, stato e restart
+policy del live e del container di rollback, la capacità di staging reale,
+e il percorso di ritorno. Readiness e CI da sole non provano upload,
+limite 413, policy MinIO o ricerca end-to-end.
 
 ### Automazione della release ricavata dal primo tentativo
 
