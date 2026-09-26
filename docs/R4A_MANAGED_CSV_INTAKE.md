@@ -155,6 +155,15 @@ directory 0700 e file 0600. `plan` e `verify` non scrivono; `apply` non
 sovrascrive un file esistente e fallisce se lo snapshot non coincide con i
 container ancora attivi. Lo snapshot non sostituisce il backup di database
 e oggetti né ricrea automaticamente un container.
+Nel lab il `plan` ha trovato tre container e nessuno snapshot; `apply` ha
+salvato un file corrispondente allo stato live e `verify` ne ha riletto lo
+stesso SHA-256
+`fbdc127f1edf990ec3603662143e6f8742913a27678571e6dfe1fc7281704772`.
+`scripts/r4a_minio_staging_preflight.py` raccoglie ora in sola lettura rete,
+mount, sorgenti delle credenziali espresse come **nomi di variabile**, client
+`mc` disponibili e immagini client già presenti: non stampa i valori degli
+env Docker. Usare il risultato per pinning/versioning del client MinIO prima
+di creare bucket o account.
 
 Per la richiesta che `ouf-admin` possa usare tutte le capability HUMAN
 attive, `scripts/r4a_admin_all_human_manifest.py --subject-id
