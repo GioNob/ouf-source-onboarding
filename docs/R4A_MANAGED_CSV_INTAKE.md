@@ -335,6 +335,23 @@ la verifica delle scritture intervenute. Non caricare il CSV reale prima di
 aver verificato backup degli oggetti, retention, route Gateway e limiti del
 flusso. Conservare il container originale e il dump fino alla chiusura del
 gate di accettazione.
+La prima invocazione `apply` del 26/09 ha restituito
+`AUTO_CONTAINER_ROLLBACK=PASS` e `ROLLOUT_BLOCKED=CONTAINER_NOT_RUNNING`:
+il nuovo container è terminato durante l'avvio; lo script lo ha eliminato
+nel rollback senza conservare i log. La causa **non è ancora accertata**.
+Nel codice `MinioManagedFileStagingStore` ha due costruttori e, quando il
+bucket di staging è configurato, Spring deve scegliere il costruttore con
+le proprietà dell'ambiente. Il candidato successivo lo annota con
+`@Autowired` e aggiunge un test di avvio del bean da variabili ambiente
+con i nomi usati dal deploy. Questa è una correzione di un difetto
+potenziale, non una prova che fosse la sola causa del fallimento live.
+Lo script di rollout rivisto salva prima della rimozione fino a 120 righe
+di log in un file privato root 0600 sotto `/etc/ouf/deploy-snapshots`;
+espone soltanto il percorso e non sacrifica il rollback se il salvataggio
+fallisce. Prima di ritentare, verificare che i container originali siano
+tornati attivi e leggere la versione Flyway effettiva, senza stampare log,
+secret o snapshot in chat. La nuova immagine deve essere ricostruita e
+verificata con il commit della correzione prima di creare un nuovo candidato.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`

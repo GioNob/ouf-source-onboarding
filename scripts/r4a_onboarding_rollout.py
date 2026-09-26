@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 
 ROOT = Path('/etc/ouf/deploy-snapshots')
 SNAPSHOT = ROOT / 'r4a-before-staging.docker-inspect.json'
@@ -141,9 +142,26 @@ def write_state(old: dict, smoke: dict, archive: Path) -> None:
         os.fsync(stream.fileno())
 
 
+def save_failed_logs() -> None:
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    path = ROOT / ('r4a-onboarding-failed-' + stamp + '.log')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        subprocess.run(['docker', 'logs', '--tail', '120', LIVE], stdout=stream,
+                       stderr=stream, check=False)
+        stream.flush()
+        os.fsync(stream.fileno())
+    # Logs can contain application data: expose only their private path.
+    print('FAILED_CONTAINER_LOG_SAVED=' + str(path), file=sys.stderr)
+
+
 def restore_old(old_id: str, smoke_id: str) -> None:
     new = inspect(LIVE, allow_missing=True)
     if new and new['Id'] != old_id:
+        try:
+            save_failed_logs()
+        except (OSError, ValueError):
+            print('FAILED_CONTAINER_LOG_SAVE_FAILED=true', file=sys.stderr)
         docker('update', '--restart', 'no', LIVE)
         if new['State']['Running']:
             docker('stop', LIVE)

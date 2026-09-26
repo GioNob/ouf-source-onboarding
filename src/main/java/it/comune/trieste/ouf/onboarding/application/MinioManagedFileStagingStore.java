@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -22,6 +23,7 @@ public class MinioManagedFileStagingStore implements ManagedFileStagingStore {
   private final MinioClient minio;
   private final String bucket;
 
+  @Autowired
   public MinioManagedFileStagingStore(
       @Value("${ouf.onboarding.staging.endpoint}") String endpoint,
       @Value("${ouf.onboarding.staging.bucket}") String bucket,
