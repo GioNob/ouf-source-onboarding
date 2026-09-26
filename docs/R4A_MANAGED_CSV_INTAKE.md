@@ -107,6 +107,45 @@ CSV su MinIO aggirando la route HUMAN.
 
 ## Configurazione runtime candidata
 
+### Stato lab al 26/09/2026
+
+Il bootstrap IAM è verificato: le cinque capability sono registrate, la
+PolicyBundle attiva è `ouf-lab-authorization:26` (con due grant SERVICE e
+quattro grant HUMAN aggiunti nelle revisioni 25 e 26) e il verificatore del
+token `ouf-onboarding` ha restituito `WORKLOAD_TOKEN_ACCEPTANCE=PASS` per
+issuer, client, audience, attore SERVICE, tenant, scope e scadenza. Il check
+locale dei claim non sostituisce la verifica della firma nel Gateway.
+
+I container `ouf-onboarding` e `ouf-onboarding-r4a-smoke` utilizzano
+`ouf-onboarding:r4a-5866007`, rete `ouf-backend`, UID/GID `10003:10003` e
+montano soltanto `authorization-owner-key` e `onboarding-ths.yaml`. Entrambi
+hanno `STAGING_KEYS=NONE`; `ouf-minio` ha il volume dati persistente su
+`/data` e il proprio file privato per la password amministrativa. Nessuno
+dei tre container reca l'etichetta di un file Compose, e la ricerca di
+script di avvio sotto `/opt/ouf` e `/etc/systemd/system` non ha trovato la
+definizione corrente. La configurazione di staging, il bucket dedicato, le
+credenziali con permessi limitati e i mount non sono quindi ancora verificati
+o installati. Non dedurre dall'esistenza di MinIO che il bucket o il backup
+dei managed file siano pronti; il bucket UDP esistente resta separato.
+
+Prima di qualsiasi ricreazione dei container conservare, in un file privato
+root-owned sul VPS, il risultato integrale di `docker inspect` dei container
+interessati (contiene variabili e potenzialmente secret: non incollarlo in
+chat o nei repository), l'image ID e la configurazione dei mount e della
+rete. Documentare i controlli di salute e il rollback verso i container
+precedenti. Provisionare il bucket `ouf-managed-files` e un'identità MinIO
+limitata al prefisso `arn:aws:s3:::ouf-managed-files/managed-files/*`, con
+`s3:PutObject` e `s3:GetObject` come operazioni richieste dal codice; la
+prova fino a 10 MiB deve accertare anche i permessi necessari al multipart
+e alla pulizia di un upload interrotto; provare con tale identità
+scrittura e lettura nel prefisso, il rifiuto sull'altro bucket e accesso
+anonimo negato. Rendere accessibili i file credenziali solo a root e al
+runtime UID/GID 10003, senza stampare valori o ruotare secret esistenti.
+Stabilire backup e retention del bucket prima dei primi byte reali. Solo
+dopo il bootstrap e una prova di rollback montare i due file nel container
+Onboarding e impostare le variabili qui sotto; verificare la salute del
+backend prima di installare le route Gateway di prodotto.
+
 Solo dopo il bootstrap, nel deploy governato di Onboarding impostare:
 
 ```text
