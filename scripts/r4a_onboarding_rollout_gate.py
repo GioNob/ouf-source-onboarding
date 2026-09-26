@@ -16,7 +16,8 @@ import sys
 
 DIRECTORY = Path('/etc/ouf/deploy-snapshots')
 PREVIOUS = DIRECTORY / 'r4a-before-staging.docker-inspect.json'
-IMAGE_ID = 'sha256:8ca287241c4dd7753fe23a300c1b5764aab9485021efd626f5db6fee8356f920'
+IMAGE = 'ouf-onboarding:r4a-e6b7647'
+REVISION = 'e6b7647abb983db5cae1365730b891a4dc46797e'
 
 
 def run(*cmd: str, input: str | bytes | None = None, failure_code: str = 'CHECK_COMMAND_FAILED') -> bytes:
@@ -105,11 +106,17 @@ def main() -> None:
     original_id = next(d['Id'] for d in saved if d['Name'] == '/ouf-onboarding')
     live = inspect('ouf-onboarding')
     candidate = inspect('ouf-onboarding-r4a-candidate')
+    image = inspect(IMAGE)
     if (live['Id'] != original_id or not live['State']['Running'] or
-            candidate['State']['Status'] != 'created' or candidate['Image'] != IMAGE_ID):
+            candidate['State']['Status'] != 'created' or candidate['Image'] != image['Id'] or
+            image['Config'].get('Labels', {}).get('org.opencontainers.image.revision') != REVISION):
         raise ValueError('CANDIDATE_OR_ORIGINAL_CHANGED')
     version = check_db(args.db_dump)
+    if int(version) < 31:
+        raise ValueError('FLYWAY_VERSION_BELOW_R4A')
     empty = check_bucket()
+    if not empty:
+        raise ValueError('MINIO_STAGING_BUCKET_NOT_EMPTY')
     print('ORIGINAL_RUNNING=true')
     print('CANDIDATE_STOPPED=true')
     print('BACKUP_ARCHIVE_VALID=true')
