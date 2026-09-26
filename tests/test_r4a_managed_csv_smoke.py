@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import time
 
 import pytest
 
@@ -27,3 +28,20 @@ def test_profile_rejects_unredacted_address():
              "redactedSample":[{"cinema":"Cinema A","indirizzo":"Via something"}]}
     with pytest.raises(smoke.SmokeError,match="PROFILE_CONTRACT_MISMATCH"):
         smoke.check_preview(preview)
+
+
+def test_named_human_identity_requires_exact_username_and_tenant():
+    now=int(time.time())
+    claims={"sub":"subject-1","preferred_username":"ouf-admin","tenant_id":"ouf-lab",
+            "iss":"https://issuer.example","azp":"ouf-human-admin","ouf_actor_type":"HUMAN",
+            "aud":["ouf-api-gateway"],"scope":" ".join(sorted(smoke.SCOPES)),
+            "iat":now,"exp":now+300}
+    def allowed(**changes):
+        return smoke.accepted_claims({**claims,**changes},None,"ouf-admin","ouf-lab",
+                                     "https://issuer.example","ouf-human-admin","ouf-api-gateway",now)
+    assert allowed()
+    for bad in ({"sub":""},{"preferred_username":"someone-else"},{"tenant_id":"other"},
+                {"ouf_actor_type":"SERVICE"},{"aud":["wrong"]},{"scope":"openid"}):
+        assert not allowed(**bad)
+    assert smoke.accepted_claims(claims,"subject-1",None,"ouf-lab",
+                                 "https://issuer.example","ouf-human-admin","ouf-api-gateway",now)
