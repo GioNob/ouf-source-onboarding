@@ -42,7 +42,21 @@ def oidc_post(url,fields):
         except (ValueError,OSError):return exc.code,{}
 
 
-def device_login(expected_subject, issuer, client, audience):
+def accepted_claims(claims, expected_subject, expected_username, tenant, issuer, client, audience, requested):
+    aud=claims.get("aud",[])
+    if isinstance(aud,str):aud=[aud]
+    sub=claims.get("sub")
+    identity_ok=(sub==expected_subject if expected_subject else
+                 isinstance(sub,str) and bool(sub) and claims.get("preferred_username")==expected_username)
+    return (identity_ok and (tenant is None or claims.get("tenant_id")==tenant)
+            and claims.get("iss")==issuer and claims.get("azp")==client
+            and claims.get("ouf_actor_type") in ("HUMAN","HUMAN_USER")
+            and isinstance(aud,list) and audience in aud
+            and SCOPES.issubset(set(str(claims.get("scope","")).split()))
+            and claims.get("iat",0)>=requested-5 and claims.get("exp",0)>time.time())
+
+
+def device_login(expected_subject, issuer, client, audience, expected_username=None, tenant=None):
     with urllib.request.urlopen(issuer+"/.well-known/openid-configuration",timeout=15) as response:
         metadata=json.load(response)
     if metadata.get("issuer")!=issuer:raise SmokeError("ISSUER_MISMATCH")
@@ -73,12 +87,7 @@ def device_login(expected_subject, issuer, client, audience):
                 part=token.split(".")[1]
                 claims=json.loads(base64.urlsafe_b64decode(part+"="*(-len(part)%4)))
             except (IndexError,ValueError,UnicodeError) as exc:raise SmokeError("TOKEN_CLAIMS_INVALID") from exc
-            audience_claim=claims.get("aud",[])
-            if isinstance(audience_claim,str):audience_claim=[audience_claim]
-            if (claims.get("iss")!=issuer or claims.get("azp")!=client or claims.get("sub")!=expected_subject
-                    or claims.get("ouf_actor_type") not in ("HUMAN","HUMAN_USER")
-                    or audience not in audience_claim or not SCOPES.issubset(set(str(claims.get("scope","")).split()))
-                    or claims.get("iat",0)<requested-5 or claims.get("exp",0)<=time.time()):
+            if not accepted_claims(claims,expected_subject,expected_username,tenant,issuer,client,audience,requested):
                 raise SmokeError("TOKEN_CONTRACT_MISMATCH")
             print("TOKEN_ACCEPTANCE=PASS",flush=True)
             return token
@@ -115,12 +124,28 @@ def check_preview(preview):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--csv",type=Path,required=True)
-    p.add_argument("--subject-id",required=True,help="Freshly verified exact Keycloak HUMAN subject")
-    p.add_argument("--issuer",required=True,help="Approved iam.issuerUrl from installation projection")
-    p.add_argument("--gateway-base-url",required=True,help="Approved gateway.publicApiBaseUrl from installation projection")
-    p.add_argument("--audience",required=True,help="Approved gateway.requiredAudience from installation projection")
+    identity=p.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--subject-id",help="Freshly verified exact Keycloak HUMAN subject")
+    identity.add_argument("--expected-username",help="Exact approved HUMAN username; the token subject must be nonempty")
+    p.add_argument("--tenant-id",help="Expected tenant ID in the HUMAN token")
+    p.add_argument("--installation-projection",type=Path,help="Approved local InstallationProjection")
+    p.add_argument("--issuer",help="Approved iam.issuerUrl from installation projection")
+    p.add_argument("--gateway-base-url",help="Approved gateway.publicApiBaseUrl from installation projection")
+    p.add_argument("--audience",help="Approved gateway.requiredAudience from installation projection")
     p.add_argument("--client-id",required=True,help="Approved HUMAN device client for this installation")
     a=p.parse_args()
+    if a.installation_projection:
+        if any((a.issuer,a.gateway_base_url,a.audience)):
+            raise SmokeError("PROJECTION_AND_MANUAL_BINDINGS_CONFLICT")
+        config=json.loads(a.installation_projection.read_text())
+        gateway=config["gateway"]
+        a.issuer=gateway["issuerUrl"]
+        a.gateway_base_url=gateway["publicApiBaseUrl"]
+        a.audience=gateway["requiredAudience"]
+    if not all((a.issuer,a.gateway_base_url,a.audience)):
+        raise SmokeError("INSTALLATION_BINDINGS_MISSING")
+    if a.expected_username and not a.tenant_id:
+        raise SmokeError("EXPECTED_TENANT_REQUIRED")
     issuer=a.issuer.rstrip("/")
     base=a.gateway_base_url.rstrip("/")
     for name,value in (("issuer",issuer),("gateway",base)):
@@ -129,7 +154,7 @@ def main():
                 or parsed.query or parsed.fragment):raise SmokeError("INVALID_INSTALLATION_"+name.upper())
     data=exact_file(a.csv)
     print("CSV_BYTES=509 CSV_SHA256_MATCH=true",flush=True)
-    token=device_login(a.subject_id,issuer,a.client_id,a.audience)
+    token=device_login(a.subject_id,issuer,a.client_id,a.audience,a.expected_username,a.tenant_id)
     status,asset=json_request(base,"/api/managed-sources/v1/files",token,"POST",data,{
         "Content-Type":"text/csv","X-Content-SHA256":"sha256:"+SHA})
     if status!=201 or asset.get("content_hash")!="sha256:"+SHA or asset.get("size_bytes")!=509:
