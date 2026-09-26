@@ -24,9 +24,20 @@ prima del termine dell'invio (`true`), risposta 204 e rimozione della route
 temporanea (`true`), sul commit Gateway
 `04d9aa924e84db77b1e9135efef21b10158bc999`. Le route reali HUMAN e MCP
 risultavano entrambe assenti (HTTP 404) nell'inventario Admin API successivo.
+Il 26/09 le 10 route HUMAN, inclusa la route di upload con streaming, e la
+route SERVICE `onboarding-managed-file-read` sono state installate nel lab
+con readback e rifiuto anonimo verificati. Gli snapshot di ripristino sono
+`/etc/ouf/deploy-snapshots/trusted-human-onboarding-ny61thdi/previous.json`
+e `/etc/ouf/deploy-snapshots/internal-m2m-routes-y28fy7ed/previous.json`.
+Gateway raggiunge Onboarding con readiness HTTP 200; Onboarding respinge
+l'upload anonimo con 401. Il candidato HUMAN ha 10 route, revisione
+installazione 5, `proxy-control.request_buffering=false` solo per l'upload,
+limite 10485760 byte e upstream `ouf-onboarding:8080`. La route SERVICE
+richiede lo scope `ouf.internal.object-storage.read`, consente soltanto
+`ouf-onboarding` e `ouf-ingestion` e punta al medesimo backend.
 Restano da provare streaming e limiti attraverso la route prodotto fino
 all'owner, inclusi 413, 415, hash errato, assenza di asset parziale e rollback.
-Non attivare queste route in produzione con tale gate aperto.
+L'installazione nel lab non chiude il gate per la produzione.
 
 Gli hostname `ouf-onboarding`, `ouf-apisix` e `ouf-minio` sotto sono binding
 DNS privati del lab nella stessa rete Docker; non rappresentano il contratto
@@ -425,6 +436,25 @@ attiva e materializzare `onboarding-managed-file-read` col tool
 Gli installer APISIX creano snapshot private, readback e prova anonima
 401/403, con restore automatico in caso di errore. Non installare le route
 prima che il backend e le due capability rispondano secondo contratto.
+
+## CSV allegato e comando di smoke semplificato
+
+Il file allegato alla conversazione `cinema_trieste(5).csv` è stato verificato
+in workspace: 509 byte e SHA-256
+`a07c2dcdc21aa9a23fb5585a69d52031dc08010d251bf39bfa67c8e0962c6e1a`.
+Non è presente automaticamente sul VPS: trasferirlo via SSH/SFTP nel percorso
+privato `/home/oufadmin/r4a-cinema.csv`, con permessi 0600, e verificare
+nuovamente byte e hash prima di ogni invocazione. Non mettere il CSV nel Git.
+La nuova modalità dello smoke legge issuer, audience e public API dalla
+`/opt/ouf/installation/active-projection.json` e verifica che il token HUMAN
+abbia `preferred_username=ouf-admin`, tenant `ouf-lab`, subject non vuoto,
+client `ouf-human-admin`, scope, attore e scadenza corretti. Si può usare
+`--installation-projection`, `--client-id`, `--expected-username` e
+`--tenant-id` al posto di trascrivere subject e URL nella shell. Il check
+SHA-256 del CSV avviene prima del Device Flow e l'upload non viene ritentato
+in automatico dopo esito incerto. La CI della nuova modalità va verificata
+prima di usarla sul VPS. Conservare asset e oggetto secondo la retention
+approvata; verificare il backup degli oggetti prima dell'upload reale.
 
 ## Accettazione da eseguire sul VPS
 
