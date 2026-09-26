@@ -375,8 +375,7 @@ effettive di staging, due file credenziali fittizi in sola lettura e la
 directory del token; usa soltanto il PostgreSQL effimero della CI e controlla
 la readiness HTTP. In caso di avvio fallito conserva un estratto delimitato
 dei log CI prima di rimuovere il container. Il test Java del bean MinIO copre
-anche la risoluzione delle variabili con i nomi Docker effettivi. Entrambi
-devono passare prima di costruire la medesima revisione sul VPS. La CI non
+anche la risoluzione delle variabili con i nomi Docker effettivi. Entrambi hanno superato la CI del commit `4564b942f8c6b80864c58de90f886d0d7ed90ec8` (workflow Source Onboarding e browser PASS) e devono passare per ogni successiva revisione prima di costruirla sul VPS. La CI non
 convalida la disponibilità del MinIO reale, la policy IAM live o Gateway.
 
 Sul VPS le fasi versionate sono `snapshot → MinIO verify → DB backup/restore
