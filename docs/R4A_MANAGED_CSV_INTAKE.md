@@ -164,6 +164,15 @@ mount, sorgenti delle credenziali espresse come **nomi di variabile**, client
 `mc` disponibili e immagini client già presenti: non stampa i valori degli
 env Docker. Usare il risultato per pinning/versioning del client MinIO prima
 di creare bucket o account.
+Sul lab il preflight ha confermato MinIO attivo su `ouf-backend`, volume dati e
+password amministrativa montati, client `mc` disponibile **dentro** il
+container (nessun client host né immagine aggiuntiva necessaria). Lo script
+`scripts/r4a_minio_staging_plan.py` usa quel client per verificare in sola
+lettura se bucket `ouf-managed-files`, utente `ouf-onboarding-staging` e
+policy `ouf-onboarding-managed-files-v1` esistono già. Legge i file admin
+soltanto nel container e cancella la configurazione temporanea `mc` alla
+fine; stampa booleani e non il contenuto delle credenziali. Non procedere
+all'apply se l'utente esiste senza i due file credenziali privati associati.
 
 Per la richiesta che `ouf-admin` possa usare tutte le capability HUMAN
 attive, `scripts/r4a_admin_all_human_manifest.py --subject-id
