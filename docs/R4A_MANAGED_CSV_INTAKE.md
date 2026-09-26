@@ -312,6 +312,12 @@ la diagnostica generica non localizzava il comando fallito. La revisione
 successiva distingue `FLYWAY_QUERY_FAILED` da
 `MINIO_BUCKET_QUERY_FAILED` e controlla l'intero bucket esistente, evitando
 di richiedere il listing di un prefisso che potrebbe non esistere.
+La verifica successiva ha localizzato il blocco in
+`MINIO_BUCKET_QUERY_FAILED`, prima di confermare l'assenza di oggetti.
+Il codice MinIO è stato allineato al bootstrap già passato: legge
+`MINIO_ROOT_USER_FILE` solo se leggibile e, altrimenti, usa
+`MINIO_ROOT_USER`; l'eventuale prossimo errore include soltanto il codice
+numerico di uscita del comando, senza stderr o argomenti.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
