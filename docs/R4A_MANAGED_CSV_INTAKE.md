@@ -255,6 +255,14 @@ il rinnovo prima di usare la route SERVICE. Il tag immagine attuale
 la configurazione e i mount di staging; predisporre un candidato con la
 versione che contiene il codice R4a, senza utilizzare lo snapshot `docker
 inspect` come script eseguibile o stampare le variabili originali.
+`scripts/r4a_onboarding_staging_preflight.py` controlla in sola lettura lo
+snapshot, i metadati dei file privati, la directory del token e la presenza
+dei mount e delle chiavi di configurazione nel container live; non stampa
+valori delle variabili, credenziali né il contenuto dello snapshot. Prima del
+deploy sono attesi `ORIGINAL_CONTAINERS_PRESENT=true`,
+`MINIO_CREDENTIAL_FILES_SAFE=true`, `TOKEN_DIRECTORY_SAFE=true`,
+`ONBOARDING_STAGING_ENV_KEYS_PRESENT=false` e
+`ONBOARDING_STAGING_MOUNTS_PRESENT=false`.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
