@@ -178,6 +178,15 @@ non modifica binding esistenti e non attribuisce scope SERVICE. Richiede la
 sessione `kcadm` valida nel container Keycloak. Richiedere nel flusso OIDC
 gli scope OPTIONAL pertinenti alla singola operazione: il solo binding non
 li inserisce automaticamente in ogni access token.
+Sul lab il batch ha restituito `MODE=plan`, 13 binding presenti e due
+mancanti (`operations.status.read`, `urban.object.search`); `MODE=apply` ha
+aggiunto i due e verificato `BOUND_SCOPES=15`, `MISSING_CATALOGUE=NONE`,
+`MISSING_BINDINGS=NONE`, `VERIFY=PASS`, senza stampare secret. Resta da
+verificare il claim `scope` di un token HUMAN fresco che richieda gli scope
+pertinenti, senza stampare il token. La modalità `token` dello stesso script
+richiede i 15 scope via Device Flow e stampa solo booleani per issuer,
+subject, client, tenant, attore HUMAN, audience, scadenza e scope; il controllo
+locale dei claim non sostituisce la convalida della firma al Gateway.
 
 Solo dopo il bootstrap, nel deploy governato di Onboarding impostare:
 

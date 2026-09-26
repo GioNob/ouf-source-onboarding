@@ -7,9 +7,14 @@ definitions, existing bindings, tokens, passwords or SERVICE clients.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 REALM = 'ouf'
 CLIENT = 'ouf-human-admin'
@@ -24,6 +29,70 @@ SCOPES = (
     'urban.object.search',
 )
 KC = '/opt/keycloak/bin/kcadm.sh'
+ISSUER = 'https://auth.ouf-lab.it/realms/ouf'
+ADMIN_SUBJECT = 'b93d8cf6-cd14-4ee6-91d7-84cd76c4f500'
+
+
+def token_acceptance() -> dict[str, bool]:
+    with urllib.request.urlopen(ISSUER + '/.well-known/openid-configuration', timeout=20) as response:
+        discovery = json.load(response)
+
+    def post(url: str, fields: dict[str, str]) -> tuple[int, dict]:
+        request = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode(),
+                                         headers={'Content-Type': 'application/x-www-form-urlencoded'},
+                                         method='POST')
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return response.status, json.load(response)
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.load(exc)
+
+    status, start = post(discovery['device_authorization_endpoint'], {
+        'client_id': CLIENT, 'scope': 'openid ' + ' '.join(SCOPES)})
+    if status != 200:
+        raise ValueError('DEVICE_AUTHORIZATION_FAILED')
+    print('OPEN_IN_BROWSER=' + start['verification_uri'], flush=True)
+    print('ENTER_DEVICE_CODE=' + start['user_code'], flush=True)
+    interval = max(5, min(30, int(start.get('interval', 5))))
+    deadline = time.monotonic() + min(600, int(start['expires_in']))
+    while time.monotonic() < deadline:
+        time.sleep(interval)
+        status, response = post(discovery['token_endpoint'], {
+            'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
+            'client_id': CLIENT, 'device_code': start['device_code']})
+        if status == 200:
+            token = response['access_token']
+            break
+        if response.get('error') == 'slow_down':
+            interval = min(30, interval + 5)
+        elif response.get('error') != 'authorization_pending':
+            raise ValueError('DEVICE_LOGIN_FAILED')
+    else:
+        raise ValueError('DEVICE_LOGIN_EXPIRED')
+    try:
+        part = token.split('.')[1]
+        claims = json.loads(base64.urlsafe_b64decode(part + '=' * (-len(part) % 4)))
+    except (IndexError, ValueError, UnicodeDecodeError) as exc:
+        raise ValueError('TOKEN_FORMAT_INVALID') from exc
+    return inspect_claims(claims)
+
+
+def inspect_claims(claims: dict) -> dict[str, bool]:
+    aud = claims.get('aud', [])
+    if isinstance(aud, str):
+        aud = [aud]
+    current = set(str(claims.get('scope', '')).split())
+    return {
+        'ISSUER_MATCH': claims.get('iss') == ISSUER,
+        'SUBJECT_MATCH': claims.get('sub') == ADMIN_SUBJECT,
+        'CLIENT_MATCH': claims.get('azp') == CLIENT,
+        'USERNAME_MATCH': claims.get('preferred_username') == 'ouf-admin',
+        'TENANT_MATCH': claims.get('tenant_id') == 'ouf-lab',
+        'ACTOR_IS_HUMAN': claims.get('ouf_actor_type') in ('HUMAN', 'HUMAN_USER'),
+        'GATEWAY_AUDIENCE': isinstance(aud, list) and 'ouf-api-gateway' in aud,
+        'ALL_REQUIRED_SCOPES': set(SCOPES).issubset(current),
+        'NOT_EXPIRED': isinstance(claims.get('exp'), int) and claims['exp'] > time.time() + 30,
+    }
 
 
 def run(container: str, *args: str) -> str:
@@ -74,9 +143,17 @@ def audit(container: str) -> tuple[str, dict[str, str], list[str], list[str], li
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('plan', 'apply', 'verify'))
+    parser.add_argument('mode', choices=('plan', 'apply', 'verify', 'token'))
     parser.add_argument('--container', default='ouf-keycloak')
     args = parser.parse_args()
+    if args.mode == 'token':
+        result = token_acceptance()
+        for name, passed in result.items():
+            print(name + '=' + str(passed).lower())
+        if not all(result.values()):
+            raise ValueError('HUMAN_TOKEN_SCOPE_MISMATCH')
+        print('ADMIN_HUMAN_TOKEN_ACCEPTANCE=PASS')
+        return
     client, ids, missing_catalogue, missing_binding, bound = audit(args.container)
     print('MODE=' + args.mode)
     print('CLIENT=' + CLIENT)

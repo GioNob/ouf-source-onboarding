@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -28,6 +29,17 @@ class AdminScopeBindingsTest(unittest.TestCase):
         self.assertEqual(unbound, [scopes.SCOPES[-1]])
         self.assertEqual(len(bound), len(scopes.SCOPES) - 1)
         self.assertNotIn('ouf.internal.object-storage.read', ids)
+
+    def test_token_scope_contract(self):
+        claims = {
+            'iss': scopes.ISSUER, 'sub': scopes.ADMIN_SUBJECT, 'azp': scopes.CLIENT,
+            'preferred_username': 'ouf-admin', 'tenant_id': 'ouf-lab',
+            'ouf_actor_type': 'HUMAN', 'aud': ['ouf-api-gateway'],
+            'scope': 'openid ' + ' '.join(scopes.SCOPES), 'exp': int(time.time()) + 300,
+        }
+        self.assertTrue(all(scopes.inspect_claims(claims).values()))
+        claims['scope'] = 'openid ' + ' '.join(scopes.SCOPES[:-1])
+        self.assertFalse(scopes.inspect_claims(claims)['ALL_REQUIRED_SCOPES'])
 
 
 if __name__ == '__main__':
