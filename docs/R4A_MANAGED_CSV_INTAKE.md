@@ -124,10 +124,10 @@ hanno `STAGING_KEYS=NONE`; `ouf-minio` ha il volume dati persistente su
 `/data` e il proprio file privato per la password amministrativa. Nessuno
 dei tre container reca l'etichetta di un file Compose, e la ricerca di
 script di avvio sotto `/opt/ouf` e `/etc/systemd/system` non ha trovato la
-definizione corrente. La configurazione di staging, il bucket dedicato, le
-credenziali con permessi limitati e i mount non sono quindi ancora verificati
-o installati. Non dedurre dall'esistenza di MinIO che il bucket o il backup
-dei managed file siano pronti; il bucket UDP esistente resta separato.
+definizione corrente. Bucket e credenziali dedicate sono stati verificati
+separatamente; le variabili e i mount di staging dei container Onboarding
+non sono ancora installati. Il backup dei managed file resta da definire;
+il bucket UDP esistente resta separato.
 
 Prima di qualsiasi ricreazione dei container conservare, in un file privato
 root-owned sul VPS, il risultato integrale di `docker inspect` dei container
@@ -189,6 +189,16 @@ nega una scrittura sul bucket UDP e pulisce l'oggetto di prova con il root;
 non carica il CSV reale. La prova non equivale a backup, versione/retention
 approvata né a verifica del multipart a 10 MiB, che restano gate prima
 dell'upload reale.
+Sul lab, dopo il bootstrap e il controllo della policy MinIO indipendente
+dall'ordine delle azioni restituito dal server, `verify` ha confermato:
+`BUCKET_EXISTS=true`, `POLICY_EXISTS=true`, `USER_EXISTS=true`,
+`APP_CREDENTIAL_FILES=both`, `POLICY_EXACT=true`,
+`PREFIX_WRITE_READ_OK=true`, `UDP_WRITE_DENIED=true`, `VERIFY=PASS` e
+`SECRETS_PRINTED=false`. La prima invocazione `apply` aveva creato le
+risorse ma era terminata con `MINIO_STAGING_VERIFY_FAILED` per il confronto
+sensibile all'ordine delle azioni; la successiva verifica con il confronto
+corretto è passata senza rotazione delle credenziali. La prova anonima,
+il multipart a 10 MiB, backup e retention richiedono ancora verifica.
 
 Per la richiesta che `ouf-admin` possa usare tutte le capability HUMAN
 attive, `scripts/r4a_admin_all_human_manifest.py --subject-id
@@ -234,6 +244,17 @@ OUF_ONBOARDING_STAGING_SECRET_KEY_FILE=/run/secrets/onboarding-minio-secret-key
 OUF_ONBOARDING_OBJECT_STORE_GATEWAY_BASE_URL=http://ouf-apisix:9080
 OUF_ONBOARDING_OBJECT_STORE_TOKEN_FILE=/run/ouf-onboarding-auth/token
 ```
+
+Montare in sola lettura i due file credenziali e la **directory**
+`/run/ouf-onboarding-auth` nel container UID/GID 10003:10003. Il refresher
+del token sostituisce atomicamente il file `token` tramite `os.replace`:
+montare direttamente il file fisserebbe il vecchio inode e impedirebbe al
+container di osservare i rinnovi. Verificare la lettura nel container e
+il rinnovo prima di usare la route SERVICE. Il tag immagine attuale
+`ouf-onboarding:r4a-5866007` e i container esistenti non includono ancora
+la configurazione e i mount di staging; predisporre un candidato con la
+versione che contiene il codice R4a, senza utilizzare lo snapshot `docker
+inspect` come script eseguibile o stampare le variabili originali.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
