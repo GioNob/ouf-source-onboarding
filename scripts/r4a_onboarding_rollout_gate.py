@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only rollout gate: DB backup, migration version, and MinIO prefix.
+"""Read-only rollout gate: DB backup, migration version, and MinIO bucket.
 
 Temporary mc configuration is deleted inside MinIO. Never prints database
 rows, object keys, admin credentials, Docker environments or backup contents.
@@ -19,12 +19,12 @@ PREVIOUS = DIRECTORY / 'r4a-before-staging.docker-inspect.json'
 IMAGE_ID = 'sha256:8ca287241c4dd7753fe23a300c1b5764aab9485021efd626f5db6fee8356f920'
 
 
-def run(*cmd: str, input: str | bytes | None = None) -> bytes:
+def run(*cmd: str, input: str | bytes | None = None, failure_code: str = 'CHECK_COMMAND_FAILED') -> bytes:
     binary = isinstance(input, bytes)
     result = subprocess.run(cmd, input=input, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, text=not binary, check=False)
     if result.returncode:
-        raise ValueError('CHECK_COMMAND_FAILED')
+        raise ValueError(failure_code)
     return result.stdout if binary else result.stdout.encode()
 
 
@@ -58,7 +58,7 @@ def check_db(archive: Path) -> str:
         raise ValueError('POSTGRES_USER_UNEXPECTED')
     query = "select coalesce(max(version),'0') from ouf_onboarding.flyway_schema_history where success=true;"
     value = run('docker', 'exec', '-i', 'ouf-postgres', 'psql', '-U', user,
-                '-d', 'ouf_onboarding', '-Atc', query).decode().strip()
+                '-d', 'ouf_onboarding', '-Atc', query, failure_code='FLYWAY_QUERY_FAILED').decode().strip()
     if not value.isdecimal():
         raise ValueError('FLYWAY_VERSION_INVALID')
     return value
@@ -75,10 +75,11 @@ root_password="$(cat "$MINIO_ROOT_PASSWORD_FILE")"
 mc --config-dir "$cfg" alias set r4a http://127.0.0.1:9000 "$root_user" "$root_password" >/dev/null 2>&1 || exit 32
 unset root_password root_user
 mc --config-dir "$cfg" stat r4a/ouf-managed-files >/dev/null 2>&1 || exit 33
-mc --config-dir "$cfg" ls --recursive r4a/ouf-managed-files/managed-files/ > "$cfg/objects" 2>/dev/null || exit 34
+mc --config-dir "$cfg" ls --recursive r4a/ouf-managed-files/ > "$cfg/objects" 2>/dev/null || exit 34
 if [ -s "$cfg/objects" ]; then echo PREFIX_EMPTY=false; else echo PREFIX_EMPTY=true; fi
 '''
-    out = run('docker', 'exec', '-i', 'ouf-minio', 'sh', '-s', input=shell).decode().strip()
+    out = run('docker', 'exec', '-i', 'ouf-minio', 'sh', '-s', input=shell,
+              failure_code='MINIO_BUCKET_QUERY_FAILED').decode().strip()
     if out not in ('PREFIX_EMPTY=true', 'PREFIX_EMPTY=false'):
         raise ValueError('MINIO_PREFIX_CHECK_UNEXPECTED')
     return out.endswith('true')
@@ -107,7 +108,7 @@ def main() -> None:
     print('CANDIDATE_STOPPED=true')
     print('BACKUP_ARCHIVE_VALID=true')
     print('FLYWAY_VERSION=' + version)
-    print('MINIO_STAGING_PREFIX_EMPTY=' + str(empty).lower())
+    print('MINIO_STAGING_BUCKET_EMPTY=' + str(empty).lower())
     print('NO_PERSISTENT_WRITES=true')
     print('SECRETS_PRINTED=false')
 
