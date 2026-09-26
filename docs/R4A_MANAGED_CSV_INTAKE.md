@@ -352,6 +352,20 @@ fallisce. Prima di ritentare, verificare che i container originali siano
 tornati attivi e leggere la versione Flyway effettiva, senza stampare log,
 secret o snapshot in chat. La nuova immagine deve essere ricostruita e
 verificata con il commit della correzione prima di creare un nuovo candidato.
+Il controllo immediato sul VPS ha confermato `ouf-onboarding` e
+`ouf-onboarding-r4a-smoke` in stato `running`, il candidato fallito in stato
+`created` e Flyway a V31. `scripts/r4a_onboarding_failed_rollout_reconcile.py
+plan/apply` verifica gli ID contro snapshot e stato privati, rimuove solo il
+vecchio candidato fermo e archivia il JSON del tentativo fallito; non modifica
+database, dump o container di produzione. Eseguire questa riconciliazione
+prima di preparare il candidato dalla revisione corretta.
+I tool `r4a_onboarding_staging_candidate.py` e `r4a_onboarding_rollout.py`
+ora richiedono il tag `ouf-onboarding:r4a-e6b7647` e la label di origine
+`e6b7647abb983db5cae1365730b891a4dc46797e`; ottengono l'image ID da
+`docker inspect` e verificano l'identità del candidato. Il secondo rollout
+userà `ouf-onboarding-pre-r4a-e6b7647` come nome dell'originale fermo.
+L'immagine corretta non è stata ancora costruita sul VPS né il nuovo rollout
+eseguito. La CI del commit di correzione va verificata prima della build.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`

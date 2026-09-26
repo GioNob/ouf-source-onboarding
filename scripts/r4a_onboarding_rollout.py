@@ -20,11 +20,12 @@ from datetime import datetime, timezone
 ROOT = Path('/etc/ouf/deploy-snapshots')
 SNAPSHOT = ROOT / 'r4a-before-staging.docker-inspect.json'
 STATE = ROOT / 'r4a-onboarding-rollout.json'
-OLD = 'ouf-onboarding-pre-r4a-e0509e8'
+OLD = 'ouf-onboarding-pre-r4a-e6b7647'
 LIVE = 'ouf-onboarding'
 SMOKE = 'ouf-onboarding-r4a-smoke'
 CANDIDATE = 'ouf-onboarding-r4a-candidate'
-IMAGE_ID = 'sha256:8ca287241c4dd7753fe23a300c1b5764aab9485021efd626f5db6fee8356f920'
+IMAGE = 'ouf-onboarding:r4a-e6b7647'
+REVISION = 'e6b7647abb983db5cae1365730b891a4dc46797e'
 
 
 def docker(*args: str, allow_missing: bool = False) -> bytes | None:
@@ -58,7 +59,7 @@ def environment(doc: dict) -> dict[str, str]:
     return values
 
 
-def preflight(archive: Path) -> tuple[dict, dict, dict]:
+def preflight(archive: Path) -> tuple[dict, dict, dict, str]:
     if os.geteuid() != 0:
         raise ValueError('ROOT_REQUIRED')
     private(ROOT, stat.S_IFDIR, 0o700)
@@ -74,9 +75,14 @@ def preflight(archive: Path) -> tuple[dict, dict, dict]:
     live = inspect(LIVE)
     smoke = inspect(SMOKE)
     candidate = inspect(CANDIDATE)
+    image = inspect(IMAGE)
+    image_id = image['Id']
+    if (not image_id.startswith('sha256:') or
+            image['Config'].get('Labels', {}).get('org.opencontainers.image.revision') != REVISION):
+        raise ValueError('IMAGE_REVISION_MISMATCH')
     if (live['Id'] != previous[LIVE]['Id'] or smoke['Id'] != previous[SMOKE]['Id'] or
             not live['State']['Running'] or not smoke['State']['Running'] or
-            candidate['Image'] != IMAGE_ID or candidate['State']['Status'] != 'created'):
+            candidate['Image'] != image_id or candidate['State']['Status'] != 'created'):
         raise ValueError('RUNTIME_STATE_CHANGED')
     if live['HostConfig']['RestartPolicy']['Name'] != 'unless-stopped' or smoke['HostConfig']['RestartPolicy']['Name'] != 'no':
         raise ValueError('RESTART_POLICY_UNEXPECTED')
@@ -89,10 +95,10 @@ def preflight(archive: Path) -> tuple[dict, dict, dict]:
     env = environment(candidate)
     if not env.get('OUF_ONBOARDING_STAGING_BUCKET') == 'ouf-managed-files':
         raise ValueError('STAGING_ENV_MISSING')
-    return live, smoke, candidate
+    return live, smoke, candidate, image_id
 
 
-def create_from(candidate: dict) -> None:
+def create_from(candidate: dict, image_id: str) -> None:
     fd, path = tempfile.mkstemp(prefix='.r4a-rollout-env-', dir=ROOT)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as stream:
@@ -105,11 +111,11 @@ def create_from(candidate: dict) -> None:
                 '--user', '10003:10003', '--restart', 'no', '--env-file', path]
         for mount in candidate['Mounts']:
             args += ['--mount', f"type=bind,source={mount['Source']},target={mount['Destination']},readonly"]
-        docker(*args, IMAGE_ID)
+        docker(*args, image_id)
     finally:
         Path(path).unlink(missing_ok=True)
     current = inspect(LIVE)
-    if (current['Image'] != IMAGE_ID or environment(current) != environment(candidate) or
+    if (current['Image'] != image_id or environment(current) != environment(candidate) or
             {m['Destination']: (m['Source'], m['RW']) for m in current['Mounts']} !=
             {m['Destination']: (m['Source'], m['RW']) for m in candidate['Mounts']}):
         raise ValueError('NEW_CONTAINER_CONFIG_MISMATCH')
@@ -200,7 +206,7 @@ def main() -> None:
         return
     if args.db_dump is None:
         raise ValueError('DB_DUMP_REQUIRED')
-    old, smoke, candidate = preflight(args.db_dump)
+    old, smoke, candidate, image_id = preflight(args.db_dump)
     print('MODE=' + args.mode)
     print('ORIGINAL_AND_SMOKE_RUNNING=true')
     print('CANDIDATE_READY_TO_SWAP=true')
@@ -214,7 +220,7 @@ def main() -> None:
         docker('update', '--restart', 'no', LIVE)
         docker('stop', LIVE)
         docker('rename', LIVE, OLD)
-        create_from(candidate)
+        create_from(candidate, image_id)
         docker('start', LIVE)
         readiness(LIVE)
         new = inspect(LIVE)
@@ -222,7 +228,7 @@ def main() -> None:
         if LIVE not in aliases:
             raise ValueError('NETWORK_ALIAS_MISSING')
         docker('update', '--restart', 'unless-stopped', LIVE)
-        print('LIVE_IMAGE_MATCH=' + str(new['Image'] == IMAGE_ID).lower())
+        print('LIVE_IMAGE_MATCH=' + str(new['Image'] == image_id).lower())
         print('LIVE_READINESS=PASS')
         print('ORIGINAL_ROLLBACK_CONTAINER=' + OLD)
         print('SMOKE_CONTAINER_STOPPED=true')

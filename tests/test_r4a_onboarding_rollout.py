@@ -33,7 +33,7 @@ class RolloutSafetyTest(unittest.TestCase):
             operations.append(args)
 
         with (patch('sys.argv', ['rollout', 'apply', '--db-dump', '/private/dump']),
-              patch.object(rollout, 'preflight', return_value=(old, smoke, candidate)),
+              patch.object(rollout, 'preflight', return_value=(old, smoke, candidate, 'sha256:test')),
               patch.object(rollout, 'write_state'),
               patch.object(rollout, 'docker', side_effect=record),
               patch.object(rollout, 'create_from'),

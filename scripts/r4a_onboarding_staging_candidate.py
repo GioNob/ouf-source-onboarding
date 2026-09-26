@@ -17,9 +17,8 @@ import sys
 import tempfile
 
 SNAPSHOT = Path('/etc/ouf/deploy-snapshots/r4a-before-staging.docker-inspect.json')
-IMAGE = 'ouf-onboarding:r4a-e0509e8'
-REVISION = 'e0509e8d48146d20d2134eb27c8b1a40be6c9141'
-IMAGE_ID = 'sha256:8ca287241c4dd7753fe23a300c1b5764aab9485021efd626f5db6fee8356f920'
+IMAGE = 'ouf-onboarding:r4a-e6b7647'
+REVISION = 'e6b7647abb983db5cae1365730b891a4dc46797e'
 CANDIDATE = 'ouf-onboarding-r4a-candidate'
 EXTRA_MOUNTS = (
     ('/etc/ouf/secrets/onboarding-minio-access-key', '/run/secrets/onboarding-minio-access-key'),
@@ -73,7 +72,7 @@ def env(doc: dict) -> dict[str, str]:
     return values
 
 
-def preflight() -> tuple[dict, dict[str, str], bool]:
+def preflight() -> tuple[dict, dict[str, str], bool, str]:
     if os.geteuid() != 0:
         raise ValueError('ROOT_REQUIRED')
     private(SNAPSHOT.parent, stat.S_IFDIR, 0, 0, 0o700)
@@ -86,7 +85,8 @@ def preflight() -> tuple[dict, dict[str, str], bool]:
     if saved['Id'] != live['Id'] or not live['State']['Running']:
         raise ValueError('ORIGINAL_CHANGED_OR_STOPPED')
     image = docker(IMAGE)[0]
-    if image['Id'] != IMAGE_ID or image['Config'].get('Labels', {}).get('org.opencontainers.image.revision') != REVISION:
+    if (not image['Id'].startswith('sha256:') or
+            image['Config'].get('Labels', {}).get('org.opencontainers.image.revision') != REVISION):
         raise ValueError('CANDIDATE_IMAGE_MISMATCH')
     if (live['Config'].get('User') != '10003:10003' or
             image['Config'].get('User') != '10003:10003' or
@@ -114,12 +114,12 @@ def preflight() -> tuple[dict, dict[str, str], bool]:
     original_env = env(live)
     if set(original_env) & set(EXTRA_ENV):
         raise ValueError('STAGING_ENV_ALREADY_PRESENT')
-    return live, original_env, docker(CANDIDATE, missing_ok=True) is not None
+    return live, original_env, docker(CANDIDATE, missing_ok=True) is not None, image['Id']
 
 
-def verify(candidate: dict, original: dict, original_env: dict[str, str]) -> None:
+def verify(candidate: dict, original: dict, original_env: dict[str, str], image_id: str) -> None:
     if (candidate['Name'] != '/' + CANDIDATE or candidate['State']['Status'] != 'created' or
-            candidate['Image'] != IMAGE_ID or candidate['Config']['User'] != '10003:10003' or
+            candidate['Image'] != image_id or candidate['Config']['User'] != '10003:10003' or
             candidate['HostConfig']['NetworkMode'] != 'ouf-backend' or
             candidate['HostConfig']['RestartPolicy']['Name'] != 'no'):
         raise ValueError('CANDIDATE_CONFIGURATION_MISMATCH')
@@ -139,7 +139,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('plan', 'prepare', 'verify'))
     args = parser.parse_args()
-    original, original_env, exists = preflight()
+    original, original_env, exists, image_id = preflight()
     print('MODE=' + args.mode)
     print('IMAGE_REVISION_MATCH=true')
     print('ORIGINAL_CONTAINER_UNCHANGED=true')
@@ -172,7 +172,7 @@ def main() -> None:
     candidate = docker(CANDIDATE, missing_ok=True)
     if candidate is None:
         raise ValueError('CANDIDATE_NOT_FOUND')
-    verify(candidate[0], original, original_env)
+    verify(candidate[0], original, original_env, image_id)
     print('CANDIDATE_STOPPED=true')
     print('CANDIDATE_CONFIG_VERIFIED=true')
     print('ORIGINAL_CONTAINER_RUNNING=true')
