@@ -109,14 +109,21 @@ def create_file(path: Path, value: str) -> None:
         raise
 
 
-def policy_matches() -> bool:
+def installed_policy() -> dict:
     output = run_shell(PREFIX + r'''mc --config-dir "$cfg" admin policy info r4a ouf-onboarding-managed-files-v1 --policy-file "$cfg/installed.json" >/dev/null 2>&1 || exit 41
 cat "$cfg/installed.json"
 ''')
     try:
-        return json.loads(output) == POLICY
+        value = json.loads(output)
+        if not isinstance(value, dict):
+            raise ValueError('MINIO_POLICY_INVALID_JSON')
+        return value
     except json.JSONDecodeError as exc:
         raise ValueError('MINIO_POLICY_INVALID_JSON') from exc
+
+
+def policy_matches() -> bool:
+    return installed_policy() == POLICY
 
 
 def install(existing_files: bool, before: dict[str, bool]) -> None:
@@ -177,7 +184,7 @@ echo UDP_WRITE_DENIED=true
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('plan', 'apply', 'verify'))
+    parser.add_argument('mode', choices=('plan', 'apply', 'verify', 'diagnose'))
     args = parser.parse_args()
     files = prerequisites()
     before = probe()
@@ -188,10 +195,21 @@ def main() -> None:
     if args.mode == 'plan':
         print('NO_WRITES=true')
         return
+    if args.mode == 'diagnose':
+        if before['POLICY']:
+            print('INSTALLED_POLICY=' + json.dumps(installed_policy(), sort_keys=True, separators=(',', ':')))
+        print('NO_WRITES=true')
+        return
     if args.mode == 'apply':
         install(files, before)
     after = probe()
-    if not all(after.values()) or not prerequisites() or not policy_matches():
+    for key in ('BUCKET', 'POLICY', 'USER'):
+        print('AFTER_' + key + '=' + str(after[key]).lower())
+    files_present = prerequisites()
+    policy_exact = policy_matches() if after['POLICY'] else False
+    print('AFTER_APP_CREDENTIAL_FILES=' + ('both' if files_present else 'none'))
+    print('POLICY_EXACT=' + str(policy_exact).lower())
+    if not all(after.values()) or not files_present or not policy_exact:
         raise ValueError('MINIO_STAGING_VERIFY_FAILED')
     behavioral_check()
     print('VERIFY=PASS')
