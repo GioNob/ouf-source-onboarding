@@ -1018,6 +1018,55 @@
           }
         ]
       }
+    },
+    "/api/trusted-human/v1/authorization/policies/active": {
+      "get": {
+        "operationId": "get_active_policy",
+        "x-ouf-required-capability": "authorization.policy.admin",
+        "x-ouf-human-only": true,
+        "x-ouf-mcp-exposed": false,
+        "description": "Return the complete current ACTIVE PolicyBundle to an authorized HUMAN administrator for safe rebase/draft construction. Cache-Control: no-store.",
+        "responses": {
+          "200": {
+            "description": "Current ACTIVE policy bundle and content hash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "policyRef",
+                    "activatedAt",
+                    "policy",
+                    "contentHash"
+                  ],
+                  "properties": {
+                    "policyRef": {
+                      "type": "string"
+                    },
+                    "activatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "policy": {
+                      "$ref": "#/components/schemas/PolicyBundle"
+                    },
+                    "contentHash": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing trusted HUMAN policy administration authority"
+          },
+          "409": {
+            "description": "No ACTIVE policy bundle"
+          }
+        }
+      }
     }
   },
   "components": {

@@ -1,0 +1,20 @@
+[
+  {
+    "ownerRef": "onboarding",
+    "descriptor": {
+      "capabilityId": "ouf.onboarding.configuration.write",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.onboarding.configuration.write",
+      "allowedActors": ["HUMAN"]
+    }
+  },
+  {
+    "ownerRef": "onboarding",
+    "descriptor": {
+      "capabilityId": "ouf.ingestion.configuration.attest",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.ingestion.configuration.attest",
+      "allowedActors": ["SERVICE"]
+    }
+  }
+]

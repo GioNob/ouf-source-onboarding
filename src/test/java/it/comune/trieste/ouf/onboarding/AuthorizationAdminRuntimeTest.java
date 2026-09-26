@@ -100,6 +100,11 @@ class AuthorizationAdminRuntimeTest {
    assertThat(db.sql("select count(*) from ouf_authorization.admin_audit where action='PUBLISH_ACTIVATE'").query(Long.class).single()).isEqualTo(1);
   }
  }
+ @Test void activeHumanViewReturnsCompleteGovernedBundle()throws Exception{
+  register();String id=create(1).get("id").asText();http.perform(post(root+"/policies/"+id+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isOk());
+  var raw=http.perform(get(root+"/policies/active").with(actor("HUMAN",false))).andExpect(status().isOk()).andExpect(header().string("Cache-Control",org.hamcrest.Matchers.containsString("no-store"))).andReturn().getResponse().getContentAsByteArray();
+  var node=json.readTree(raw);assertThat(node.get("policyRef").asText()).isEqualTo("admin-test:1");assertThat(node.get("policy").get("capabilities").size()).isEqualTo(2);assertThat(node.get("policy").get("grants").size()).isEqualTo(2);assertThat(node.get("contentHash").asText()).isNotBlank();
+ }
  @Test void activeTransportHashMatchesSerializedBundle()throws Exception{
   register();String id=create(1).get("id").asText();http.perform(post(root+"/policies/"+id+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isOk());
   byte[] raw=http.perform(get("/api/internal/v1/authorization/policy-bundle/active").with(r->{TestAuthorization.bind(r,"workload","SERVICE",Set.of("authorization.bundle.read"));return r;})).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();

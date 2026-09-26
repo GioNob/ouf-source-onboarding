@@ -20,6 +20,45 @@ class ManagedFileRuntimeTest {
   @Autowired SemanticGapService gaps; @Autowired ManagedFileService files; @Autowired ManagedFileProfiler profiler; @Autowired OnboardingService onboarding; @Autowired CanonicalHash hashes; @Autowired JdbcClient db;
   OnboardingService.Actor human=new OnboardingService.Actor("human:test","HUMAN_USER");OnboardingService.Actor ingestion=new OnboardingService.Actor("service:ingestion","SERVICE",Set.of("ouf.ingestion.configuration.attest"));
   @BeforeEach void clean(){db.sql("truncate table ouf_onboarding.audit_event,ouf_onboarding.consumer_compatibility_attestation,ouf_onboarding.approval_decision,ouf_onboarding.approval_challenge,ouf_onboarding.published_configuration,ouf_onboarding.file_profile_job,ouf_onboarding.onboarding_version,ouf_onboarding.file_profile,ouf_onboarding.managed_file_asset,ouf_onboarding.source restart identity cascade").update();}
+  @Test void humanCapabilityDoesNotRevealAnotherUsersStagedAsset(){
+    byte[] csv="cinema,indirizzo\nA,Trieste\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.register(null,"object://staging/owned.csv",hashes.ofBytes(csv),"text/csv",csv.length,"human:alice","retention://30d").get("asset_id");
+    files.requireOwner(asset,"human:alice");
+    assertThatThrownBy(()->files.requireOwner(asset,"human:bob"))
+        .isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class)
+        .hasMessageContaining("not owned");
+  }
+  @Test void delegatedUploadRetryKeepsOneAssetAndRejectsChangedBytes(){
+    byte[] csv="cinema,indirizzo\nA,Trieste\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    String hash=hashes.ofBytes(csv);
+    java.util.concurrent.atomic.AtomicInteger puts=new java.util.concurrent.atomic.AtomicInteger();
+    java.util.function.Supplier<String> put=()->"object://staging/upload-"+puts.incrementAndGet();
+    var first=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put);
+    var retry=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put);
+    assertThat(retry).isEqualTo(first).containsEntry("status","STAGED");
+    assertThat(puts).hasValue(1);
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_file_upload_attempt").query(Long.class).single()).isOne();
+    assertThatThrownBy(()->files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123","sha256:"+"0".repeat(64),csv.length,put))
+        .hasMessageContaining("different file content");
+    assertThat(puts).hasValue(1);
+    var other=files.registerDelegatedUpload("tenant-b","human:alice","file_123","upload:file_123",hash,csv.length,put);
+    assertThat(other.get("assetId")).isNotEqualTo(first.get("assetId"));
+    assertThat(puts).hasValue(2);
+  }
+  @Test void managedFileDraftRetryReturnsOneVersionAndRejectsChangedArguments(){
+    byte[] csv="cinema,indirizzo\nA,Trieste\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.register(null,"object://staging/idempotent.csv",hashes.ofBytes(csv),"text/csv",csv.length,"human:test","retention://30d").get("asset_id");
+    UUID profile=(UUID)files.profile(asset,csv,"object://samples/idempotent.json").get("profile_id");
+    var first=files.onboardIdempotent(asset,profile,"cinema-test","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"corr-1","create-1");
+    var retry=files.onboardIdempotent(asset,profile,"cinema-test","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"corr-2","create-1");
+    assertThat(retry).isEqualTo(first).containsEntry("state","DRAFT");
+    assertThat(first).doesNotContainKeys("configuration","stagingRef","contentHash");
+    assertThat(db.sql("select count(*) from ouf_onboarding.onboarding_version where source_id='cinema-test'").query(Long.class).single()).isEqualTo(1);
+    assertThatThrownBy(()->files.onboardIdempotent(asset,profile,"cinema-test","Changed","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"corr-3","create-1"))
+        .hasMessageContaining("different onboarding arguments");
+    assertThatThrownBy(()->files.onboardIdempotent(asset,profile,"cinema-test","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,new OnboardingService.Actor("human:other","HUMAN_USER"),"corr-4","create-1"))
+        .hasMessageContaining("not owned");
+  }
   @Test @SuppressWarnings("unchecked") void accessTableWithoutGeometryCreatesDraftWithCompositeKeysAndRelationshipEvidence(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory)throws Exception{
     it.comune.trieste.ouf.pairwise.ManagedFormatsPublisherFixture.main(new String[]{directory.toString()});
     for(String filename:List.of("assets.mdb","assets.accdb")){
