@@ -123,6 +123,11 @@ Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
 con `--required-scope ouf.internal.object-storage.read`, il secret client
 in un file privato e `--runtime-gid 10003`. Verificare claim di client,
 audience, scope, attore, scadenza e tenant senza stampare il token.
+Lo script `scripts/r4a_verify_onboarding_workload_token.py --tenant-id <TENANT>`
+legge la projection e `/run/ouf-onboarding-auth/token`, controlla metadati
+del file e claim, stampa solo booleani e fallisce se uno manca. È un controllo
+locale dei claim, non una verifica della firma JWT; il token deve provenire
+dal refresher HTTPS governato. Sul lab il tenant atteso è `ouf-lab`.
 
 Compilare `ouf-config` dal checkout Gateway verde, applicare la proiezione
 attiva e materializzare `onboarding-managed-file-read` col tool
