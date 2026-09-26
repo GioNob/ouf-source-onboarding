@@ -56,7 +56,7 @@ def check_db(archive: Path) -> str:
     user = postgres.get('POSTGRES_USER', '')
     if not user or not user.replace('_', '').isalnum():
         raise ValueError('POSTGRES_USER_UNEXPECTED')
-    query = "select coalesce(max(version),'0') from ouf_onboarding.flyway_schema_history where success=true;"
+    query = "select version from ouf_onboarding.flyway_schema_history where success=true order by installed_rank desc limit 1;"
     value = run('docker', 'exec', '-i', 'ouf-postgres', 'psql', '-U', user,
                 '-d', 'ouf_onboarding', '-Atc', query, failure_code='FLYWAY_QUERY_FAILED').decode().strip()
     if not value.isdecimal():
