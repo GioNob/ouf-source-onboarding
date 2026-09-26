@@ -24,7 +24,9 @@ def run(*cmd: str, input: str | bytes | None = None, failure_code: str = 'CHECK_
     result = subprocess.run(cmd, input=input, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, text=not binary, check=False)
     if result.returncode:
-        raise ValueError(failure_code)
+        # Only the numeric exit status is included; command arguments and
+        # stderr may include secrets and must never appear in the output.
+        raise ValueError(failure_code + '_' + str(result.returncode))
     return result.stdout if binary else result.stdout.encode()
 
 
@@ -69,7 +71,11 @@ def check_bucket() -> bool:
 umask 077
 cfg="$(mktemp -d /tmp/ouf-r4a-rollout-mc.XXXXXX)"
 trap 'rm -rf "$cfg"' EXIT
-if [ -n "${MINIO_ROOT_USER_FILE:-}" ]; then root_user="$(cat "$MINIO_ROOT_USER_FILE")"; else root_user="${MINIO_ROOT_USER:-}"; fi
+if [ -n "${MINIO_ROOT_USER_FILE:-}" ] && [ -r "$MINIO_ROOT_USER_FILE" ]; then
+    root_user="$(cat "$MINIO_ROOT_USER_FILE")"
+else
+    root_user="${MINIO_ROOT_USER:-}"
+fi
 test -n "$root_user" && test -r "${MINIO_ROOT_PASSWORD_FILE:-}" || exit 31
 root_password="$(cat "$MINIO_ROOT_PASSWORD_FILE")"
 mc --config-dir "$cfg" alias set r4a http://127.0.0.1:9000 "$root_user" "$root_password" >/dev/null 2>&1 || exit 32
