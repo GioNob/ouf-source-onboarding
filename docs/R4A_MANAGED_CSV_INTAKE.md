@@ -173,6 +173,22 @@ policy `ouf-onboarding-managed-files-v1` esistono già. Legge i file admin
 soltanto nel container e cancella la configurazione temporanea `mc` alla
 fine; stampa booleani e non il contenuto delle credenziali. Non procedere
 all'apply se l'utente esiste senza i due file credenziali privati associati.
+Il piano sul lab ha dato `ADMIN_ALIAS_OK=true`, i tre oggetti assenti e
+`APP_CREDENTIAL_FILES=none`. Da un commit verde usare
+`scripts/r4a_minio_staging_bootstrap.py plan → apply → verify`: richiede lo
+snapshot privato già verificato, genera file root:10003 0440 in
+`/etc/ouf/secrets/onboarding-minio-{access,secret}-key`, crea un utente
+MinIO distinto dal root, un bucket separato e la policy versionata sul solo
+prefisso `ouf-managed-files/managed-files/*`. L'utente può `GetObject`,
+`PutObject`, abortire/listare parti multipart per la pulizia, ma non può
+modificare la IAM MinIO né cancellare oggetti. L'apply non sovrascrive file
+esistenti e blocca utente preesistente senza credenziali associate; i file
+vengono persistiti prima di creare l'utente per consentire un retry senza
+rotazione. `verify` prova scrittura/lettura con l'identità applicativa,
+nega una scrittura sul bucket UDP e pulisce l'oggetto di prova con il root;
+non carica il CSV reale. La prova non equivale a backup, versione/retention
+approvata né a verifica del multipart a 10 MiB, che restano gate prima
+dell'upload reale.
 
 Per la richiesta che `ouf-admin` possa usare tutte le capability HUMAN
 attive, `scripts/r4a_admin_all_human_manifest.py --subject-id

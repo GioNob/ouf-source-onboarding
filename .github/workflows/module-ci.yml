@@ -58,7 +58,7 @@ jobs:
       - name: Verify Onboarding workload token claim inspector
         run: python -m unittest tests.test_r4a_verify_onboarding_workload_token
       - name: Verify R4a admin grant manifest and private deploy snapshot
-        run: python -m unittest tests.test_r4a_admin_all_human_manifest tests.test_r4a_admin_human_scope_bindings tests.test_r4a_stage_deploy_snapshot
+        run: python -m unittest tests.test_r4a_admin_all_human_manifest tests.test_r4a_admin_human_scope_bindings tests.test_r4a_stage_deploy_snapshot tests.test_r4a_minio_staging_bootstrap
       - name: Compile, test and package
         run: |
           bash scripts/install-authorization-sdk.sh
