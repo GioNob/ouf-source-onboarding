@@ -302,11 +302,16 @@ Sul lab il backup ha prodotto
 `NO_START_OR_SWAP=true`.
 `scripts/r4a_onboarding_rollout_gate.py --db-dump <DUMP_PRIVATO>` ricontrolla
 prima dello scambio l'ID del container originale, l'immagine del candidato,
-l'archivio `pg_restore`, la versione Flyway live e se il prefisso
-`ouf-managed-files/managed-files/` è vuoto. Il client MinIO usa una alias
+l'archivio `pg_restore`, la versione Flyway live e se l'intero bucket
+`ouf-managed-files` è vuoto. Il client MinIO usa una alias
 temporanea che viene rimossa; stampa solo booleani e numero di versione.
 Un bucket vuoto oggi non sostituisce un backup periodico degli oggetti dopo
 i primi upload.
+La prima esecuzione si è fermata con `CHECK_COMMAND_FAILED` senza mutazioni:
+la diagnostica generica non localizzava il comando fallito. La revisione
+successiva distingue `FLYWAY_QUERY_FAILED` da
+`MINIO_BUCKET_QUERY_FAILED` e controlla l'intero bucket esistente, evitando
+di richiedere il listing di un prefisso che potrebbe non esistere.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
