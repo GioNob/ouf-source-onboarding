@@ -35,7 +35,8 @@ public class ManagedFileService {
         var row=previous.get(0);
         if(!fileId.equals(row.get("file_id"))||!hash.equals(row.get("content_hash"))||size!=((Number)row.get("size_bytes")).longValue())
           throw conflict("ONB_FILE_UPLOAD_IDEMPOTENCY_CONFLICT","Idempotency key used for different file content or identity");
-        return Map.<String,Object>of("assetId",row.get("asset_id"),"status","STAGED");
+        var existing=asset((UUID)row.get("asset_id"));
+        return Map.<String,Object>of("assetId",row.get("asset_id"),"status",existing.get("status"));
       }
       String ref=put.get();
       var asset=register(null,ref,hash,"text/csv",size,subject,"retention://managed-files/30d");
