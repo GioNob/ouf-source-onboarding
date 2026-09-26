@@ -4,6 +4,7 @@
 plan is read-only and never requests the secret. apply writes a new file only;
 verify checks metadata without reading or printing the secret. This script
 never rotates a Keycloak credential and never overwrites an existing file.
+The dedicated /etc/ouf/secrets directory is created only by apply.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import sys
 import tempfile
 
 KC="/opt/keycloak/bin/kcadm.sh"
+SECRET_DIRECTORY=Path("/etc/ouf/secrets")
 
 
 class SecretError(RuntimeError): pass
@@ -39,19 +41,31 @@ def exact_client(container,realm,name):
     return matches[0]["id"]
 
 
-def check_path(path):
-    if not path.is_absolute() or path.parent!=Path("/opt/ouf/secrets") or path.name not in {"onboarding-client-secret"}:
-        raise SecretError("OUTPUT_PATH_NOT_ALLOWED")
-    parent=path.parent
-    if parent.is_symlink() or not parent.is_dir() or parent.stat().st_uid!=0 or stat.S_IMODE(parent.stat().st_mode)&0o022:
+def check_directory(directory,create=False,expected_uid=0):
+    base=directory.parent
+    base_info=base.lstat()
+    if not stat.S_ISDIR(base_info.st_mode) or base_info.st_uid!=expected_uid or stat.S_IMODE(base_info.st_mode)&0o022:
+        raise SecretError("SECRET_BASE_DIRECTORY_UNSAFE")
+    if not directory.exists() and not directory.is_symlink():
+        if not create:return False
+        directory.mkdir(mode=0o700)
+    info=directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid!=expected_uid or stat.S_IMODE(info.st_mode)!=0o700:
         raise SecretError("SECRET_DIRECTORY_UNSAFE")
-    if path.is_symlink():raise SecretError("OUTPUT_SYMLINK_DENIED")
+    return True
+
+
+def check_path(path,create_parent=False):
+    if not path.is_absolute() or path.parent!=SECRET_DIRECTORY or path.name!="onboarding-client-secret":
+        raise SecretError("OUTPUT_PATH_NOT_ALLOWED")
+    if not check_directory(path.parent,create=create_parent):return False,False
     if path.exists():
-        info=path.stat()
+        info=path.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or stat.S_IMODE(info.st_mode)!=0o600 or info.st_size<1 or info.st_size>4096:
             raise SecretError("EXISTING_SECRET_FILE_INVALID")
-        return True
-    return False
+        return True,True
+    if path.is_symlink():raise SecretError("OUTPUT_SYMLINK_DENIED")
+    return True,False
 
 
 def store(path,secret):
@@ -77,18 +91,20 @@ def main():
     p.add_argument("--client",default="ouf-onboarding")
     p.add_argument("--container",default="ouf-keycloak")
     p.add_argument("--realm",default="ouf")
-    p.add_argument("--output",type=Path,default=Path("/opt/ouf/secrets/onboarding-client-secret"))
+    p.add_argument("--output",type=Path,default=SECRET_DIRECTORY/"onboarding-client-secret")
     a=p.parse_args()
     if a.client!="ouf-onboarding" or not re.fullmatch(r"[a-z0-9-]+",a.realm):raise SecretError("CLIENT_OR_REALM_INVALID")
     internal=exact_client(a.container,a.realm,a.client)
-    exists=check_path(a.output)
-    print("CLIENT_EXACT=true SECRET_FILE_EXISTS="+str(exists).lower())
+    directory_exists,exists=check_path(a.output)
+    print("CLIENT_EXACT=true SECRET_DIRECTORY_EXISTS="+str(directory_exists).lower()+" SECRET_FILE_EXISTS="+str(exists).lower())
     if a.mode=="plan":print("NO_CHANGES=true SECRET_NOT_READ_OR_PRINTED=true");return
     if os.geteuid()!=0:raise SecretError("ROOT_REQUIRED")
+    if a.mode=="apply" and not directory_exists:
+        _,exists=check_path(a.output,create_parent=True)
     if a.mode=="apply" and not exists:
         payload=kcadm(a.container,"get",f"clients/{internal}/client-secret","-r",a.realm)
         store(a.output,payload.get("value"))
-    if not check_path(a.output):raise SecretError("SECRET_FILE_MISSING")
+    if not check_path(a.output)[1]:raise SecretError("SECRET_FILE_MISSING")
     print("VERIFY=PASS SECRET_NOT_PRINTED=true SECRET_NOT_ROTATED=true")
 
 
