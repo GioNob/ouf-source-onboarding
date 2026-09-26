@@ -9,17 +9,90 @@ the active policy or changes Keycloak scopes.
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
-
-import r4a_human_grant_lifecycle as human
-import r4a_service_grant_lifecycle as lifecycle
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 TENANT = 'ouf-lab'
+ISSUER = 'https://auth.ouf-lab.it/realms/ouf'
+BASE = 'https://api.ouf-lab.it/api/trusted-human/v1/authorization'
+SUBJECT_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+
+
+def read_json(url: str, token: str | None = None) -> dict:
+    headers = {'Authorization': 'Bearer ' + token} if token is not None else {}
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        raise ValueError('HTTP_' + str(exc.code)) from None
+
+
+def device_login(subject_id: str) -> str:
+    discovery = read_json(ISSUER + '/.well-known/openid-configuration')
+
+    def post(url: str, values: dict) -> tuple[int, dict]:
+        request = urllib.request.Request(
+            url, data=urllib.parse.urlencode(values).encode(), method='POST',
+            headers={'Content-Type': 'application/x-www-form-urlencoded'})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return response.status, json.load(response)
+        except urllib.error.HTTPError as exc:
+            try:
+                return exc.code, json.load(exc)
+            except (ValueError, UnicodeError):
+                return exc.code, {}
+
+    status, start = post(discovery['device_authorization_endpoint'], {
+        'client_id': 'ouf-human-admin', 'scope': 'openid authorization.policy.admin'})
+    if status != 200:
+        raise ValueError('DEVICE_AUTHORIZATION_FAILED')
+    print('OPEN_IN_BROWSER=' + start['verification_uri'], flush=True)
+    print('ENTER_DEVICE_CODE=' + start['user_code'], flush=True)
+    interval = max(5, min(30, int(start.get('interval', 5))))
+    deadline = time.monotonic() + min(600, int(start['expires_in']))
+    while time.monotonic() < deadline:
+        time.sleep(interval)
+        status, response = post(discovery['token_endpoint'], {
+            'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
+            'client_id': 'ouf-human-admin', 'device_code': start['device_code']})
+        if status == 200:
+            token = response['access_token']
+            break
+        if response.get('error') == 'slow_down':
+            interval = min(30, interval + 5)
+        elif response.get('error') != 'authorization_pending':
+            raise ValueError('DEVICE_LOGIN_FAILED')
+    else:
+        raise ValueError('DEVICE_LOGIN_EXPIRED')
+    try:
+        part = token.split('.')[1]
+        claims = json.loads(base64.urlsafe_b64decode(part + '=' * (-len(part) % 4)))
+    except (IndexError, ValueError, UnicodeDecodeError) as exc:
+        raise ValueError('HUMAN_TOKEN_INVALID') from exc
+    aud = claims.get('aud', [])
+    if isinstance(aud, str):
+        aud = [aud]
+    if not (claims.get('iss') == ISSUER and claims.get('azp') == 'ouf-human-admin'
+            and claims.get('sub') == subject_id
+            and claims.get('preferred_username') == 'ouf-admin'
+            and claims.get('ouf_actor_type') in ('HUMAN', 'HUMAN_USER')
+            and isinstance(aud, list) and 'ouf-api-gateway' in aud
+            and 'authorization.policy.admin' in str(claims.get('scope', '')).split()
+            and claims.get('exp', 0) > time.time()):
+        raise ValueError('HUMAN_TOKEN_CONTRACT_MISMATCH')
+    return token
 
 
 def build(policy: dict, subject: str) -> tuple[list[dict], list[str], list[str]]:
@@ -79,10 +152,10 @@ def main() -> None:
     parser.add_argument('--manifest-out', type=Path,
                         help='Write missing grant IDs to a new private file; no policy mutation')
     args = parser.parse_args()
-    if not human.SUBJECT_RE.fullmatch(args.subject_id):
+    if not SUBJECT_RE.fullmatch(args.subject_id):
         raise ValueError('INVALID_SUBJECT_ID')
-    token = human.human_token(args.subject_id)
-    current = lifecycle.active(lifecycle.DEFAULT_BASE, token)
+    token = device_login(args.subject_id)
+    current = read_json(BASE + '/policies/active', token)
     rows, scopes, covered = build(current['policy'], args.subject_id)
     if args.manifest_out is not None:
         write_manifest(args.manifest_out, rows)
