@@ -1,5 +1,6 @@
 import contextlib
 import io
+import copy
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -16,6 +17,15 @@ class MinioStagingBootstrapTest(unittest.TestCase):
         self.assertEqual(stage.POLICY['Statement'][0]['Resource'],
                          ['arn:aws:s3:::ouf-managed-files/managed-files/*'])
         self.assertNotIn('s3:DeleteObject', stage.POLICY['Statement'][0]['Action'])
+
+    def test_policy_match_ignores_action_order_but_rejects_extra_privilege(self):
+        installed = copy.deepcopy(stage.POLICY)
+        installed['Statement'][0]['Action'].sort()
+        with patch.object(stage, 'installed_policy', return_value=installed):
+            self.assertTrue(stage.policy_matches())
+        installed['Statement'][0]['Action'].append('s3:DeleteObject')
+        with patch.object(stage, 'installed_policy', return_value=installed):
+            self.assertFalse(stage.policy_matches())
 
     def test_apply_uses_private_secret_without_printing(self):
         with TemporaryDirectory() as root:

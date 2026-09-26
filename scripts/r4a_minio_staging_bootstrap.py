@@ -123,7 +123,21 @@ cat "$cfg/installed.json"
 
 
 def policy_matches() -> bool:
-    return installed_policy() == POLICY
+    actual = installed_policy()
+    expected = POLICY['Statement'][0]
+    if set(actual) != {'Version', 'Statement'} or actual.get('Version') != POLICY['Version']:
+        return False
+    statements = actual.get('Statement')
+    if not isinstance(statements, list) or len(statements) != 1 or not isinstance(statements[0], dict):
+        return False
+    statement = statements[0]
+    if set(statement) != {'Effect', 'Action', 'Resource'} or statement['Effect'] != 'Allow':
+        return False
+    actions = statement['Action']
+    return (isinstance(actions, list) and all(isinstance(action, str) for action in actions)
+            and len(actions) == len(expected['Action'])
+            and set(actions) == set(expected['Action'])
+            and statement['Resource'] == expected['Resource'])
 
 
 def install(existing_files: bool, before: dict[str, bool]) -> None:
