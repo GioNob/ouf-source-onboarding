@@ -283,6 +283,16 @@ sensibili né avvia o arresta container. `verify` confronta configurazione e
 mount in memoria. Il candidato fermo non è ancora un deploy, né una prova
 di salute: prima di avviarlo accertare backup recuperabile di DB e oggetti,
 retention approvata, rollback verso il container originale e readiness HTTP.
+`scripts/r4a_onboarding_db_backup.py plan/apply` usa `pg_dump -Fc` sul solo
+schema `ouf_onboarding` del database esatto configurato nel container live,
+salva il dump con permessi 0600 sotto `/etc/ouf/deploy-snapshots` e prova
+`pg_restore` in un database temporaneo del medesimo PostgreSQL, che poi
+elimina. Non stampa password o contenuto del dump e non cambia il database
+Onboarding attivo. Conservare il dump e verificare il ripristino prima di
+avviare il candidato: eventuali migrazioni Flyway richiedono un rollback
+consapevole di database e immagine. Questa prova del DB non costituisce
+backup del bucket `ouf-managed-files`; definire un backup degli oggetti
+separato e retention approvata prima di caricare file reali.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
