@@ -55,6 +55,8 @@ jobs:
             tests/test_r4a_human_token_scope_smoke.py \
             tests/test_r4a_human_grant_lifecycle.py \
             tests/test_r4a_onboarding_gateway_auth_smoke.py
+      - name: Verify Onboarding workload token claim inspector
+        run: python -m unittest tests.test_r4a_verify_onboarding_workload_token
       - name: Compile, test and package
         run: |
           bash scripts/install-authorization-sdk.sh
