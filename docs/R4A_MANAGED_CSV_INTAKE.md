@@ -146,6 +146,28 @@ dopo il bootstrap e una prova di rollback montare i due file nel container
 Onboarding e impostare le variabili qui sotto; verificare la salute del
 backend prima di installare le route Gateway di prodotto.
 
+Lo script `scripts/r4a_stage_deploy_snapshot.py` implementa `plan`, `apply`
+e `verify` per la fotografia privata e immutabile dei tre container. Richiede
+root e salva `docker inspect` integrale in
+`/etc/ouf/deploy-snapshots/r4a-before-staging.docker-inspect.json` con
+directory 0700 e file 0600. `plan` e `verify` non scrivono; `apply` non
+sovrascrive un file esistente e fallisce se lo snapshot non coincide con i
+container ancora attivi. Lo snapshot non sostituisce il backup di database
+e oggetti né ricrea automaticamente un container.
+
+Per la richiesta che `ouf-admin` possa usare tutte le capability HUMAN
+attive, `scripts/r4a_admin_all_human_manifest.py --subject-id
+<SUB_VERIFICATO>` pianifica, senza scrivere, i grant mancanti sulla policy
+attiva via Device Flow. `--manifest-out <FILE_NUOVO>` scrive in modo esclusivo
+e privato il manifest dei soli grant mancanti; usare poi il workflow HUMAN
+esistente `plan` → `draft` → `preview` → `publish` → `verify` con quel
+manifest e verificare il subject del token. Il tool riporta gli scope HUMAN
+richiesti, da verificare o legare separatamente in Keycloak: un grant non
+aggiunge scope a un token. Le capability SERVICE-only continuano ad avere
+grant ai workload, perché il backend respinge un attore HUMAN per quei
+descriptor anche se il suo subject avesse un grant. Restano validi i vincoli
+di owner sui singoli asset e la scadenza dei grant HUMAN già pubblicati.
+
 Solo dopo il bootstrap, nel deploy governato di Onboarding impostare:
 
 ```text
