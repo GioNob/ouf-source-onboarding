@@ -293,6 +293,20 @@ avviare il candidato: eventuali migrazioni Flyway richiedono un rollback
 consapevole di database e immagine. Questa prova del DB non costituisce
 backup del bucket `ouf-managed-files`; definire un backup degli oggetti
 separato e retention approvata prima di caricare file reali.
+Sul lab il backup ha prodotto
+`/etc/ouf/deploy-snapshots/r4a-onboarding-20260926T125405Z-d709d63d.dump`:
+`DATABASE_TARGET_MATCH=true`, `SCHEMA_RESTORE_TO_SCRATCH=PASS` e
+`PRODUCTION_DB_UNCHANGED=true`. Il candidato fermo è stato creato dal commit
+`15280572ba60076460cde2aee3d24d603aadc691`:
+`CANDIDATE_CONFIG_VERIFIED=true`, `ORIGINAL_CONTAINER_RUNNING=true`,
+`NO_START_OR_SWAP=true`.
+`scripts/r4a_onboarding_rollout_gate.py --db-dump <DUMP_PRIVATO>` ricontrolla
+prima dello scambio l'ID del container originale, l'immagine del candidato,
+l'archivio `pg_restore`, la versione Flyway live e se il prefisso
+`ouf-managed-files/managed-files/` è vuoto. Il client MinIO usa una alias
+temporanea che viene rimossa; stampa solo booleani e numero di versione.
+Un bucket vuoto oggi non sostituisce un backup periodico degli oggetti dopo
+i primi upload.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
