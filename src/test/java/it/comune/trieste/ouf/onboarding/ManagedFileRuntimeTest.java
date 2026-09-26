@@ -28,6 +28,20 @@ class ManagedFileRuntimeTest {
         .isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class)
         .hasMessageContaining("not owned");
   }
+  @Test void managedFileDraftRetryReturnsOneVersionAndRejectsChangedArguments(){
+    byte[] csv="cinema,indirizzo\nA,Trieste\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.register(null,"object://staging/idempotent.csv",hashes.ofBytes(csv),"text/csv",csv.length,"human:test","retention://30d").get("asset_id");
+    UUID profile=(UUID)files.profile(asset,csv,"object://samples/idempotent.json").get("profile_id");
+    var first=files.onboardIdempotent(asset,profile,"cinema-test","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"corr-1","create-1");
+    var retry=files.onboardIdempotent(asset,profile,"cinema-test","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"corr-2","create-1");
+    assertThat(retry).isEqualTo(first).containsEntry("state","DRAFT");
+    assertThat(first).doesNotContainKeys("configuration","stagingRef","contentHash");
+    assertThat(db.sql("select count(*) from ouf_onboarding.onboarding_version where source_id='cinema-test'").query(Long.class).single()).isEqualTo(1);
+    assertThatThrownBy(()->files.onboardIdempotent(asset,profile,"cinema-test","Changed","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"corr-3","create-1"))
+        .hasMessageContaining("different onboarding arguments");
+    assertThatThrownBy(()->files.onboardIdempotent(asset,profile,"cinema-test","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,new OnboardingService.Actor("human:other","HUMAN_USER"),"corr-4","create-1"))
+        .hasMessageContaining("not owned");
+  }
   @Test @SuppressWarnings("unchecked") void accessTableWithoutGeometryCreatesDraftWithCompositeKeysAndRelationshipEvidence(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory)throws Exception{
     it.comune.trieste.ouf.pairwise.ManagedFormatsPublisherFixture.main(new String[]{directory.toString()});
     for(String filename:List.of("assets.mdb","assets.accdb")){
