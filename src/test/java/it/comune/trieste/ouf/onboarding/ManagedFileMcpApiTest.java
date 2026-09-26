@@ -45,7 +45,7 @@ class ManagedFileMcpApiTest {
     var files=mock(ManagedFileService.class);var receipts=mock(PermissionDelegationVerifier.class);
     UUID asset=UUID.randomUUID(),profile=UUID.randomUUID();
     var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/create");
-    byte[] raw=("{\"CorrelationID\":\"corr\",\"Arguments\":{\"assetId\":\""+asset+"\",\"profileId\":\""+profile+"\",\"sourceId\":\"cinema\",\"name\":\"Cinema\",\"owner\":\"Comune\",\"targetClassIri\":\"https://example.org/Cinema\",\"semanticRefs\":[\"core@1\"]}}").getBytes();
+    byte[] raw=("{\"CorrelationID\":\"corr\",\"Arguments\":{\"assetId\":\""+asset+"\",\"profileId\":\""+profile+"\",\"sourceId\":\"cinema\",\"name\":\"Cinema\",\"owner\":\"Comune\",\"targetClassIri\":\"https://example.org/Cinema\",\"semanticRefs\":[\"core@1\"],\"sourceObjectKeyFields\":[],\"fields\":[{\"fieldName\":\"cinema\",\"extractionDecision\":\"INCLUDE\",\"dataAccessLabel\":\"OPEN\",\"targetPropertyIri\":\"https://example.org/name\"}]}}").getBytes();
     var principal=new PrincipalContext("human:alice","tenant-a",PrincipalContext.ActorType.HUMAN,"ouf-mcp-server","1",
         "https://iam.example","gateway",Set.of("ouf.managed-source.onboarding.create"),
         new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
@@ -54,7 +54,7 @@ class ManagedFileMcpApiTest {
     var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper());api.create(raw,request);
     var actor=org.mockito.ArgumentCaptor.forClass(it.comune.trieste.ouf.onboarding.application.OnboardingService.Actor.class);
     verify(files).onboardIdempotent(eq(asset),eq(profile),eq("cinema"),eq("Cinema"),eq("Comune"),eq("https://example.org/Cinema"),
-        eq(java.util.List.of("core@1")),isNull(),eq(java.util.List.of()),isNull(),actor.capture(),eq("corr"),eq("idem"));
+        eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"));
     assertThat(actor.getValue().subject()).isEqualTo("human:alice");
     assertThat(actor.getValue().type()).isEqualTo("HUMAN_USER");
     assertThat(actor.getValue().capabilities()).containsExactly("ouf.managed-source.onboarding.create");

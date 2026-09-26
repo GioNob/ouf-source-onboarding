@@ -75,9 +75,10 @@ public class ManagedFileMcpApi {
           ||draft.name()==null||draft.name().isBlank()||draft.owner()==null||draft.owner().isBlank()
           ||draft.targetClassIri()==null||draft.targetClassIri().isBlank()
           ||draft.semanticRefs()==null||draft.semanticRefs().isEmpty()||draft.semanticRefs().size()>32
-          ||draft.fields()!=null&&draft.fields().size()>256)throw new IllegalArgumentException("invalid draft arguments");
+          ||draft.sourceObjectKeyFields()==null||draft.fields()==null||draft.fields().isEmpty()||draft.fields().size()>256)
+          throw new IllegalArgumentException("explicit field and identity decisions required");
       var actor=new OnboardingService.Actor(delegated.principal().subjectId(),"HUMAN_USER",Set.of(cap));
-      List<ManagedFileService.FieldDecision> fields=draft.fields()==null?List.of():draft.fields().stream()
+      List<ManagedFileService.FieldDecision> fields=draft.fields().stream()
           .map(f->new ManagedFileService.FieldDecision(f.fieldName(),f.extractionDecision(),f.dataAccessLabel(),f.targetPropertyIri(),f.transform(),f.vocabularyId(),f.vocabularyVersion(),f.valueMapRef())).toList();
       return files.onboardIdempotent(draft.assetId(),draft.profileId(),draft.sourceId(),draft.name(),draft.owner(),draft.targetClassIri(),
           draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey());
