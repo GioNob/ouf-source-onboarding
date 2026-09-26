@@ -272,6 +272,17 @@ ha prodotto l'immagine candidata `ouf-onboarding:r4a-e0509e8`, image ID
 la label revision coincide. I workflow CI del precedente commit funzionale
 `834574f34e1034d275068baf5b54108b08ad5fc6` sono verdi. La presenza
 dell'immagine non dimostra salute dell'applicazione né funzionalità di staging.
+`scripts/r4a_onboarding_staging_candidate.py plan/prepare/verify` confronta
+immagine e label con l'ID attestato, container attivo con lo snapshot, utente,
+rete, entrypoint, mount ed env. Blocca impostazioni host inattese; `prepare`
+crea solo `ouf-onboarding-r4a-candidate` nello stato Docker `created`, con
+le due credenziali e la **directory** del token montate in sola lettura. Copia
+le variabili originali dal container attivo in un file temporaneo privato per
+`docker create --env-file` e lo elimina immediatamente; non stampa valori
+sensibili né avvia o arresta container. `verify` confronta configurazione e
+mount in memoria. Il candidato fermo non è ancora un deploy, né una prova
+di salute: prima di avviarlo accertare backup recuperabile di DB e oggetti,
+retention approvata, rollback verso il container originale e readiness HTTP.
 
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
