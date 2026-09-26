@@ -110,8 +110,9 @@ CSV su MinIO aggirando la route HUMAN.
 ### Stato lab al 26/09/2026
 
 Il bootstrap IAM è verificato: le cinque capability sono registrate, la
-PolicyBundle attiva è `ouf-lab-authorization:26` (con due grant SERVICE e
-quattro grant HUMAN aggiunti nelle revisioni 25 e 26) e il verificatore del
+PolicyBundle ha raggiunto `ouf-lab-authorization:27` (due grant SERVICE in
+:25, quattro grant HUMAN in :26 e altri sei grant HUMAN per `ouf-admin` in
+:27, con preview add-only e verifica dei grant precedenti) e il verificatore del
 token `ouf-onboarding` ha restituito `WORKLOAD_TOKEN_ACCEPTANCE=PASS` per
 issuer, client, audience, attore SERVICE, tenant, scope e scadenza. Il check
 locale dei claim non sostituisce la verifica della firma nel Gateway.
@@ -167,6 +168,16 @@ aggiunge scope a un token. Le capability SERVICE-only continuano ad avere
 grant ai workload, perché il backend respinge un attore HUMAN per quei
 descriptor anche se il suo subject avesse un grant. Restano validi i vincoli
 di owner sui singoli asset e la scadenza dei grant HUMAN già pubblicati.
+Sul lab :27, `ouf-admin` dispone di 19 grant HUMAN validi; le sei aggiunte
+scadono il 26/09/2027, mentre le scadenze dei 13 grant precedenti vanno
+seguite separatamente. Il batch di verifica e binding degli scope Keycloak
+è `scripts/r4a_admin_human_scope_bindings.py plan/apply/verify`: controlla
+15 scope HUMAN del catalogo :27, usa il client esatto `ouf-human-admin` e
+aggiunge solo eventuali binding OPTIONAL mancanti. Non crea client scope,
+non modifica binding esistenti e non attribuisce scope SERVICE. Richiede la
+sessione `kcadm` valida nel container Keycloak. Richiedere nel flusso OIDC
+gli scope OPTIONAL pertinenti alla singola operazione: il solo binding non
+li inserisce automaticamente in ogni access token.
 
 Solo dopo il bootstrap, nel deploy governato di Onboarding impostare:
 
