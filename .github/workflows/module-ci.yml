@@ -75,6 +75,8 @@ jobs:
         run: |
           docker build -t ouf-source-onboarding:${{ github.sha }} .
           test "$(docker image inspect ouf-source-onboarding:${{ github.sha }} --format '{{.Config.User}}')" = "10003:10003"
+      - name: Boot image with managed-file staging enabled
+        run: timeout --signal=TERM --kill-after=10s 3m bash scripts/ci_r4a_staging_container_smoke.sh ouf-source-onboarding:${{ github.sha }}
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4

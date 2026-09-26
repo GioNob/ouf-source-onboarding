@@ -367,6 +367,27 @@ userà `ouf-onboarding-pre-r4a-e6b7647` come nome dell'originale fermo.
 L'immagine corretta non è stata ancora costruita sul VPS né il nuovo rollout
 eseguito. La CI del commit di correzione va verificata prima della build.
 
+### Automazione della release ricavata dal primo tentativo
+
+La CI ora usa `scripts/ci_r4a_staging_container_smoke.sh` **dopo** la build
+del container: avvia l'immagine release come UID/GID 10003 con le variabili
+effettive di staging, due file credenziali fittizi in sola lettura e la
+directory del token; usa soltanto il PostgreSQL effimero della CI e controlla
+la readiness HTTP. In caso di avvio fallito conserva un estratto delimitato
+dei log CI prima di rimuovere il container. Il test Java del bean MinIO copre
+anche la risoluzione delle variabili con i nomi Docker effettivi. Entrambi
+devono passare prima di costruire la medesima revisione sul VPS. La CI non
+convalida la disponibilità del MinIO reale, la policy IAM live o Gateway.
+
+Sul VPS le fasi versionate sono `snapshot → MinIO verify → DB backup/restore
+di prova → candidato fermo → rollout gate → rollout plan/apply/rollback`.
+Il tentativo fallito viene riconciliato per ID, senza eliminare originali o
+dump; i log del nuovo fallimento vanno conservati prima del rollback.
+Registrare commit/image ID, stato e file di backup per ogni tentativo;
+non dedurli dalla cronologia della chat. Questa procedura è una tranche
+di R-INSTALL: servono ancora l'orchestrator top-level, una clean install,
+upgrade e prova di restore su topologie supportate.
+
 Il generico `ops/policy_token/install_policy_token_workload.py` nel repo
 Gateway installa, dopo `--apply`, un timer di rinnovo per `ouf-onboarding`
 con `--required-scope ouf.internal.object-storage.read`, il secret client
