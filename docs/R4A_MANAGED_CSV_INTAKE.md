@@ -18,10 +18,15 @@ contratto T25 richiede un attachment flow con identità HUMAN verificata. La
 pubblicazione Semantic/THS, ingestion, UDP e search non sono ancora dimostrate.
 
 L'endpoint Onboarding usa una copia temporanea su disco con digest incrementale
-e limite di 10 MiB, senza tenere l'intero upload in heap. Il buffering delle
-richieste da parte dell'APISIX del lab resta da verificare/configurare prima di
-certificare il requisito T25 di streaming attraverso il Gateway. Non attivare
-queste route in produzione con tale gate aperto.
+e limite di 10 MiB, senza tenere l'intero upload in heap. Il 26/09/2026 la
+sonda isolata sul runtime APISIX del lab ha osservato i primi byte all'upstream
+prima del termine dell'invio (`true`), risposta 204 e rimozione della route
+temporanea (`true`), sul commit Gateway
+`04d9aa924e84db77b1e9135efef21b10158bc999`. Le route reali HUMAN e MCP
+risultavano entrambe assenti (HTTP 404) nell'inventario Admin API successivo.
+Restano da provare streaming e limiti attraverso la route prodotto fino
+all'owner, inclusi 413, 415, hash errato, assenza di asset parziale e rollback.
+Non attivare queste route in produzione con tale gate aperto.
 
 Gli hostname `ouf-onboarding`, `ouf-apisix` e `ouf-minio` sotto sono binding
 DNS privati del lab nella stessa rete Docker; non rappresentano il contratto
