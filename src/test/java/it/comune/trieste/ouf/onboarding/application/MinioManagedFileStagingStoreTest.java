@@ -18,7 +18,7 @@ class MinioManagedFileStagingStoreTest {
     Path secret=directory.resolve("secret");
     Files.writeString(access,"ouf-onboarding-staging\n");
     Files.writeString(secret,"fake-test-secret-only\n");
-    var variables=Map.of(
+    var variables=Map.<String,Object>of(
         "OUF_ONBOARDING_STAGING_ENDPOINT","http://127.0.0.1:9000",
         "OUF_ONBOARDING_STAGING_BUCKET","ouf-managed-files",
         "OUF_ONBOARDING_STAGING_ACCESS_KEY_FILE",access.toString(),
