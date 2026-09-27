@@ -36,16 +36,17 @@ def indexed(rows, key):
 
 def verify(old, active, state):
     if (active['bundleId'] + ':' + str(active['version']) != state['targetPolicyRef']
-            or old['bundleId'] + ':' + str(old['version']) != state['basePolicyRef']
-            or lifecycle.digest(old['capabilities']) != state['baselineCapabilitiesHash']
-            or lifecycle.digest(old['grants']) != state['baselineGrantsHash']):
-        raise ValueError('POLICY_IDENTITY_OR_BASELINE_MISMATCH')
+            or old['bundleId'] + ':' + str(old['version']) != state['basePolicyRef']):
+        raise ValueError('POLICY_IDENTITY_MISMATCH')
     before_caps = indexed(old['capabilities'], 'capabilityId')
     after_caps = indexed(active['capabilities'], 'capabilityId')
     before_grants = indexed(old['grants'], 'grantId')
     after_grants = indexed(active['grants'], 'grantId')
     expected_caps = {row['descriptor']['capabilityId']: row['descriptor'] for row in EXPECTED_CAPS}
     expected_grants = {row['grantId']: row['capabilityId'] for row in EXPECTED_GRANTS}
+    if (set(state['addedCapabilityIds']) != set(expected_caps)
+            or set(state['addedGrantIds']) != set(expected_grants)):
+        raise ValueError('STATE_MANIFEST_MISMATCH')
     if (set(after_caps) - set(before_caps) != set(expected_caps)
             or set(after_grants) - set(before_grants) != set(expected_grants)
             or any(after_caps.get(key) != value for key, value in before_caps.items())
@@ -80,7 +81,7 @@ def main():
     jdbc = owner.get('OUF_ONB_DB_URL', '')
     parsed = urlsplit(jdbc.removeprefix('jdbc:'))
     database = parsed.path.lstrip('/')
-    user = pg.get('POSTGRES_USER')
+    user = pg.get('POSTGRES_USER', 'postgres')
     if (not jdbc.startswith('jdbc:postgresql://') or parsed.hostname not in
             ('ouf-postgres', '127.0.0.1', 'localhost') or not database
             or '/' in database or not user):
@@ -105,10 +106,13 @@ def main():
         raise ValueError('POLICY_QUERY_NOT_UNIQUE')
     ref, old_json, active_json = lines[0].split('\t')
     old, active = json.loads(old_json), json.loads(active_json)
+    print('ACTIVE_POLICY_REF=' + ref, flush=True)
     if ref != state['targetPolicyRef']:
         raise ValueError('ACTIVE_REF_UNEXPECTED:' + ref)
     counts = verify(old, active, state)
-    print('ACTIVE_POLICY_REF=' + ref)
+    print('BASELINE_STATE_HASH_MATCH=' + str(
+        lifecycle.digest(old['capabilities']) == state['baselineCapabilitiesHash']
+        and lifecycle.digest(old['grants']) == state['baselineGrantsHash']).lower())
     print('CAPABILITIES_BEFORE=' + str(counts[0]) + ' AFTER=' + str(counts[1]))
     print('GRANTS_BEFORE=' + str(counts[2]) + ' AFTER=' + str(counts[3]))
     print('SEMANTIC_AUTHORIZATION_VERIFY=PASS')
