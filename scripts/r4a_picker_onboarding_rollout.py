@@ -165,13 +165,27 @@ def preflight(repo: Path, revision: str) -> tuple[dict, str, list[str], str]:
     return old, client, scopes, backup
 
 
-def keycloak_scope(repo: Path, client: str, mode: str) -> None:
-    result = subprocess.run([sys.executable, str(repo / 'scripts/r4a_keycloak_client_scope_binding.py'), mode,
-                             '--client', client, '--scope', UPLOAD, '--binding', 'optional'],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
-    if result.returncode:
-        match = re.search(r'CLIENT_SCOPE_BINDING_BLOCKED=([A-Z_]+)', result.stderr)
-        raise Blocked('THS_CLIENT_SCOPE_' + (match.group(1) if match else 'QUERY_FAILED'))
+def keycloak_scope(repo: Path, revision: str, client: str, mode: str) -> None:
+    """Run the scope helper and its import from the pinned commit, not the checkout."""
+    if not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise Blocked('REVISION_REQUIRED')
+    safe = ['git', '-c', 'safe.directory=' + str(repo.resolve(strict=True)), '-C', str(repo)]
+    with tempfile.TemporaryDirectory(prefix='r4a-picker-kcadm-', dir=ROOT) as folder_name:
+        folder = Path(folder_name)
+        os.chmod(folder, 0o700)
+        for name in ('r4a_keycloak_client_scope_binding.py',
+                     'r4a_keycloak_client_scope_catalogue.py'):
+            source = command([*safe, 'show', revision + ':scripts/' + name])
+            target = folder / name
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(source)
+        result = subprocess.run([sys.executable, str(folder / 'r4a_keycloak_client_scope_binding.py'), mode,
+                                 '--client', client, '--scope', UPLOAD, '--binding', 'optional'],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+        if result.returncode:
+            match = re.search(r'CLIENT_SCOPE_BINDING_BLOCKED=([A-Z_]+)', result.stderr)
+            raise Blocked('THS_CLIENT_SCOPE_' + (match.group(1) if match else 'QUERY_FAILED'))
 
 
 def image(repo: Path, revision: str) -> tuple[str, str]:
@@ -248,7 +262,7 @@ def main() -> None:
         return
     database = load_database(a.repo, a.revision or '')
     old, client, scopes, backup = preflight(a.repo, a.revision or '')
-    keycloak_scope(a.repo, client, 'plan')
+    keycloak_scope(a.repo, a.revision, client, 'plan')
     print('MODE=' + a.mode)
     print('THS_CLIENT_AND_SCOPE_IDENTIFIED=true')
     print('DATABASE_MIGRATIONS_UNCHANGED=true')
@@ -260,7 +274,7 @@ def main() -> None:
     db, user = database.parameters(old, database.inspect('ouf-postgres'))
     dump = database.backup(db, user)
     database.restore_probe(dump, user)
-    keycloak_scope(a.repo, client, 'apply')
+    keycloak_scope(a.repo, a.revision, client, 'apply')
     new_env = {**database.env(old), PICKER_ENV: picker_overlay(scopes)}
     folder = Path(tempfile.mkdtemp(prefix='r4a-picker-onboarding-', dir=ROOT))
     os.chmod(folder, 0o700)
