@@ -200,6 +200,13 @@ nega una scrittura sul bucket UDP e pulisce l'oggetto di prova con il root;
 non carica il CSV reale. La prova non equivale a backup, versione/retention
 approvata né a verifica del multipart a 10 MiB, che restano gate prima
 dell'upload reale.
+Il client MinIO Java 8.6.0 esegue anche `GetBucketLocation` prima della prima
+scrittura se non è stata fissata una regione. La policy include tale azione
+solo sul bucket `ouf-managed-files`. Il bootstrap aggiorna in modo idempotente
+la precedente policy esatta priva di tale azione, senza ruotare le credenziali;
+blocca qualsiasi altra policy inattesa. Una verifica `mc pipe` da sola non
+copre questo prerequisito del client Java. Dopo `verify`, ripetere l'upload
+attraverso la route HUMAN e richiedere HTTP 201 con Asset ID.
 Sul lab, dopo il bootstrap e il controllo della policy MinIO indipendente
 dall'ordine delle azioni restituito dal server, `verify` ha confermato:
 `BUCKET_EXISTS=true`, `POLICY_EXISTS=true`, `USER_EXISTS=true`,
