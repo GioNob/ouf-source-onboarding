@@ -83,6 +83,13 @@ class InstallationRuntimeProjectionTest {
         .containsEntry("MCP_OIDC_CLIENT_SECRET_FILE", "/opt/ouf/secrets/mcp-client-secret")
         .containsEntry("MCP_FINGERPRINT_KEY_FILE", "/opt/ouf/secrets/mcp-fingerprint-key");
 
+    assertThat(projection.onboarding().environment())
+        .containsEntry("OUF_RUNTIME_PUBLICATIONS_TENANT_ID", "ouf-lab");
+
+    assertThat(projection.services().bindings())
+        .containsEntry("ouf-onboarding", "ouf-onboarding")
+        .containsEntry("ouf-semantic-registry", "ouf-semantic");
+
     String serialized = json.writeValueAsString(projection);
     assertThat(serialized)
         .doesNotContain("client_secret")

@@ -18,6 +18,7 @@ public class AuthorizationAdminService {
  private final JdbcClient db;private final ObjectMapper json;private final AuthorizationPolicyRegistry registry;private final AuthorizationRuntimeSynchronizer runtime;private final BootstrapAdministrator bootstrapAdmin;private final SuperadminAuthority authority;private final OufRoleCatalogueStore roles;
  public AuthorizationAdminService(JdbcClient db,ObjectMapper json,AuthorizationPolicyRegistry registry,AuthorizationRuntimeSynchronizer runtime,BootstrapAdministrator bootstrapAdmin,SuperadminAuthority authority,OufRoleCatalogueStore roles){this.db=db;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);this.registry=registry;this.runtime=runtime;this.bootstrapAdmin=bootstrapAdmin;this.authority=authority;this.roles=roles;}
  public record Draft(UUID id,long revision,String state,String baseActiveRef,PolicyBundle policy){}
+ public record ActivePolicy(String policyRef,Instant activatedAt,PolicyBundle policy,String contentHash){}
  public record Actor(String subject,String tenant,String type,String policyRef,String correlation,PrincipalContext principal) {public Actor(String subject,String tenant,String type,String policyRef,String correlation){this(subject,tenant,type,policyRef,correlation,null);}public Actor {if(!"HUMAN".equals(type)||subject==null||subject.isBlank()||policyRef==null||policyRef.isBlank())throw new SecurityException("AUTH_ADMIN_HUMAN_REQUIRED");if(principal!=null&&(!subject.equals(principal.subjectId())||!Objects.equals(tenant,principal.tenantId())||!type.equals(principal.actorType().name())))throw new SecurityException("AUTH_ADMIN_PRINCIPAL_MISMATCH");}}
  private DomainFailure failure(HttpStatus status,String code){return new DomainFailure(status,code,code);}
  public <T> T parse(JsonNode node,Class<T> type){try{var value=json.treeToValue(node,type);if(value==null)throw new IllegalArgumentException("null policy");return value;}catch(Exception e){throw new IllegalArgumentException("AUTH_POLICY_INVALID",e);}}
@@ -61,7 +62,13 @@ public class AuthorizationAdminService {
   int n=db.sql("insert into ouf_authorization.capability_registration(capability_id,owner_ref,descriptor,registered_by) values(:id,:owner,cast(:raw as jsonb),:subject) on conflict do nothing").param("id",descriptor.capabilityId()).param("owner",owner).param("raw",raw).param("subject",actor.subject()).update();
   if(n==0)throw failure(HttpStatus.CONFLICT,"AUTH_CAPABILITY_ALREADY_REGISTERED");audit("REGISTER_CAPABILITY",descriptor.capabilityId(),actor);
  }
- public List<Map<String,Object>> capabilities(int limit){if(limit<1||limit>200)throw new IllegalArgumentException("limit 1..200");return db.sql("select capability_id,owner_ref,descriptor from ouf_authorization.capability_registration order by capability_id limit :n").param("n",limit).query().listOfRows();}
+ public List<Map<String,Object>> capabilities(int limit,int offset){if(limit<1||limit>200||offset<0||offset>100000)throw new IllegalArgumentException("limit 1..200; offset 0..100000");return db.sql("select capability_id,owner_ref,descriptor from ouf_authorization.capability_registration order by capability_id limit :n offset :offset").param("n",limit).param("offset",offset).query().listOfRows();}
+ public ActivePolicy activePolicy(Actor actor){
+  Objects.requireNonNull(actor,"actor");
+  var active=registry.active().orElseThrow(()->failure(HttpStatus.CONFLICT,"AUTH_ACTIVE_REQUIRED"));
+  var policy=registry.load(active.bundleId(),active.version());
+  return new ActivePolicy(active.bundleId()+":"+active.version(),active.activatedAt(),policy,registry.transportHash(policy));
+ }
  @Transactional public Draft create(PolicyBundle policy,Actor actor){
   requireWriteAuthority(actor);preserveOtherTenants(policy,actor);validate(policy);UUID id=UUID.randomUUID();db.sql("insert into ouf_authorization.policy_draft(draft_id,state,base_active_ref,payload,created_by,tenant_id) values(:id,'DRAFT',:base,cast(:payload as jsonb),:subject,:tenant)").param("id",id).param("base",activeRef()).param("payload",encode(policy)).param("subject",actor.subject()).param("tenant",actor.tenant()).update();audit("CREATE_DRAFT",id.toString(),actor);return get(id);
  }

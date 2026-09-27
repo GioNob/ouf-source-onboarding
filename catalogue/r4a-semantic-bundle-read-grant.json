@@ -1,0 +1,13 @@
+[
+  {
+    "grantId": "grant-authorization-bundle-read-semantic",
+    "capabilityId": "authorization.bundle.read",
+    "tenantId": "ouf-lab",
+    "subjectId": null,
+    "servicePrincipalId": "ouf-semantic",
+    "organizationId": null,
+    "validFrom": "2026-09-25T08:00:00Z",
+    "validUntil": "2036-09-22T08:00:00Z",
+    "constraints": null
+  }
+]

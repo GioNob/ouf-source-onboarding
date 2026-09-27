@@ -1,0 +1,24 @@
+[
+  {
+    "grantId": "grant-managed-file-read-onboarding",
+    "capabilityId": "ouf.object-storage.content.read",
+    "tenantId": "ouf-lab",
+    "subjectId": null,
+    "servicePrincipalId": "ouf-onboarding",
+    "organizationId": null,
+    "validFrom": "2026-09-25T00:00:00Z",
+    "validUntil": "2026-10-25T00:00:00Z",
+    "constraints": null
+  },
+  {
+    "grantId": "grant-managed-file-read-ingestion",
+    "capabilityId": "ouf.object-storage.content.read",
+    "tenantId": "ouf-lab",
+    "subjectId": null,
+    "servicePrincipalId": "ouf-ingestion",
+    "organizationId": null,
+    "validFrom": "2026-09-25T00:00:00Z",
+    "validUntil": "2026-10-25T00:00:00Z",
+    "constraints": null
+  }
+]

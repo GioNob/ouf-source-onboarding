@@ -48,10 +48,35 @@ public class ConfigurationValidator {
       if("DELTA_PATCH".equals(mode)){Optional<Map<String,Object>> delta=object(configuration,"deltaPatchContract");if(delta.isEmpty())delta=object(configuration,"bundle").flatMap(b->object(b,"deltaPatchContract"));if(delta.isEmpty())error(out,"ONB_DELTA_CONTRACT_REQUIRED","/deltaPatchContract","DELTA_PATCH requires a compiled logical contract");else validateDelta(delta.get(),out);}
     });
     validateWeightedIdentity(configuration,out);
+    validateManagedPublication(configuration,out);
     validateGeoPackageAndRelationships(configuration,out);
     spatial(configuration).ifPresent(profile->validateSpatial(profile,out));
     if(out.isEmpty()) out.add(new Finding("INFO","ONB_CONFIGURATION_VALID","/","Configuration satisfies the executable onboarding validation profile"));
     return new Result(List.copyOf(out));
+  }
+
+  private static void validateManagedPublication(Map<String,Object> configuration,List<Finding> out){
+    var source=object(configuration,"bundle").flatMap(b->object(b,"source")).orElse(Map.of());
+    if(!"INTERNAL_MANAGED".equals(source.get("sourceKind"))||!"MANAGED".equals(source.get("acquisitionMode")))return;
+    String path="/extractionProfile/runtime";
+    var runtime=object(configuration,"extractionProfile").flatMap(e->object(e,"runtime"));
+    if(runtime.isEmpty()){error(out,"ONB_MANAGED_RUNTIME_REQUIRED",path,"Managed source requires pinned execution and UDP profiles");return;}
+    var execution=object(runtime.get(),"execution");
+    if(execution.isEmpty()){error(out,"ONB_MANAGED_EXECUTION_REQUIRED",path+"/execution","Managed source requires an explicit adapter and historical contract references");}
+    else for(String key:List.of("acquisitionMode","adapterId","adapterRuntimeVersion","sourceSchemaRef","sourceSchemaId","sourceSchemaVersion","semanticPublicationSetRef","adapterProfileRef","observationPolicy"))
+      requireText(execution.get(),key,path+"/execution/"+key,out);
+    var udp=object(runtime.get(),"udp");
+    if(udp.isEmpty()||object(udp.get(),"resolution").isEmpty()||object(udp.get(),"materialization").isEmpty())
+      error(out,"ONB_MANAGED_UDP_PROFILES_REQUIRED",path+"/udp","Managed source requires explicit object resolution and materialization policies");
+    if(!(configuration.get("semanticReferenceBindings") instanceof List<?> bindings)||bindings.isEmpty()){
+      error(out,"ONB_SEMANTIC_PUBLICATION_BINDING_REQUIRED","/semanticReferenceBindings","Managed source requires an exact published Semantic revision and set");return;
+    }
+    if(execution.isPresent()){
+      Object publication=execution.get().get("semanticPublicationSetRef");
+      if(bindings.stream().noneMatch(b->b instanceof Map<?,?> binding&&Objects.equals(binding.get("publicationSetId"),publication)
+          &&binding.get("revisionId") instanceof String&&binding.get("semanticVersion") instanceof String))
+        error(out,"ONB_SEMANTIC_PUBLICATION_MISMATCH",path+"/execution/semanticPublicationSetRef","Execution must pin one approved Semantic publication binding");
+    }
   }
 
   private static void validateWeightedIdentity(Map<String,Object> configuration,List<Finding> out){

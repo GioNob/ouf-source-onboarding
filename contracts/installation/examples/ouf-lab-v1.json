@@ -12,7 +12,11 @@
     "backendNetwork": "ouf-backend",
     "edgeNetwork": "ouf-edge",
     "gatewayControlNetwork": "ouf-gateway-control",
-    "internalDnsStrategy": "REVERSE_PROXY_ALIAS"
+    "internalDnsStrategy": "REVERSE_PROXY_ALIAS",
+    "serviceBindings": {
+      "ouf-onboarding": "ouf-onboarding",
+      "ouf-semantic-registry": "ouf-semantic"
+    }
   },
   "iam": {
     "issuerUrl": "https://auth.ouf-lab.it/realms/ouf",

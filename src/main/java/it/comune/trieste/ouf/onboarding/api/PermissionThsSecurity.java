@@ -27,7 +27,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @ConditionalOnProperty(name="ouf.authorization.ths.enabled",havingValue="true")
 public class PermissionThsSecurity {
  @Bean @Order(1) SecurityFilterChain permissionThsChain(HttpSecurity http,OAuth2AuthorizedClientService clients,JwtDecoder decoder,Converter<Jwt,? extends AbstractAuthenticationToken> converter,ClientRegistrationRepository registrations)throws Exception{
-  http.securityMatcher("/trusted-human/authorization/**","/oauth2/**","/login/oauth2/**");
+  http.securityMatcher("/trusted-human/authorization/**","/trusted-human/managed-files/**","/oauth2/**","/login/oauth2/**");
   http.authorizeHttpRequests(a->a.requestMatchers("/oauth2/**","/login/oauth2/**").permitAll().anyRequest().authenticated());
   // Confidential clients also require PKCE under the OUF Authorization PET.
   // Spring retains the verifier in the server session and sends it at the token endpoint.
@@ -37,7 +37,7 @@ public class PermissionThsSecurity {
     .authorizationEndpoint(e->e.authorizationRequestResolver(resolver)));
   // Keep Spring CSRF enabled for all session-authenticated state changes.
   http.addFilterAfter(new OncePerRequestFilter(){@Override protected void doFilterInternal(HttpServletRequest r,HttpServletResponse response,FilterChain chain)throws ServletException,IOException{
-   if(r.getRequestURI().startsWith("/trusted-human/authorization/")){
+   if(r.getRequestURI().startsWith("/trusted-human/authorization/")||r.getRequestURI().startsWith("/trusted-human/managed-files/")){
     try{
      if(!(SecurityContextHolder.getContext().getAuthentication() instanceof OAuth2AuthenticationToken a))throw new SecurityException();
      OAuth2AuthorizedClient c=clients.loadAuthorizedClient(a.getAuthorizedClientRegistrationId(),a.getName());

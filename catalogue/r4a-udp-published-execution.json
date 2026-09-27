@@ -1,0 +1,24 @@
+[
+  {
+    "ownerRef": "onboarding",
+    "descriptor": {
+      "capabilityId": "ouf.onboarding.configuration.read",
+      "operation": "READ",
+      "requiredScope": "ouf.onboarding.configuration.read",
+      "allowedActors": [
+        "SERVICE"
+      ]
+    }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.read",
+      "operation": "READ",
+      "requiredScope": "ouf.semantic.read",
+      "allowedActors": [
+        "SERVICE"
+      ]
+    }
+  }
+]
