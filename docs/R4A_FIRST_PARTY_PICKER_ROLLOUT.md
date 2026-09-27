@@ -103,7 +103,7 @@ widget can prove the automatic chat return.
 Pinned candidate commits: Onboarding
 `4b552ffb1a685a38f1387a20e655da9e4d0500a4`, Gateway
 `a226090e7cf1b5e411e9fa422664fa9b4b05746f`, MCP
-`98f786e910c06dd1d29590ae004aa540feff3898`. On the lab VPS, after
+`bdfce3baec8aaa4bcb9ba6b039aa3b25b023d57a`. On the lab VPS, after
 those commits' CI succeeds, paste this single block as `oufadmin`:
 
 ```bash
@@ -112,7 +112,7 @@ set -euo pipefail
 git -C /opt/ouf/onboarding fetch origin codex/r4a-authorization-catalogue
 git -C /opt/ouf/gateway fetch origin codex/r4a-managed-mcp-installer-fix
 git fetch origin codex/r4a-managed-file-rollout
-git show 98f786e910c06dd1d29590ae004aa540feff3898:scripts/r4a_picker_chat_handoff_rollout.py | sudo python3 - --mcp-commit 98f786e910c06dd1d29590ae004aa540feff3898
+git show bdfce3baec8aaa4bcb9ba6b039aa3b25b023d57a:scripts/r4a_picker_chat_handoff_rollout.py | sudo python3 - --mcp-commit bdfce3baec8aaa4bcb9ba6b039aa3b25b023d57a
 ```
 
 The script verifies all three pinned Git objects before mutation. Success is
