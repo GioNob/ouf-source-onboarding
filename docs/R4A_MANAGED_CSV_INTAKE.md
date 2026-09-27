@@ -2,30 +2,38 @@
 
 # R4a — intake governato del CSV reale
 
-Stato: codice candidato; CI e bootstrap lab sono gate separati. Il CSV allegato
-`cinema_trieste(1).csv` ha 509 byte, UTF-8 con BOM, due colonne (`cinema`,
-`indirizzo`), otto righe e SHA-256
-`a07c2dcdc21aa9a23fb5585a69d52031dc08010d251bf39bfa67c8e0962c6e1a`.
-Non pubblicare il file nel repository. Preservare i byte originali, compreso
-il BOM, durante il trasferimento sul VPS e confrontare l'hash prima dell'upload.
+Stato operativo (27/09/2026): il CSV è stato caricato dal picker HUMAN
+attraverso Gateway, Onboarding ha registrato l'asset
+`8ec8ae90-808a-4d9e-907c-d56de119e376` e il profilo
+`4462692b-9c85-446b-b6fd-779f01eab64d`. Semantic ha pubblicato
+con approvazione HUMAN la revisione
+`51706bed-81e4-4306-aca1-70119821727d`.
+Il DRAFT Onboarding non è ACTIVE e il percorso Ingestion → UDP → search
+non è dimostrato. **R-SMOKE OPEN.** L'upload via picker è il percorso
+UX corrente; il successivo smoke HTTP manuale in questo documento è
+una prova diagnostica storica.
 
-**Gate architetturali aperti:** lo smoke qui sotto esercita route Gateway con
-un client HTTP HUMAN, non il plugin MCP. Il binding candidato per profile e
-preview è versionato nei PR MCP e Gateway e usa una ricevuta HUMAN firmata
-verificata dall'owner, ma non è attivo sul lab. I tool per upload tramite
-attachment governato, creazione onboarding e ingestion non sono ancora
-pubblicati nel plugin live. Non abilitare un tool
-che accetti byte/base64 o URL di storage dall'agente come scorciatoia: il
-contratto T25 richiede un attachment flow con identità HUMAN verificata. La
-pubblicazione Semantic/THS, ingestion, UDP e search non sono ancora dimostrate.
+Il CSV dell'esercizio `cinema_trieste(1).csv` ha 509 byte,
+UTF-8 con BOM, due colonne (`cinema`, `indirizzo`), otto righe e SHA-256
+`a07c2dcdc21aa9a23fb5585a69d52031dc08010d251bf39bfa67c8e0962c6e1a`.
+Non pubblicare il contenuto nel repository. Il valore di `cinema`
+non è una chiave identitaria; la source-row identity tecnica deriva da
+asset e ordinale, distinta dall'identità canonica UDP.
+
+Il picker e le route interne MCP sono stati distribuiti in rollouts
+successivi; il vecchio inventario con route 404 e upload MCP disabilitato
+descrive **solo** il checkpoint antecedente al rollout. Il vecchio
+attachment adapter basato su URL host non è il percorso UX corrente.
+Le prove di prodotto ancora aperte includono streaming sulla route reale,
+413 senza asset parziale, media/checksum/auth negativi e rollback.
+La capability di upload rimane neutrale rispetto al chatbot.
 
 L'endpoint Onboarding usa una copia temporanea su disco con digest incrementale
 e limite di 10 MiB, senza tenere l'intero upload in heap. Il 26/09/2026 la
 sonda isolata sul runtime APISIX del lab ha osservato i primi byte all'upstream
 prima del termine dell'invio (`true`), risposta 204 e rimozione della route
 temporanea (`true`), sul commit Gateway
-`04d9aa924e84db77b1e9135efef21b10158bc999`. Le route reali HUMAN e MCP
-risultavano entrambe assenti (HTTP 404) nell'inventario Admin API successivo.
+`04d9aa924e84db77b1e9135efef21b10158bc999`. Le route reali HUMAN e MCP risultavano entrambe assenti (HTTP 404) nell'inventario Admin API **di quel momento**, prima dei rollout successivi.
 Il 26/09 le 10 route HUMAN, inclusa la route di upload con streaming, e la
 route SERVICE `onboarding-managed-file-read` sono state installate nel lab
 con readback e rifiuto anonimo verificati. Gli snapshot di ripristino sono
