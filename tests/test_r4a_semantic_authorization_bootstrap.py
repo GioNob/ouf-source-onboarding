@@ -24,6 +24,8 @@ class SemanticBootstrapTest(unittest.TestCase):
         changed = {**grants[0], 'validUntil': '2035-01-01T00:00:00Z'}
         with self.assertRaisesRegex(ValueError, 'EXISTING_GRANT_CONFLICT'):
             bootstrap.desired_grants({'grants': [template, changed]}, desired)
+        with self.assertRaisesRegex(ValueError, 'ADMIN_GRANT_NOT_UNCONSTRAINED'):
+            bootstrap.desired_grants({'grants': [{**template, 'constraints': {'role': 'superadmin'}}]}, desired)
 
 
 if __name__ == '__main__':
