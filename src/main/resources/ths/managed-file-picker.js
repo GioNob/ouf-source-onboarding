@@ -2,10 +2,12 @@
 const form = document.getElementById('upload');
 const status = document.getElementById('status');
 const result = document.getElementById('result');
+const handoff = new URLSearchParams(window.location.search).get('handoff');
+const handoffValid = handoff === null || /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(handoff);
 form.addEventListener('submit', async event => {
   event.preventDefault();
   const file = document.getElementById('file').files?.[0];
-  if (!file || !/\.csv$/i.test(file.name) || file.size < 1 || file.size > 10485760) {
+  if (!handoffValid || !file || !/\.csv$/i.test(file.name) || file.size < 1 || file.size > 10485760) {
     status.textContent = 'Scegli un CSV non vuoto di massimo 10 MiB.';
     return;
   }
@@ -20,7 +22,8 @@ form.addEventListener('submit', async event => {
     if (!csrfToken || !/^X-[A-Za-z-]+$/.test(csrfHeader)) throw new Error('SESSION');
     const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
     const hash = 'sha256:' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
-    const response = await fetch('/trusted-human/managed-files/upload', {
+    const uploadPath = '/trusted-human/managed-files/upload' + (handoff ? '?handoff=' + encodeURIComponent(handoff) : '');
+    const response = await fetch(uploadPath, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
       headers: { 'Content-Type': 'text/csv', 'X-Content-SHA256': hash, [csrfHeader]: csrfToken }, body: file,
     });
@@ -30,7 +33,8 @@ form.addEventListener('submit', async event => {
     if (!/^[0-9a-f-]{36}$/.test(assetId ?? '')) throw new Error('RESPONSE');
     result.textContent = 'File registrato. Asset ID: ' + assetId;
     result.hidden = false;
-    status.textContent = 'Caricamento completato. Torna alla chat e comunica l’Asset ID per avviare il profilo.';
+    status.textContent = handoff ? 'Caricamento completato. Torna alla chat: l’esito arriverà automaticamente.' :
+      'Caricamento completato. Torna alla chat e comunica l’Asset ID per avviare il profilo.';
   } catch (error) {
     status.textContent = 'Caricamento non riuscito: ' + (error.message ?? 'ERRORE');
   } finally {
