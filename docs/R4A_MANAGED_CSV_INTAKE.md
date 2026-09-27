@@ -258,9 +258,11 @@ binding DEFAULT con `VERIFY=PASS`. Il primo polling successivo ha superato
 l'autorizzazione ma APISIX ha risposto 500 per la costante Lua
 `OWNER_KEY_ENV` mancante. Gateway ha riparato quattro route con snapshot
 `/etc/ouf/deploy-snapshots/managed-file-mcp-mb9jjday/previous.json`.
-Il nuovo upload ha restituito automaticamente in chat l'Asset ID
+Il nuovo upload ha generato un follow-up con Asset ID
 `2b630dbb-5397-485c-95d2-0c4ecc431303`; l'utente ha confermato
-**Invia** nel dialogo ChatGPT. `source.file.profile` ha prodotto job
+**Invia** nel dialogo ChatGPT. Il modello ha ricevuto il turno dell'app e
+ha continuato, ma l'utente riferisce che il prompt non era visibile nella
+conversazione. L'accettazione dell'host non prova la consegna visibile. `source.file.profile` ha prodotto job
 `9bb7f30e-5e96-4888-85ea-90a6af0dfc71`, completato con profilo
 `675c5984-b3ed-4c62-a5e8-733b93b3a542`. La preview redatta riporta
 8 righe e 2 colonne (`cinema`, `indirizzo`). Un quarto tool call nello
