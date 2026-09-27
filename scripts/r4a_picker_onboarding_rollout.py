@@ -324,7 +324,7 @@ def main() -> None:
                 {(m['Source'], m['Destination'], m['RW']) for m in old['Mounts']}):
             raise Blocked('NEW_CONTAINER_CONFIG_MISMATCH')
         command(['docker', 'update', '--restart', 'unless-stopped', LIVE], stdout=subprocess.DEVNULL)
-        print('PICKER_ONBOARDING_ROLLOUT=PASS')
+        print('PICKER_CHAT_HANDOFF_UPGRADE=PASS' if upgrade else 'PICKER_ONBOARDING_ROLLOUT=PASS')
         print('IMAGE_ID=' + image_id)
         print('DB_DUMP=' + str(dump))
         print('ROLLBACK_STATE=' + str(state_path))
