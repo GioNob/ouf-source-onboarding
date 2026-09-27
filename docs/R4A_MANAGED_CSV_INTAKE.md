@@ -253,6 +253,20 @@ gli utenti del client; policy, grant HUMAN e vincoli di owner continuano a
 decidere chi può eseguire ciascuna capability. Dopo `apply` occorre
 riconnettere l'app OUF per ottenere un token nuovo. Il handoff del picker
 scade dopo 30 minuti: una prova già scaduta richiede un nuovo caricamento.
+Nel test del 27/09, `MODE=apply CLIENT=ouf-chatgpt` ha aggiunto i quattro
+binding DEFAULT con `VERIFY=PASS`. Il primo polling successivo ha superato
+l'autorizzazione ma APISIX ha risposto 500 per la costante Lua
+`OWNER_KEY_ENV` mancante. Gateway ha riparato quattro route con snapshot
+`/etc/ouf/deploy-snapshots/managed-file-mcp-mb9jjday/previous.json`.
+Il nuovo upload ha restituito automaticamente in chat l'Asset ID
+`2b630dbb-5397-485c-95d2-0c4ecc431303`; l'utente ha confermato
+**Invia** nel dialogo ChatGPT. `source.file.profile` ha prodotto job
+`9bb7f30e-5e96-4888-85ea-90a6af0dfc71`, completato con profilo
+`675c5984-b3ed-4c62-a5e8-733b93b3a542`. La preview redatta riporta
+8 righe e 2 colonne (`cinema`, `indirizzo`). Un quarto tool call nello
+stesso minuto ha esaurito il budget MCP condiviso; ripetuto nel minuto
+successivo è riuscito. Semantic/Registry, DRAFT, Ingestion e UDP restano
+gate aperti.
 Sul lab il batch ha restituito `MODE=plan`, 13 binding presenti e due
 mancanti (`operations.status.read`, `urban.object.search`); `MODE=apply` ha
 aggiunto i due e verificato `BOUND_SCOPES=15`, `MISSING_CATALOGUE=NONE`,
