@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.api.ManagedFileMcpApi;
 import it.comune.trieste.ouf.onboarding.api.PermissionDelegationVerifier;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileChatHandoff;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -18,9 +19,27 @@ class ManagedFileMcpApiTest {
     var files=mock(ManagedFileService.class);
     var receipts=new PermissionDelegationVerifier(new ObjectMapper(),"","https://iam.example","gateway","ouf-mcp-server");
     var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/profile");
-    var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper());
+    var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class));
     byte[] raw="{\"Arguments\":{\"assetId\":\"00000000-0000-4000-8000-000000000001\"}}".getBytes();
     assertThatThrownBy(()->api.profile(raw,request)).isInstanceOf(SecurityException.class);
+    verifyNoInteractions(files);
+  }
+  @Test void uploadHandoffRequiresSignedHumanAndReturnsOnlyOwnedAssetIdentity(){
+    var files=mock(ManagedFileService.class);
+    var handoffs=mock(ManagedFileChatHandoff.class);
+    var receipts=mock(PermissionDelegationVerifier.class);
+    UUID id=UUID.randomUUID(),asset=UUID.randomUUID();
+    byte[] raw=("{\"Arguments\":{\"handoffId\":\""+id+"\"}}").getBytes();
+    var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/handoff");
+    var principal=new PrincipalContext("human:alice","tenant-a",PrincipalContext.ActorType.HUMAN,
+        "ouf-mcp-server","1","https://iam.example","gateway",Set.of("ouf.managed-source.file.upload"),
+        new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
+    when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.file.upload",raw))
+        .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
+    when(handoffs.result(id,"human:alice")).thenReturn(Map.of("assetId",asset,"status","STAGED"));
+    var result=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),handoffs).handoff(raw,request);
+    assertThat(result).containsOnlyKeys("assetId","status");
+    verify(handoffs).result(id,"human:alice");
     verifyNoInteractions(files);
   }
   @Test void jobStatusExposesOnlyBoundedFieldsAndChecksAssetOwner(){
@@ -36,7 +55,7 @@ class ManagedFileMcpApiTest {
         .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
     when(files.profileJob(asset,job)).thenReturn(Map.of("jobId",job,"status","SUCCEEDED","resultRef",UUID.randomUUID(),
         "staging_ref","object://private/secret","claimed_by","worker"));
-    var result=new ManagedFileMcpApi(receipts,files,new ObjectMapper()).preview(raw,request);
+    var result=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class)).preview(raw,request);
     verify(files).requireOwner(asset,"human:alice");
     assertThat(result).containsEntry("jobId",job).containsEntry("status","SUCCEEDED");
     assertThat(result).doesNotContainKeys("staging_ref","claimed_by");
@@ -51,7 +70,7 @@ class ManagedFileMcpApiTest {
         new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
     when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.onboarding.create",raw))
         .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
-    var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper());api.create(raw,request);
+    var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class));api.create(raw,request);
     var actor=org.mockito.ArgumentCaptor.forClass(it.comune.trieste.ouf.onboarding.application.OnboardingService.Actor.class);
     verify(files).onboardIdempotent(eq(asset),eq(profile),eq("cinema"),eq("Cinema"),eq("Comune"),eq("https://example.org/Cinema"),
         eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"));
