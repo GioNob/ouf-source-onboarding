@@ -39,7 +39,7 @@ old container; the root-owned DB dump and stopped original are retained.
 
 Pinned Gateway revision:
 `f5d7b0d5580ad1c602d436035c3b9dd7cfec14dd`.
-Pinned MCP revision: `87244ac92b0cfc7a920f174ae0645738a2ba79be`.
+Pinned MCP revision: `208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca`.
 
 Fetch Gateway and MCP as `oufadmin`. The private materialization directory
 from the earlier R4a route installation must contain `runtime.json`,
@@ -52,7 +52,7 @@ set -o pipefail
 git -C /opt/ouf/gateway fetch origin codex/r4a-managed-mcp-installer-fix
 git -C /opt/ouf/mcp fetch origin codex/r4a-managed-file-rollout
 cd /opt/ouf/mcp
-git show 87244ac92b0cfc7a920f174ae0645738a2ba79be:scripts/r4a_attachment_rollout.py | sudo python3 - --mcp-commit 87244ac92b0cfc7a920f174ae0645738a2ba79be --mode picker --picker-url https://api.ouf-lab.it/trusted-human/managed-files/ --onboarding-revision dfe91df9ec1d75c33ce3be465ea9e0ad032ef156 --materialization /etc/ouf/deploy-snapshots/r4a-mcp-routes-vqa3yS
+git show 208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca:scripts/r4a_attachment_rollout.py | sudo python3 - --mcp-commit 208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca --mode picker --picker-url https://api.ouf-lab.it/trusted-human/managed-files/ --onboarding-revision dfe91df9ec1d75c33ce3be465ea9e0ad032ef156 --materialization /etc/ouf/deploy-snapshots/r4a-mcp-routes-vqa3yS
 ```
 
 Expected: `MANAGED_ATTACHMENT_ROLLOUT=PASS`, `MODE=PICKER`,
