@@ -17,8 +17,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 
-from scripts import r4a_onboarding_db_backup as database
+database = None
 
 ROOT = Path('/etc/ouf/deploy-snapshots')
 LIVE = 'ouf-onboarding'
@@ -38,6 +39,17 @@ def command(args, *, stdin=None, stdout=subprocess.PIPE) -> bytes:
     if run.returncode:
         raise Blocked('COMMAND_FAILED_' + Path(args[0]).name.upper())
     return run.stdout if stdout == subprocess.PIPE else b''
+
+
+def load_database(repo: Path, revision: str):
+    """Use the matching backup helper from the same pinned source revision."""
+    if not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise Blocked('REVISION_REQUIRED')
+    safe = ['git', '-c', 'safe.directory=' + str(repo.resolve(strict=True)), '-C', str(repo)]
+    source = command([*safe, 'show', revision + ':scripts/r4a_onboarding_db_backup.py']).decode()
+    module = types.ModuleType('r4a_onboarding_db_backup')
+    exec(compile(source, 'scripts/r4a_onboarding_db_backup.py', 'exec'), module.__dict__)
+    return module
 
 
 def inspect(name: str) -> dict:
@@ -204,6 +216,7 @@ def rollback(state: dict) -> None:
 
 
 def main() -> None:
+    global database
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('mode', choices=('plan', 'apply', 'rollback'))
     p.add_argument('--revision')
@@ -219,6 +232,7 @@ def main() -> None:
         rollback(json.loads(a.state.read_text()))
         print('PICKER_ONBOARDING_ROLLBACK=PASS')
         return
+    database = load_database(a.repo, a.revision or '')
     old, client, scopes, backup = preflight(a.repo, a.revision or '')
     keycloak_scope(a.repo, client, 'plan')
     print('MODE=' + a.mode)
