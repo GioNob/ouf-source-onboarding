@@ -17,6 +17,9 @@ class MinioStagingBootstrapTest(unittest.TestCase):
         self.assertEqual(stage.POLICY['Statement'][0]['Resource'],
                          ['arn:aws:s3:::ouf-managed-files/managed-files/*'])
         self.assertNotIn('s3:DeleteObject', stage.POLICY['Statement'][0]['Action'])
+        self.assertEqual(stage.POLICY['Statement'][1], {
+            'Effect': 'Allow', 'Action': ['s3:GetBucketLocation'],
+            'Resource': ['arn:aws:s3:::ouf-managed-files']})
 
     def test_policy_match_ignores_action_order_but_rejects_extra_privilege(self):
         installed = copy.deepcopy(stage.POLICY)
@@ -26,6 +29,31 @@ class MinioStagingBootstrapTest(unittest.TestCase):
         installed['Statement'][0]['Action'].append('s3:DeleteObject')
         with patch.object(stage, 'installed_policy', return_value=installed):
             self.assertFalse(stage.policy_matches())
+
+    def test_apply_upgrades_only_the_known_legacy_policy_without_rotating_credentials(self):
+        with TemporaryDirectory() as root:
+            secret = Path(root) / 'secret'
+            secret.write_text('a' * 64 + '\n')
+            commands = []
+            with (patch.object(stage, 'SECRET', secret),
+                  patch.object(stage, 'installed_policy', return_value=copy.deepcopy(stage.LEGACY_POLICY)),
+                  patch.object(stage, 'run_shell', side_effect=lambda script: commands.append(script) or '')):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    stage.install(True, {'BUCKET': True, 'POLICY': True, 'USER': True})
+            self.assertIn('POLICY_UPDATED=true', output.getvalue())
+            self.assertEqual(secret.read_text().strip(), 'a' * 64)
+            self.assertEqual(len([s for s in commands if 'admin policy create' in s]), 1)
+            self.assertIn('s3:GetBucketLocation', commands[0])
+
+    def test_apply_rejects_unknown_existing_policy_before_writes(self):
+        changed = copy.deepcopy(stage.LEGACY_POLICY)
+        changed['Statement'][0]['Action'].append('s3:DeleteObject')
+        with (patch.object(stage, 'installed_policy', return_value=changed),
+              patch.object(stage, 'run_shell') as run):
+            with self.assertRaisesRegex(ValueError, 'EXISTING_POLICY_DIFFERS'):
+                stage.install(True, {'BUCKET': True, 'POLICY': True, 'USER': True})
+            run.assert_not_called()
 
     def test_apply_uses_private_secret_without_printing(self):
         with TemporaryDirectory() as root:
