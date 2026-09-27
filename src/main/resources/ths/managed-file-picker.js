@@ -25,13 +25,17 @@ form.addEventListener('submit', async event => {
     return;
   }
   if (file.size < 1 || file.size > 10485760) {
-    status.textContent = 'Il file deve essere non vuoto e non superare 10 MiB.';
+    status.textContent = 'Il file deve essere non vuoto e non superare 10 MiB.' +
+      (handoff ? ' Per riprovare, avvia un nuovo caricamento dalla chat.' : '');
     await reportRejection('SIZE_INVALID');
+    if (handoff) document.getElementById('send').disabled = true;
     return;
   }
   if (!/\.csv$/i.test(file.name)) {
-    status.textContent = 'Formato non ancora gestito per il caricamento: ' + (file.name.split('.').pop() || 'sconosciuto').slice(0, 16) + '. Al momento è supportato CSV.';
+    status.textContent = 'Formato non ancora gestito per il caricamento: ' + (file.name.split('.').pop() || 'sconosciuto').slice(0, 16) +
+      '. Al momento è supportato CSV.' + (handoff ? ' Per riprovare, avvia un nuovo caricamento dalla chat.' : '');
     await reportRejection('FORMAT_UNSUPPORTED');
+    if (handoff) document.getElementById('send').disabled = true;
     return;
   }
   const button = document.getElementById('send');
