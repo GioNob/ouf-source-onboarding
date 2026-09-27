@@ -15,7 +15,7 @@ secrets, access tokens, CSV contents or Docker environment values into chat.
 ## Stage 1: Onboarding and `ouf-ths`
 
 Pinned Onboarding revision:
-`dfe91df9ec1d75c33ce3be465ea9e0ad032ef156`.
+`e1d5d59cbb07c5f7b6e4b73c2e1f57c24b6c3300`.
 
 From `/opt/ouf/onboarding`, fetch that branch as `oufadmin`, then run the
 standalone pinned script as root. Fetch writes only to the checkout; `apply`
@@ -25,7 +25,7 @@ container cutover in one program. No separate plan/verify sequence is needed.
 ```bash
 set -o pipefail
 git fetch origin codex/r4a-authorization-catalogue
-git show dfe91df9ec1d75c33ce3be465ea9e0ad032ef156:scripts/r4a_picker_onboarding_rollout.py | sudo python3 - apply --revision dfe91df9ec1d75c33ce3be465ea9e0ad032ef156
+git show e1d5d59cbb07c5f7b6e4b73c2e1f57c24b6c3300:scripts/r4a_picker_onboarding_rollout.py | sudo python3 - apply --revision e1d5d59cbb07c5f7b6e4b73c2e1f57c24b6c3300
 ```
 
 Expected: `PICKER_ONBOARDING_ROLLOUT=PASS`, `ROLLBACK_STATE=...` and
@@ -52,7 +52,7 @@ set -o pipefail
 git -C /opt/ouf/gateway fetch origin codex/r4a-managed-mcp-installer-fix
 git -C /opt/ouf/mcp fetch origin codex/r4a-managed-file-rollout
 cd /opt/ouf/mcp
-git show 208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca:scripts/r4a_attachment_rollout.py | sudo python3 - --mcp-commit 208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca --mode picker --picker-url https://api.ouf-lab.it/trusted-human/managed-files/ --onboarding-revision dfe91df9ec1d75c33ce3be465ea9e0ad032ef156 --materialization /etc/ouf/deploy-snapshots/r4a-mcp-routes-vqa3yS
+git show 208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca:scripts/r4a_attachment_rollout.py | sudo python3 - --mcp-commit 208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca --mode picker --picker-url https://api.ouf-lab.it/trusted-human/managed-files/ --onboarding-revision e1d5d59cbb07c5f7b6e4b73c2e1f57c24b6c3300 --materialization /etc/ouf/deploy-snapshots/r4a-mcp-routes-vqa3yS
 ```
 
 Expected: `MANAGED_ATTACHMENT_ROLLOUT=PASS`, `MODE=PICKER`,
