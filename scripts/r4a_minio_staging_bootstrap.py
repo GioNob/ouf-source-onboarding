@@ -24,12 +24,18 @@ DIRECTORY = Path('/etc/ouf/secrets')
 ACCESS = DIRECTORY / 'onboarding-minio-access-key'
 SECRET = DIRECTORY / 'onboarding-minio-secret-key'
 SNAPSHOT = Path('/etc/ouf/deploy-snapshots/r4a-before-staging.docker-inspect.json')
-POLICY = {
+LEGACY_POLICY = {
     'Version': '2012-10-17',
     'Statement': [{'Effect': 'Allow',
                    'Action': ['s3:GetObject', 's3:PutObject', 's3:AbortMultipartUpload',
                               's3:ListMultipartUploadParts'],
                    'Resource': ['arn:aws:s3:::ouf-managed-files/managed-files/*']}],
+}
+POLICY = {
+    'Version': '2012-10-17',
+    'Statement': [*LEGACY_POLICY['Statement'],
+                  {'Effect': 'Allow', 'Action': ['s3:GetBucketLocation'],
+                   'Resource': ['arn:aws:s3:::ouf-managed-files']}],
 }
 
 PREFIX = r'''set -eu
@@ -122,29 +128,40 @@ cat "$cfg/installed.json"
         raise ValueError('MINIO_POLICY_INVALID_JSON') from exc
 
 
-def policy_matches() -> bool:
-    actual = installed_policy()
-    expected = POLICY['Statement'][0]
-    if set(actual) != {'Version', 'Statement'} or actual.get('Version') != POLICY['Version']:
+def exact_policy(actual: dict, expected: dict) -> bool:
+    if set(actual) != {'Version', 'Statement'} or actual.get('Version') != expected['Version']:
         return False
     statements = actual.get('Statement')
-    if not isinstance(statements, list) or len(statements) != 1 or not isinstance(statements[0], dict):
+    if not isinstance(statements, list) or len(statements) != len(expected['Statement']):
         return False
-    statement = statements[0]
-    if set(statement) != {'Effect', 'Action', 'Resource'} or statement['Effect'] != 'Allow':
-        return False
-    actions = statement['Action']
-    return (isinstance(actions, list) and all(isinstance(action, str) for action in actions)
-            and len(actions) == len(expected['Action'])
-            and set(actions) == set(expected['Action'])
-            and statement['Resource'] == expected['Resource'])
+    def normalized(statement):
+        if not isinstance(statement, dict) or set(statement) != {'Effect', 'Action', 'Resource'}:
+            return None
+        actions = statement['Action']
+        resources = statement['Resource']
+        if (statement['Effect'] != 'Allow' or not isinstance(actions, list) or
+                not isinstance(resources, list) or
+                any(not isinstance(v, str) for v in actions + resources) or
+                len(actions) != len(set(actions)) or len(resources) != len(set(resources))):
+            return None
+        return (statement['Effect'], tuple(sorted(actions)), tuple(sorted(resources)))
+    found = [normalized(statement) for statement in statements]
+    wanted = [normalized(statement) for statement in expected['Statement']]
+    return None not in found and sorted(found) == sorted(wanted)
+
+
+def policy_matches() -> bool:
+    return exact_policy(installed_policy(), POLICY)
 
 
 def install(existing_files: bool, before: dict[str, bool]) -> None:
     if before['USER'] and not existing_files:
         raise ValueError('EXISTING_USER_WITHOUT_LOCAL_CREDENTIALS')
-    if before['POLICY'] and not policy_matches():
+    current_policy = installed_policy() if before['POLICY'] else None
+    if current_policy is not None and not (exact_policy(current_policy, POLICY) or
+                                           exact_policy(current_policy, LEGACY_POLICY)):
         raise ValueError('EXISTING_POLICY_DIFFERS')
+    update_policy = current_policy is not None and exact_policy(current_policy, LEGACY_POLICY)
     if not existing_files:
         # Persist credentials before the API call, so an interrupted apply can
         # resume without rotating or losing the new MinIO user's password.
@@ -154,12 +171,12 @@ def install(existing_files: bool, before: dict[str, bool]) -> None:
     if not before['BUCKET']:
         run_shell(PREFIX + 'mc --config-dir "$cfg" mb --ignore-existing r4a/ouf-managed-files >/dev/null 2>&1 || exit 51\n')
         print('BUCKET_CREATED=true')
-    if not before['POLICY']:
+    if not before['POLICY'] or update_policy:
         body = json.dumps(POLICY, separators=(',', ':'), sort_keys=True)
         run_shell(PREFIX + 'cat > "$cfg/policy.json" <<\'OUF_R4A_POLICY\'\n' + body +
                   '\nOUF_R4A_POLICY\nmc --config-dir "$cfg" admin policy create r4a ' +
                   POLICY_NAME + ' "$cfg/policy.json" >/dev/null 2>&1 || exit 52\n')
-        print('POLICY_CREATED=true')
+        print('POLICY_UPDATED=true' if update_policy else 'POLICY_CREATED=true')
     if not before['USER']:
         run_shell('APP_SECRET=' + password + '\n' + PREFIX +
                   'mc --config-dir "$cfg" admin user add r4a ' + USER +
