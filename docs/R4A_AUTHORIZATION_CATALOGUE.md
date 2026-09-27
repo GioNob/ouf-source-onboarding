@@ -1,5 +1,19 @@
 # R4a Authorization: catalogo e bundle attivo
 
+> **Stato 27/09/2026.** Questa procedura descrive il bootstrap iniziale
+> al policyRef `:14`. I cinque descriptor managed-file sono stati poi
+> registrati, quattro scope HUMAN e uno scope SERVICE sono stati verificati,
+> i grant relativi sono stati pubblicati e l'ultimo bundle attestato è
+> `ouf-lab-authorization:28` dopo sette capability/grant Semantic HUMAN.
+> Il token SERVICE Onboarding e quello HUMAN `ouf-admin` hanno passato
+> le rispettive acceptance; una sessione `kcadm` può comunque scadere.
+> Non ripubblicare i manifest già applicati in base ai passi storici qui
+> sotto. Usare `plan`/verify read-only per drift mirato, poi il lifecycle
+> idempotente e la THS soltanto per differenze effettive. R-INSTALL rimane
+> aperto finché clean install, upgrade, restore e CI d'installabilità non
+> sono provati. [Handoff corrente](https://github.com/GioNob/ouf-semantic-registry/blob/codex/r4a-smoke-semantic-inventory/docs/handoffs/OUF_HANDOFF_2026-09-27_R4A.md).
+
+
 Checkpoint 24 settembre 2026. I PET v1.7 sono normativi: Authorization v1.5 richiede capability e grant versionati; MCP v1.4 riserva conferma e pubblicazione alla Trusted Human Surface; Onboarding/THS v1.6 vieta conferme tramite tool MCP. La route APISIX e lo scope Keycloak `urban.object.search` non aggiornano il PolicyBundle Authorization.
 
 Il tentativo di proporre un grant HUMAN temporaneo tramite `authorization.permissions.propose` è stato rifiutato con `ONB_BAD_REQUEST: invalid grant reference`. Il validatore rifiuta riferimenti a capability assenti dal bundle ACTIVE; nessuna proposta è stata creata. La policy letta è `ouf-lab-authorization:14`. Il preflight sul server ha confermato `SEARCH_REGISTERED=false` e `SEARCH_IN_ACTIVE_BUNDLE=false`, senza modificare la policy.
