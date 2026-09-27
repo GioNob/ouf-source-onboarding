@@ -92,8 +92,10 @@ def desired_grants(active, entries):
     if len(admin) != 1:
         raise ValueError('ADMIN_GRANT_NOT_UNIQUE')
     template = admin[0]
-    if datetime.fromisoformat(template['validUntil'].replace('Z', '+00:00')) <= datetime.now(timezone.utc):
-        raise ValueError('ADMIN_GRANT_EXPIRED')
+    if (template.get('constraints') is not None or template.get('organizationId') is not None
+            or datetime.fromisoformat(template['validFrom'].replace('Z', '+00:00')) > datetime.now(timezone.utc)
+            or datetime.fromisoformat(template['validUntil'].replace('Z', '+00:00')) <= datetime.now(timezone.utc)):
+        raise ValueError('ADMIN_GRANT_NOT_UNCONSTRAINED_AND_ACTIVE')
     wanted = []
     for item in entries:
         exact = [grant for grant in active['grants'] if grant.get('grantId') == item['grantId']]
