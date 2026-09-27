@@ -2,6 +2,7 @@ import unittest
 from unittest import mock
 import json
 from pathlib import Path
+import tempfile
 
 from scripts import r4a_picker_onboarding_rollout as picker
 
@@ -13,6 +14,29 @@ class PickerRolloutTests(unittest.TestCase):
             module = picker.load_database(Path.cwd(), commit)
         self.assertEqual(module.VALUE, 31)
         self.assertIn(commit + ':scripts/r4a_onboarding_db_backup.py', command.call_args.args[0])
+
+    def test_scope_helper_and_import_come_from_pinned_commit(self):
+        revision = 'b' * 40
+        helper = b'from r4a_keycloak_client_scope_catalogue import MARKER\nassert MARKER == 42\n'
+        catalogue = b'MARKER = 42\n'
+        with tempfile.TemporaryDirectory() as folder:
+            with (mock.patch.object(picker, 'ROOT', Path(folder)),
+                  mock.patch.object(picker, 'command', side_effect=[helper, catalogue]) as command):
+                picker.keycloak_scope(Path.cwd(), revision, 'ouf-authorization-ths', 'plan')
+            self.assertEqual(list(Path(folder).iterdir()), [])
+        self.assertEqual([call.args[0][-1] for call in command.call_args_list], [
+            revision + ':scripts/r4a_keycloak_client_scope_binding.py',
+            revision + ':scripts/r4a_keycloak_client_scope_catalogue.py'])
+
+    def test_scope_helper_surfaces_keycloak_session_error(self):
+        revision = 'b' * 40
+        helper = b'raise SystemExit("CLIENT_SCOPE_BINDING_BLOCKED=KCADM_SESSION_EXPIRED")\n'
+        with tempfile.TemporaryDirectory() as folder:
+            with (mock.patch.object(picker, 'ROOT', Path(folder)),
+                  mock.patch.object(picker, 'command', side_effect=[helper, b''])):
+                with self.assertRaisesRegex(picker.Blocked, 'THS_CLIENT_SCOPE_KCADM_SESSION_EXPIRED'):
+                    picker.keycloak_scope(Path.cwd(), revision, 'ouf-authorization-ths', 'plan')
+            self.assertEqual(list(Path(folder).iterdir()), [])
 
     def test_preserves_existing_ths_scopes_without_reading_other_clients(self):
         config = '''spring:
