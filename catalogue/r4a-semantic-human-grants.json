@@ -1,0 +1,30 @@
+[
+  {
+    "grantId": "grant-semantic-propose-human-admin",
+    "capabilityId": "ouf.semantic.propose"
+  },
+  {
+    "grantId": "grant-semantic-review-prepare-human-admin",
+    "capabilityId": "ouf.semantic.review.prepare"
+  },
+  {
+    "grantId": "grant-semantic-approval-request-human-admin",
+    "capabilityId": "ouf.semantic.approval.request"
+  },
+  {
+    "grantId": "grant-semantic-review-human-admin",
+    "capabilityId": "ouf.semantic.review"
+  },
+  {
+    "grantId": "grant-semantic-approve-human-admin",
+    "capabilityId": "ouf.semantic.approve"
+  },
+  {
+    "grantId": "grant-semantic-publish-human-admin",
+    "capabilityId": "ouf.semantic.publish"
+  },
+  {
+    "grantId": "grant-semantic-search-human-admin",
+    "capabilityId": "ouf.semantic.search"
+  }
+]
