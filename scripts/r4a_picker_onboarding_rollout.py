@@ -68,6 +68,20 @@ def inspect_optional(name: str) -> dict | None:
 
 def scopes_from_ths_config(contents: str) -> tuple[str, list[str]]:
     """Read only the exact ouf-ths registration block from an existing YAML."""
+    if contents.lstrip().startswith('{'):
+        try:
+            registration = json.loads(contents)['spring']['security']['oauth2']['client']['registration']['ouf-ths']
+            client = registration['client-id']
+            raw_scopes = registration['scope']
+            scopes = (raw_scopes if isinstance(raw_scopes, list) else
+                      re.split(r'[\s,]+', raw_scopes) if isinstance(raw_scopes, str) else [])
+        except (KeyError, TypeError, ValueError):
+            raise Blocked('THS_CONFIG_UNRESOLVED') from None
+        if (not isinstance(client, str) or not re.fullmatch(r'[A-Za-z0-9._-]+', client) or
+                not scopes or any(not isinstance(s, str) or not re.fullmatch(r'[A-Za-z0-9._-]+', s) for s in scopes) or
+                len(scopes) != len(set(scopes))):
+            raise Blocked('THS_CLIENT_OR_SCOPE_UNRESOLVED')
+        return client, scopes
     block_indent = None
     values = {}
     for raw in contents.splitlines():
