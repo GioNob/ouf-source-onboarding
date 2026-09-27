@@ -1,0 +1,79 @@
+[
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.propose",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.semantic.propose",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.review.prepare",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.semantic.review.prepare",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.approval.request",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.semantic.approval.request",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.review",
+      "operation": "READ",
+      "requiredScope": "ouf.semantic.review",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.approve",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.semantic.approve",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.publish",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.semantic.publish",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.search",
+      "operation": "READ",
+      "requiredScope": "ouf.semantic.search",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  }
+]
