@@ -240,6 +240,19 @@ non modifica binding esistenti e non attribuisce scope SERVICE. Richiede la
 sessione `kcadm` valida nel container Keycloak. Richiedere nel flusso OIDC
 gli scope OPTIONAL pertinenti alla singola operazione: il solo binding non
 li inserisce automaticamente in ogni access token.
+
+Il picker in ChatGPT usa un altro client OAuth, `ouf-chatgpt`: gli scope
+OPTIONAL di `ouf-human-admin` non passano al suo token. Nel test live il
+picker ha acquisito il CSV, ma la lettura app-only del risultato
+`source.file.upload.status` è stata negata con `SCOPE_MISSING`. Il batch
+`scripts/r4a_chatgpt_managed_file_scopes.py plan/apply/verify` lega come
+DEFAULT a **quel client esatto** i quattro scope HUMAN managed-file
+(upload, profile, preview, onboarding.create), preservando gli altri
+binding. Il default inserisce i nomi degli scope nei nuovi token di tutti
+gli utenti del client; policy, grant HUMAN e vincoli di owner continuano a
+decidere chi può eseguire ciascuna capability. Dopo `apply` occorre
+riconnettere l'app OUF per ottenere un token nuovo. Il handoff del picker
+scade dopo 30 minuti: una prova già scaduta richiede un nuovo caricamento.
 Sul lab il batch ha restituito `MODE=plan`, 13 binding presenti e due
 mancanti (`operations.status.read`, `urban.object.search`); `MODE=apply` ha
 aggiunto i due e verificato `BOUND_SCOPES=15`, `MISSING_CATALOGUE=NONE`,
