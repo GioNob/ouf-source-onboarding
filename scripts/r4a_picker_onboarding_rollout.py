@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One rollback-backed Onboarding picker cutover; no database migration permitted.
+"""One rollback-backed Onboarding picker cutover or chat-handoff upgrade.
 
 Run from a fetched, pinned source checkout. The live THS secret file is read
 only to preserve its existing scope list; values are never printed. The old
@@ -121,7 +121,7 @@ def picker_overlay(scopes: list[str]) -> str:
     }, separators=(',', ':'))
 
 
-def preflight(repo: Path, revision: str) -> tuple[dict, str, list[str], str]:
+def preflight(repo: Path, revision: str, upgrade: bool = False) -> tuple[dict, str, list[str], str]:
     if os.geteuid() != 0 or not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise Blocked('ROOT_OR_REVISION_REQUIRED')
     meta = ROOT.lstat()
@@ -147,16 +147,16 @@ def preflight(repo: Path, revision: str) -> tuple[dict, str, list[str], str]:
     for commit in (base, revision):
         if command([*safe, 'rev-parse', commit + '^{commit}']).decode().strip() != commit:
             raise Blocked('PINNED_COMMIT_MISSING')
-    diff = subprocess.run([*safe, 'diff', '--quiet', base, revision, '--', 'src/main/resources/db/migration'],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    if diff.returncode:
+    migration_diff = command([*safe, 'diff', '--name-status', base, revision, '--',
+                              'src/main/resources/db/migration']).decode().splitlines()
+    if migration_diff:
         raise Blocked('DATABASE_MIGRATION_CHANGED')
     config = [m for m in old['Mounts'] if m['Destination'] == THS_MOUNT]
     if len(config) != 1:
         raise Blocked('THS_CONFIG_MOUNT_MISSING')
     client, scopes = scopes_from_ths_config(Path(config[0]['Source']).read_text())
     env = database.env(old)
-    if PICKER_ENV in env:
+    if (PICKER_ENV in env) != upgrade:
         raise Blocked('PICKER_ENV_ALREADY_PRESENT')
     backup = 'ouf-onboarding-pre-picker-' + revision[:7]
     if subprocess.run(['docker', 'inspect', backup], stdout=subprocess.DEVNULL,
@@ -246,7 +246,7 @@ def rollback(state: dict) -> None:
 def main() -> None:
     global database
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('mode', choices=('plan', 'apply', 'rollback'))
+    p.add_argument('mode', choices=('plan', 'apply', 'upgrade', 'rollback'))
     p.add_argument('--revision')
     p.add_argument('--repo', type=Path, default=Path('/opt/ouf/onboarding'))
     p.add_argument('--state', type=Path)
@@ -261,8 +261,10 @@ def main() -> None:
         print('PICKER_ONBOARDING_ROLLBACK=PASS')
         return
     database = load_database(a.repo, a.revision or '')
-    old, client, scopes, backup = preflight(a.repo, a.revision or '')
-    keycloak_scope(a.repo, a.revision, client, 'plan')
+    upgrade = a.mode == 'upgrade'
+    old, client, scopes, backup = preflight(a.repo, a.revision or '', upgrade)
+    if not upgrade:
+        keycloak_scope(a.repo, a.revision, client, 'plan')
     print('MODE=' + a.mode)
     print('THS_CLIENT_AND_SCOPE_IDENTIFIED=true')
     print('DATABASE_MIGRATIONS_UNCHANGED=true')
@@ -274,8 +276,9 @@ def main() -> None:
     db, user = database.parameters(old, database.inspect('ouf-postgres'))
     dump = database.backup(db, user)
     database.restore_probe(dump, user)
-    keycloak_scope(a.repo, a.revision, client, 'apply')
-    new_env = {**database.env(old), PICKER_ENV: picker_overlay(scopes)}
+    if not upgrade:
+        keycloak_scope(a.repo, a.revision, client, 'apply')
+    new_env = database.env(old) if upgrade else {**database.env(old), PICKER_ENV: picker_overlay(scopes)}
     folder = Path(tempfile.mkdtemp(prefix='r4a-picker-onboarding-', dir=ROOT))
     os.chmod(folder, 0o700)
     state_path = folder / 'state.json'
