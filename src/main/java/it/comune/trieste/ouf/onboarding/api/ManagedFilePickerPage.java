@@ -82,6 +82,18 @@ public class ManagedFilePickerPage {
         .body(Map.of("csrfToken", csrf.getToken(), "csrfHeader", csrf.getHeaderName()));
   }
 
+  public record Rejection(String code) {}
+
+  @PostMapping("/trusted-human/managed-files/rejection")
+  public ResponseEntity<Void> reject(@RequestParam("handoff") UUID handoff,
+      @org.springframework.web.bind.annotation.RequestBody Rejection rejection, HttpServletRequest request) {
+    requireSession(request);
+    if (rejection == null || rejection.code() == null || !java.util.Set.of("FORMAT_UNSUPPORTED", "SIZE_INVALID").contains(rejection.code()))
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UPLOAD_REJECTION_INVALID");
+    handoffs.reject(handoff, actors.requireHuman(request, "ouf.managed-source.file.upload").subject(), rejection.code());
+    return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+  }
+
   /** Browser session adapter; invokes the one existing Gateway upload API. */
   @PostMapping(path="/trusted-human/managed-files/upload", consumes="text/csv")
   public ResponseEntity<Map<String,String>> upload(HttpServletRequest request,
