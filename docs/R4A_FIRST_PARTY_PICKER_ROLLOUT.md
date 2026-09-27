@@ -100,6 +100,28 @@ not change. A failed stage rolls back the steps it completed; it does not
 delete the previously uploaded asset. Only a real upload from the ChatGPT
 widget can prove the automatic chat return.
 
+Pinned candidate commits: Onboarding
+`4b552ffb1a685a38f1387a20e655da9e4d0500a4`, Gateway
+`a226090e7cf1b5e411e9fa422664fa9b4b05746f`, MCP
+`98f786e910c06dd1d29590ae004aa540feff3898`. On the lab VPS, after
+those commits' CI succeeds, paste this single block as `oufadmin`:
+
+```bash
+cd /opt/ouf/mcp || exit 1
+set -euo pipefail
+git -C /opt/ouf/onboarding fetch origin codex/r4a-authorization-catalogue
+git -C /opt/ouf/gateway fetch origin codex/r4a-managed-mcp-installer-fix
+git fetch origin codex/r4a-managed-file-rollout
+git show 98f786e910c06dd1d29590ae004aa540feff3898:scripts/r4a_picker_chat_handoff_rollout.py | sudo python3 - --mcp-commit 98f786e910c06dd1d29590ae004aa540feff3898
+```
+
+The script verifies all three pinned Git objects before mutation. Success is
+`PICKER_CHAT_HANDOFF_ROLLOUT=PASS` with the three retained rollback references
+and `LIVE_CHAT_WIDGET_TEST_PENDING=true`. A passing script still does not
+prove ChatGPT's follow-up bridge. Test from a fresh `source.file.upload` call,
+choose a small local CSV in the OUF picker, return to its ChatGPT widget, and
+verify that the conversation receives the Asset ID without typing it.
+
 The existing asset `55ce7fd2-1893-4d3c-b95d-9c8106c1200a` needs no new
 upload. Its `source.file.profile` call currently returns `authorization denied`
 despite the configured grant for the `ouf-admin` subject. Diagnose the MCP
