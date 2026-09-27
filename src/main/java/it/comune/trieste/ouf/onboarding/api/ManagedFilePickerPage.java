@@ -19,6 +19,7 @@ import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.HttpURLConnection;
 import java.util.Map;
@@ -80,8 +81,10 @@ public class ManagedFilePickerPage {
   public ResponseEntity<Map<String,String>> upload(HttpServletRequest request,
       @RequestHeader("X-Content-SHA256") String hash) throws IOException {
     requireSession(request);
-    if (request.getContentLengthLong() < 1 || request.getContentLengthLong() > MAX_BYTES
-        || !hash.matches("sha256:[0-9a-f]{64}"))
+    long declaredSize = request.getContentLengthLong();
+    if (declaredSize > MAX_BYTES)
+      throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "UPLOAD_SIZE_INVALID");
+    if (declaredSize == 0 || !hash.matches("sha256:[0-9a-f]{64}"))
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UPLOAD_METADATA_INVALID");
     var auth = SecurityContextHolder.getContext().getAuthentication();
     if (!(auth instanceof OAuth2AuthenticationToken session))
@@ -96,21 +99,13 @@ public class ManagedFilePickerPage {
       connection.setReadTimeout(30000);
       connection.setRequestMethod("POST");
       connection.setDoOutput(true);
-      connection.setFixedLengthStreamingMode(request.getContentLengthLong());
+      if (declaredSize > 0) connection.setFixedLengthStreamingMode(declaredSize);
+      else connection.setChunkedStreamingMode(65536);
       connection.setRequestProperty("Authorization", "Bearer " + client.getAccessToken().getTokenValue());
       connection.setRequestProperty("Content-Type", "text/csv");
       connection.setRequestProperty("X-Content-SHA256", hash);
       try (var source = request.getInputStream(); var target = connection.getOutputStream()) {
-        byte[] chunk = new byte[65536];
-        long count = 0;
-        for (int n; (n = source.read(chunk)) != -1;) {
-          count += n;
-          if (count > MAX_BYTES || count > request.getContentLengthLong())
-            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "UPLOAD_SIZE_INVALID");
-          target.write(chunk, 0, n);
-        }
-        if (count != request.getContentLengthLong())
-          throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UPLOAD_SIZE_MISMATCH");
+        copyBounded(source, target, declaredSize);
       }
       int code = connection.getResponseCode();
       if (code != 201)
@@ -127,6 +122,20 @@ public class ManagedFilePickerPage {
     } finally {
       connection.disconnect();
     }
+  }
+
+  static long copyBounded(InputStream source, OutputStream target, long declaredSize) throws IOException {
+    byte[] chunk = new byte[65536];
+    long count = 0;
+    for (int n; (n = source.read(chunk)) != -1;) {
+      count += n;
+      if (count > MAX_BYTES || declaredSize > 0 && count > declaredSize)
+        throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "UPLOAD_SIZE_INVALID");
+      target.write(chunk, 0, n);
+    }
+    if (count == 0 || declaredSize > 0 && count != declaredSize)
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UPLOAD_SIZE_MISMATCH");
+    return count;
   }
 
   private ResponseEntity<byte[]> asset(String name, MediaType type) throws IOException {
