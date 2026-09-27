@@ -6,6 +6,18 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class ManagedFileChatHandoffTest {
+  @Test void unsupportedFormatIsReturnedOnlyToTheInitiatingHumanWithoutAnAsset() {
+    var files = mock(ManagedFileService.class);
+    var handoffs = new ManagedFileChatHandoff(files);
+    UUID id = UUID.randomUUID();
+    handoffs.reject(id, "human:alice", "FORMAT_UNSUPPORTED");
+    assertThat(handoffs.result(id, "human:alice"))
+        .containsEntry("status", "REJECTED").containsEntry("code", "FORMAT_UNSUPPORTED")
+        .doesNotContainKey("assetId");
+    assertThatThrownBy(() -> handoffs.result(id, "human:bob")).isInstanceOf(SecurityException.class);
+    verifyNoInteractions(files);
+  }
+
   @Test void resultIsBoundToAssetOwnerAndCannotBeReassigned() {
     var files = mock(ManagedFileService.class);
     var handoffs = new ManagedFileChatHandoff(files);
