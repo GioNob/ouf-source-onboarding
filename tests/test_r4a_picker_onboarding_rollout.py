@@ -39,6 +39,14 @@ class PickerRolloutTests(unittest.TestCase):
         with self.assertRaises(picker.Blocked):
             picker.scopes_from_ths_config('  ouf-ths:\n    client-id: ouf-authorization-ths\n    scope: ${THS_SCOPES}\n')
 
+    def test_accepts_json_form_of_ths_yaml_without_exposing_client_secret(self):
+        raw = json.dumps({'spring': {'security': {'oauth2': {'client': {'registration': {
+            'ouf-ths': {'client-id': 'ouf-authorization-ths',
+                        'client-secret': 'private', 'scope': ['openid', 'authorization.policy.admin']}
+        }}}}}})
+        self.assertEqual(picker.scopes_from_ths_config(raw),
+                         ('ouf-authorization-ths', ['openid', 'authorization.policy.admin']))
+
     def test_restores_backup_if_new_container_was_never_created(self):
         state = {'old_id': 'old', 'backup': 'ouf-onboarding-pre-picker-test',
                  'new_id': None}
