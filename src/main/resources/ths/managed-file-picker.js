@@ -4,6 +4,19 @@ const status = document.getElementById('status');
 const result = document.getElementById('result');
 const handoff = new URLSearchParams(window.location.search).get('handoff');
 const handoffValid = handoff === null || /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(handoff);
+async function reportRejection(code) {
+  if (!handoff || !handoffValid) return;
+  try {
+    const session = await fetch('/trusted-human/managed-files/session', {credentials: 'same-origin', cache: 'no-store'});
+    if (!session.ok) return;
+    const {csrfToken, csrfHeader} = await session.json();
+    if (!csrfToken || !/^X-[A-Za-z-]+$/.test(csrfHeader)) return;
+    await fetch('/trusted-human/managed-files/rejection?handoff=' + encodeURIComponent(handoff), {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: {'Content-Type': 'application/json', [csrfHeader]: csrfToken}, body: JSON.stringify({code})
+    });
+  } catch (_) { /* The local error remains visible if the handoff is unavailable. */ }
+}
 form.addEventListener('submit', async event => {
   event.preventDefault();
   const file = document.getElementById('file').files?.[0];
@@ -13,10 +26,12 @@ form.addEventListener('submit', async event => {
   }
   if (file.size < 1 || file.size > 10485760) {
     status.textContent = 'Il file deve essere non vuoto e non superare 10 MiB.';
+    await reportRejection('SIZE_INVALID');
     return;
   }
   if (!/\.csv$/i.test(file.name)) {
     status.textContent = 'Formato non ancora gestito per il caricamento: ' + (file.name.split('.').pop() || 'sconosciuto').slice(0, 16) + '. Al momento è supportato CSV.';
+    await reportRejection('FORMAT_UNSUPPORTED');
     return;
   }
   const button = document.getElementById('send');
