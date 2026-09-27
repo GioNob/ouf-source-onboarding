@@ -7,8 +7,16 @@ const handoffValid = handoff === null || /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]
 form.addEventListener('submit', async event => {
   event.preventDefault();
   const file = document.getElementById('file').files?.[0];
-  if (!handoffValid || !file || !/\.csv$/i.test(file.name) || file.size < 1 || file.size > 10485760) {
-    status.textContent = 'Scegli un CSV non vuoto di massimo 10 MiB.';
+  if (!handoffValid || !file) {
+    status.textContent = 'Seleziona un file valido.';
+    return;
+  }
+  if (file.size < 1 || file.size > 10485760) {
+    status.textContent = 'Il file deve essere non vuoto e non superare 10 MiB.';
+    return;
+  }
+  if (!/\.csv$/i.test(file.name)) {
+    status.textContent = 'Formato non ancora gestito per il caricamento: ' + (file.name.split('.').pop() || 'sconosciuto').slice(0, 16) + '. Al momento è supportato CSV.';
     return;
   }
   const button = document.getElementById('send');
