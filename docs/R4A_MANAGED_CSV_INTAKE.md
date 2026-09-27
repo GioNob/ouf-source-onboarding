@@ -1,3 +1,5 @@
+> **Snapshot live 27/09/2026.** [Handoff PET 1.7](https://github.com/GioNob/ouf-semantic-registry/blob/codex/r4a-smoke-semantic-inventory/docs/handoffs/OUF_HANDOFF_2026-09-27_R4A.md). Il picker ha acquisito il CSV via Gateway: asset `8ec8ae90-808a-4d9e-907c-d56de119e376`, profilo `4462692b-9c85-446b-b6fd-779f01eab64d`. Semantic ha pubblicato con approvazione HUMAN la revisione `51706bed-81e4-4306-aca1-70119821727d`. Il DRAFT `managed-cinema-8ec8ae90` resta inattivo; R-SMOKE OPEN. I passaggi di questo documento relativi a trasferimento manuale CSV/Device Flow sono storia e diagnostica, non il percorso UX ordinario. La fonte tecnica usa `MANAGED_DETERMINISTIC` da asset+ordinale; non usare il campo `cinema` come chiave canonica. L'attuale validatore live aveva accettato il DRAFT con `UDP_RESOLUTION_CONFIGURED=false`; la correzione del validatore nel branch richiede verifica di deploy. Prima di attivare serve il motore UDP generale e un contratto pubblicabile coerente; `resolution.weighted` validato qui non implica esecuzione UDP.
+
 # R4a — intake governato del CSV reale
 
 Stato: codice candidato; CI e bootstrap lab sono gate separati. Il CSV allegato
