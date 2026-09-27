@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.onboarding.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileChatHandoff;
 import it.comune.trieste.ouf.onboarding.application.OnboardingService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -22,9 +23,11 @@ public class ManagedFileMcpApi {
       List<String> semanticRefs,List<String> sourceObjectKeyFields,List<ManagedFileApi.FieldDecision> fields,String layer){}
   private final PermissionDelegationVerifier receipts;
   private final ManagedFileService files;
+  private final ManagedFileChatHandoff handoffs;
   private final ObjectMapper json;
-  public ManagedFileMcpApi(PermissionDelegationVerifier receipts,ManagedFileService files,ObjectMapper json){
-    this.receipts=receipts;this.files=files;this.json=json;
+  public ManagedFileMcpApi(PermissionDelegationVerifier receipts,ManagedFileService files,ObjectMapper json,
+      ManagedFileChatHandoff handoffs){
+    this.receipts=receipts;this.files=files;this.json=json;this.handoffs=handoffs;
   }
   private JsonNode arguments(byte[] raw,String...keys){
     try {
@@ -38,6 +41,11 @@ public class ManagedFileMcpApi {
   private String subject(byte[] raw,HttpServletRequest request,String capability){
     return receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),
         request.getRequestURI(),capability,raw).principal().subjectId();
+  }
+  @PostMapping("/handoff") public Map<String,Object> handoff(@RequestBody byte[] raw,HttpServletRequest request){
+    String owner=subject(raw,request,"ouf.managed-source.file.upload");
+    UUID id=UUID.fromString(arguments(raw,"handoffId").get("handoffId").asText());
+    return handoffs.result(id,owner);
   }
   @PostMapping("/profile") public ResponseEntity<Map<String,Object>> profile(@RequestBody byte[] raw,HttpServletRequest request){
     String cap="ouf.managed-source.file.profile";
