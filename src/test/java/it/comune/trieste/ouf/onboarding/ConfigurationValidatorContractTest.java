@@ -7,6 +7,16 @@ import org.junit.jupiter.api.Test;
 
 class ConfigurationValidatorContractTest {
   private final ConfigurationValidator validator=new ConfigurationValidator();
+  @Test void managedDraftCannotPassWithoutExecutableProfilesAndSemanticPublication(){
+    var draft=base();var bundle=new LinkedHashMap<String,Object>((Map<String,Object>)draft.get("bundle"));
+    bundle.put("source",Map.of("sourceId","s","sourceKind","INTERNAL_MANAGED","acquisitionMode","MANAGED"));draft.put("bundle",bundle);
+    assertThat(validator.validate("s",draft).findings()).extracting(ConfigurationValidator.Finding::code)
+        .contains("ONB_MANAGED_RUNTIME_REQUIRED");
+    var extraction=new LinkedHashMap<String,Object>((Map<String,Object>)draft.get("extractionProfile"));
+    extraction.put("runtime",Map.of());draft.put("extractionProfile",extraction);
+    assertThat(validator.validate("s",draft).findings()).extracting(ConfigurationValidator.Finding::code)
+        .contains("ONB_MANAGED_EXECUTION_REQUIRED","ONB_MANAGED_UDP_PROFILES_REQUIRED","ONB_SEMANTIC_PUBLICATION_BINDING_REQUIRED");
+  }
   @Test void deltaPatchFailsClosedWithoutDirectBindings(){Map<String,Object> config=base();config.put("changeRepresentationProfile",Map.of("mode","DELTA_PATCH"));config.put("deltaPatchContract",Map.of("mode","DELTA_PATCH","baseReference","source-version","operations",List.of("SET"),"propertyBindings",List.of()));assertThat(validator.validate("s",config).findings()).extracting(ConfigurationValidator.Finding::code).contains("ONB_DELTA_BINDINGS_REQUIRED");}
   @Test void propertyEventsRequirePinnedEventContract(){Map<String,Object> config=base();config.put("changeRepresentationProfile",Map.of("mode","PROPERTY_EVENTS"));assertThat(validator.validate("s",config).findings()).extracting(ConfigurationValidator.Finding::path).contains("/changeRepresentationProfile/eventContractRef");}
   @Test void spatialMismatchRequiresExplicitHumanDecisionAndKnownCrs(){
@@ -33,5 +43,5 @@ class ConfigurationValidatorContractTest {
     assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code).contains("ONB_WEIGHTED_IDENTITY_INVALID");
   }
   @SuppressWarnings("unchecked") private static Map<String,Object> withSpatial(Map<String,Object> geometry){var c=base();var extraction=new LinkedHashMap<>((Map<String,Object>)c.get("extractionProfile"));extraction.put("runtime",Map.of("udp",Map.of("spatial",Map.of("policyRef","crs://v1","geometry",geometry,"relationships",List.of()))));c.put("extractionProfile",extraction);return c;}
-  private static Map<String,Object> base(){Map<String,Object> config=new LinkedHashMap<>();config.put("syncProfile",Map.of("bootstrap","FULL_SNAPSHOT","incremental","NONE"));config.put("extractionProfile",Map.of("profileId","ep","version","1","sourceId","s","selection",Map.of(),"projection",Map.of(),"sync",Map.of()));config.put("semanticMapping",Map.of("mappingId","sm","sourceType",Map.of("sourceId","s","typeCode","T"),"targetClasses",List.of(Map.of("ontologyId","core","ontologyVersion","1","classIri","urn:T")),"semanticRefs",List.of("core@1")));config.put("bundle",Map.of("bundleId","b","bundleVersion","1","environment","test","source",Map.of("sourceId","s","sourceKind","INTERNAL_MANAGED","acquisitionMode","MANAGED"),"createdFromOnboardingVersion","pending","effectiveFrom","2026-01-01T00:00:00Z","checksum","sha256:x","status","APPROVED"));return config;}
+  private static Map<String,Object> base(){Map<String,Object> config=new LinkedHashMap<>();config.put("syncProfile",Map.of("bootstrap","FULL_SNAPSHOT","incremental","NONE"));config.put("extractionProfile",Map.of("profileId","ep","version","1","sourceId","s","selection",Map.of(),"projection",Map.of(),"sync",Map.of()));config.put("semanticMapping",Map.of("mappingId","sm","sourceType",Map.of("sourceId","s","typeCode","T"),"targetClasses",List.of(Map.of("ontologyId","core","ontologyVersion","1","classIri","urn:T")),"semanticRefs",List.of("core@1")));config.put("bundle",Map.of("bundleId","b","bundleVersion","1","environment","test","source",Map.of("sourceId","s","sourceKind","EXTERNAL_API","acquisitionMode","PULL"),"bindingRef","gateway://test","createdFromOnboardingVersion","pending","effectiveFrom","2026-01-01T00:00:00Z","checksum","sha256:x","status","APPROVED"));return config;}
 }
