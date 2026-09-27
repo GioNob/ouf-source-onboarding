@@ -153,8 +153,9 @@ dei tre container reca l'etichetta di un file Compose, e la ricerca di
 script di avvio sotto `/opt/ouf` e `/etc/systemd/system` non ha trovato la
 definizione corrente. Bucket e credenziali dedicate sono stati verificati
 separatamente; le variabili e i mount di staging dei container Onboarding
-non sono ancora installati. Il backup dei managed file resta da definire;
-il bucket UDP esistente resta separato.
+non erano ancora installati **a quel checkpoint**. Lo stato attuale del
+backup dei managed file non è attestato da questa evidenza; il bucket UDP
+resta separato.
 
 Prima di qualsiasi ricreazione dei container conservare, in un file privato
 root-owned sul VPS, il risultato integrale di `docker inspect` dei container
