@@ -1,11 +1,28 @@
-# R4a first-party CSV picker: coordinated lab rollout
+# R4a first-party file picker: lab rollout record
+
+> **Current status, 27 September 2026.** The rollout commands below are
+> historical checkpoints, not a sequence to repeat. Picker and handoff
+> rollouts reported PASS; a HUMAN upload produced asset
+> `8ec8ae90-808a-4d9e-907c-d56de119e376` and profile
+> `4462692b-9c85-446b-b6fd-779f01eab64d`. Semantic publication passed.
+> The Onboarding DRAFT remains inactive and R-SMOKE is open.
+> The widget handoff across MCP clients has a simulated portability test,
+> not a live second-host acceptance. See the
+> [cross-module handoff](https://github.com/GioNob/ouf-semantic-registry/blob/codex/r4a-smoke-semantic-inventory/docs/handoffs/OUF_HANDOFF_2026-09-27_R4A.md).
+>
+> A user asks to import a **file**, not specifically a CSV. Onboarding
+> determines format after selection. The presently observed lab upload was
+> CSV; support for other PET formats is a separate implementation/acceptance
+> gate. Do not use `cinema` as a record or canonical identity key.
+
+## Historical rollout checkpoints
 
 The PET Gateway v1.5 T25/T28/Table 81 and Onboarding v1.6 section 92 require
 the one `ouf.managed-source.file.upload` capability to carry a bounded file
 through the Gateway into the existing Onboarding staging asset. The picker is
 a web entry to that capability. It uses the existing `ouf-ths` HUMAN session;
-MCP sends no attachment URL and never downloads the file. A user selects the
-local CSV in OUF and receives an Asset ID for the existing profiling flow.
+MCP sends no attachment URL and never downloads the file. A user selects a local file in OUF; the Asset ID remains a fallback if the
+host does not deliver the automatic chat handoff.
 
 The two release programs below perform preflight and rollback internally. Run
 them only on the lab VPS with the existing Docker network, APISIX route
@@ -60,13 +77,13 @@ Expected: `MANAGED_ATTACHMENT_ROLLOUT=PASS`, `MODE=PICKER`,
 A passing installer still creates no asset.
 Do not repeat it after a pass unless handling an explicit rollback or update.
 
-## One live CSV test
+## Original CSV test procedure (completed for the recorded asset)
 
 From ChatGPT, call the existing `source.file.upload` tool and open the OUF
 picker URL it returns. Sign in as `ouf-admin`, select a small local CSV and
 press **Carica file**. The browser page must show an Asset ID after HTTP 201.
-Give that ID to the chat to invoke the existing file profile, preview and
-onboarding-create tools. The DRAFT approval, Semantic/Registry alignment,
+The early test copied the Asset ID into chat. This is historical behavior;
+the normal UX should carry the result through the status/handoff capability. The DRAFT approval, Semantic/Registry alignment,
 Ingestion and UDP smoke are subsequent steps; an Asset ID alone does not
 claim their completion. Repeat separately with an oversized CSV and wrong
 media type before declaring the Gateway T28 release gate closed. The route
@@ -79,9 +96,9 @@ one operation. If Onboarding also needs restoration, use its printed
 Both rollback commands require the Git objects already fetched in the two
 checkouts and preserve the DB dump. No automatic database restore is attempted.
 
-## Chat return of the upload result (candidate, not yet on the lab)
+## Chat return design and historical rollout (subsequently deployed)
 
-The original picker requires copying the Asset ID. The follow-up uses the
+The original picker required copying the Asset ID. The follow-up uses the
 same `source.file.upload` tool and the same governed browser upload route.
 The tool creates a random handoff ID and displays a ChatGPT widget. OUF binds
 the ID to the staged asset and its HUMAN owner for at most 30 minutes in
@@ -91,7 +108,7 @@ No CSV bytes or browser session tokens enter MCP. A process restart or closed
 widget can lose the automatic return; the picker retains the visible Asset ID
 as a fallback. Profiling is still a separate authorized capability.
 
-After the candidate CI passes, the pinned MCP wrapper
+At that checkpoint, after candidate CI, the pinned MCP wrapper
 `scripts/r4a_picker_chat_handoff_rollout.py` upgrades the already installed
 picker in one run. It uses the existing Onboarding upgrade script, builds and
 installs the fourth internal MCP route with a private route snapshot, then
@@ -122,7 +139,7 @@ prove ChatGPT's follow-up bridge. Test from a fresh `source.file.upload` call,
 choose a small local CSV in the OUF picker, return to its ChatGPT widget, and
 verify that the conversation receives the Asset ID without typing it.
 
-The existing asset `55ce7fd2-1893-4d3c-b95d-9c8106c1200a` needs no new
-upload. Its `source.file.profile` call currently returns `authorization denied`
-despite the configured grant for the `ouf-admin` subject. Diagnose the MCP
-decision/scope before claiming the profile/preview/DRAFT smoke has passed.
+The earlier asset `55ce7fd2-1893-4d3c-b95d-9c8106c1200a` had an authorization
+failure at that checkpoint. Later scoped bindings and the successful profile
+for asset `8ec8ae90-808a-4d9e-907c-d56de119e376` supersede that diagnosis.
+They do not prove preview, DRAFT activation, Ingestion or UDP for this asset.
