@@ -126,7 +126,13 @@ retention e credenziali ristrette; non usare il bucket UDP o il root account
 MinIO per l'applicazione. Non creare direttamente record DB né caricare il
 CSV su MinIO aggirando la route HUMAN.
 
-## Configurazione runtime candidata
+## Cronologia del bootstrap lab (archivio)
+
+Le sezioni seguenti conservano prerequisiti, comandi di rollout e output dei
+checkpoint del 26 settembre. Le frasi al presente in questa cronologia
+si riferiscono allo stato **di quel checkpoint**, non al deploy del 27.
+Per una nuova modifica usare lo snapshot attuale e il runbook versionato;
+non ricreare i container né ripetere upload/registrazioni già riusciti.
 
 ### Stato lab al 26/09/2026
 
@@ -483,7 +489,7 @@ Gli installer APISIX creano snapshot private, readback e prova anonima
 401/403, con restore automatico in caso di errore. Non installare le route
 prima che il backend e le due capability rispondano secondo contratto.
 
-## CSV allegato e comando di smoke semplificato
+## Smoke HTTP manuale storico (diagnostica, non UX corrente)
 
 Il file allegato alla conversazione `cinema_trieste(5).csv` è stato verificato
 in workspace: 509 byte e SHA-256
@@ -502,7 +508,7 @@ in automatico dopo esito incerto. La CI della nuova modalità va verificata
 prima di usarla sul VPS. Conservare asset e oggetto secondo la retention
 approvata; verificare il backup degli oggetti prima dell'upload reale.
 
-## Accettazione da eseguire sul VPS
+## Criteri dello smoke HTTP storico (non ripetere come prossimo passo)
 
 - Trasferire il CSV originale dal PC al VPS con un canale autenticato in una
   directory privata di `oufadmin`. Il file della chat non è già presente sul
