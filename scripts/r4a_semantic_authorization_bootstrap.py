@@ -22,6 +22,11 @@ GRANTS = Path(__file__).resolve().parents[1] / 'catalogue/r4a-semantic-human-gra
 CATALOGUE_URL = policy.DEFAULT_BASE + '/capabilities'
 
 
+def normalized_grant(row):
+    # The owner omits nullable fields when it serializes a published Grant.
+    return {key: value for key, value in row.items() if value is not None}
+
+
 def actor_token():
     token = policy.device_login()
     try:
@@ -102,7 +107,7 @@ def desired_grants(active, entries):
         candidate = {**template, 'grantId': item['grantId'], 'capabilityId': item['capabilityId'],
                      'constraints': None, 'organizationId': None}
         if exact:
-            if len(exact) != 1 or exact[0] != candidate:
+            if len(exact) != 1 or normalized_grant(exact[0]) != normalized_grant(candidate):
                 raise ValueError('EXISTING_GRANT_CONFLICT:' + item['grantId'])
         else:
             equivalents = [grant for grant in active['grants'] if grant.get('capabilityId') == item['capabilityId']
@@ -174,9 +179,18 @@ def main():
     if result.get('state') != 'PUBLISHED':
         raise RuntimeError('POLICY_PUBLISH_FAILED')
     final = policy.active(policy.DEFAULT_BASE, token)
+    expected_caps = {row['capabilityId']: policy.normalize_descriptor(row)
+                     for row in candidate['capabilities']}
+    actual_caps = {row['capabilityId']: policy.normalize_descriptor(row)
+                   for row in final['policy']['capabilities']}
+    expected_grants = {row['grantId']: normalized_grant(row) for row in candidate['grants']}
+    actual_grants = {row['grantId']: normalized_grant(row) for row in final['policy']['grants']}
     if (final['policyRef'] != state['targetPolicyRef']
-            or policy.digest(final['policy']['capabilities']) != policy.digest(candidate['capabilities'])
-            or policy.digest(final['policy']['grants']) != policy.digest(candidate['grants'])):
+            or len(expected_caps) != len(candidate['capabilities'])
+            or len(actual_caps) != len(final['policy']['capabilities'])
+            or len(expected_grants) != len(candidate['grants'])
+            or len(actual_grants) != len(final['policy']['grants'])
+            or actual_caps != expected_caps or actual_grants != expected_grants):
         raise ValueError('ACTIVE_POLICY_VERIFY_FAILED')
     print('SEMANTIC_AUTHORIZATION_PUBLISHED=true POLICY_REF=' + final['policyRef'])
 
