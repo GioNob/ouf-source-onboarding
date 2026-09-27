@@ -27,7 +27,9 @@ class SemanticBootstrapTest(unittest.TestCase):
         state = {'basePolicyRef': 'ouf-lab-authorization:27',
                  'targetPolicyRef': 'ouf-lab-authorization:28',
                  'baselineCapabilitiesHash': bootstrap.policy.digest(old['capabilities']),
-                 'baselineGrantsHash': bootstrap.policy.digest(old['grants'])}
+                 'baselineGrantsHash': bootstrap.policy.digest(old['grants']),
+                 'addedCapabilityIds': [x['descriptor']['capabilityId'] for x in verifier.EXPECTED_CAPS],
+                 'addedGrantIds': [x['grantId'] for x in verifier.EXPECTED_GRANTS]}
         self.assertEqual(verifier.verify(old, active, state), (1, 8, 1, 8))
         active['grants'][1]['subjectId'] = 'other'
         with self.assertRaisesRegex(ValueError, 'SEMANTIC_GRANT_MISMATCH'):
