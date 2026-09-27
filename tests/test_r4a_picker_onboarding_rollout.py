@@ -1,11 +1,19 @@
 import unittest
 from unittest import mock
 import json
+from pathlib import Path
 
 from scripts import r4a_picker_onboarding_rollout as picker
 
 
 class PickerRolloutTests(unittest.TestCase):
+    def test_loads_backup_helper_from_exact_pinned_commit(self):
+        commit = 'a' * 40
+        with mock.patch.object(picker, 'command', return_value=b'VALUE = 31\n') as command:
+            module = picker.load_database(Path.cwd(), commit)
+        self.assertEqual(module.VALUE, 31)
+        self.assertIn(commit + ':scripts/r4a_onboarding_db_backup.py', command.call_args.args[0])
+
     def test_preserves_existing_ths_scopes_without_reading_other_clients(self):
         config = '''spring:
   security:
