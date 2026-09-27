@@ -46,6 +46,8 @@ class SemanticBootstrapTest(unittest.TestCase):
         grants = bootstrap.desired_grants({'grants': [template]}, desired)
         self.assertEqual(grants, [{**template, **desired[0]}])
         self.assertEqual(bootstrap.desired_grants({'grants': [template, *grants]}, desired), [])
+        self.assertEqual(bootstrap.desired_grants(
+            {'grants': [template, {k: v for k, v in grants[0].items() if v is not None}]}, desired), [])
         changed = {**grants[0], 'validUntil': '2035-01-01T00:00:00Z'}
         with self.assertRaisesRegex(ValueError, 'EXISTING_GRANT_CONFLICT'):
             bootstrap.desired_grants({'grants': [template, changed]}, desired)
