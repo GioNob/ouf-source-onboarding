@@ -1,41 +1,43 @@
 package it.comune.trieste.ouf.onboarding.application;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
-import org.springframework.jdbc.core.simple.JdbcClient;
+import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Service;
 
-/** Short-lived result pointer for the existing upload capability. */
+/** A bounded, ephemeral pointer to an already persisted managed-file asset. */
 @Service
 public class ManagedFileChatHandoff {
-  private final JdbcClient db;
+  private static final Duration TTL = Duration.ofMinutes(30);
+  private static final int LIMIT = 4096;
+  private record Receipt(UUID assetId, String subject, Instant expiry) {}
+  private final ConcurrentHashMap<UUID, Receipt> pending = new ConcurrentHashMap<>();
   private final ManagedFileService files;
 
-  public ManagedFileChatHandoff(JdbcClient db, ManagedFileService files) {
-    this.db = db;
-    this.files = files;
-  }
+  public ManagedFileChatHandoff(ManagedFileService files) { this.files = files; }
 
   public void complete(UUID handoffId, UUID assetId, String subject) {
     files.requireOwner(assetId, subject);
-    int inserted = db.sql("insert into ouf_onboarding.managed_file_chat_handoff(handoff_id,subject_id,asset_id) " +
-        "values(:h,:s,:a) on conflict(handoff_id) do nothing")
-        .param("h", handoffId).param("s", subject).param("a", assetId).update();
-    if (inserted == 0) {
-      var existing = db.sql("select asset_id from ouf_onboarding.managed_file_chat_handoff " +
-          "where handoff_id=:h and subject_id=:s and asset_id=:a and expires_at>now()")
-          .param("h", handoffId).param("s", subject).param("a", assetId).query().listOfRows();
-      if (existing.isEmpty()) throw new SecurityException("handoff already used");
-    }
+    Instant now = Instant.now();
+    pending.entrySet().removeIf(e -> !e.getValue().expiry().isAfter(now));
+    if (pending.size() >= LIMIT) throw new IllegalStateException("too many pending handoffs");
+    Receipt receipt = new Receipt(assetId, subject, now.plus(TTL));
+    Receipt previous = pending.putIfAbsent(handoffId, receipt);
+    if (previous != null && (!previous.assetId().equals(assetId) || !previous.subject().equals(subject)
+        || !previous.expiry().isAfter(now))) throw new SecurityException("handoff already used");
   }
 
   public Map<String, Object> result(UUID handoffId, String subject) {
-    var rows = db.sql("select asset_id from ouf_onboarding.managed_file_chat_handoff " +
-        "where handoff_id=:h and subject_id=:s and expires_at>now()")
-        .param("h", handoffId).param("s", subject).query().listOfRows();
-    if (rows.isEmpty()) return Map.of("status", "PENDING");
-    UUID assetId = (UUID) rows.get(0).get("asset_id");
-    files.requireOwner(assetId, subject);
-    return Map.of("status", "STAGED", "assetId", assetId);
+    Receipt receipt = pending.get(handoffId);
+    if (receipt == null) return Map.of("status", "PENDING");
+    if (!receipt.expiry().isAfter(Instant.now())) {
+      pending.remove(handoffId, receipt);
+      return Map.of("status", "PENDING");
+    }
+    if (!receipt.subject().equals(subject)) throw new SecurityException("handoff owner mismatch");
+    files.requireOwner(receipt.assetId(), subject);
+    return Map.of("status", "STAGED", "assetId", receipt.assetId());
   }
 }
