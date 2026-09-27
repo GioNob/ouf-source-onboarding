@@ -39,7 +39,7 @@ old container; the root-owned DB dump and stopped original are retained.
 
 Pinned Gateway revision:
 `f5d7b0d5580ad1c602d436035c3b9dd7cfec14dd`.
-Pinned MCP revision: `657f9c02b4073f6f11689b2679e6bb5e7815b171`.
+Pinned MCP revision: `87244ac92b0cfc7a920f174ae0645738a2ba79be`.
 
 Fetch Gateway and MCP as `oufadmin`. The private materialization directory
 from the earlier R4a route installation must contain `runtime.json`,
@@ -52,11 +52,12 @@ set -o pipefail
 git -C /opt/ouf/gateway fetch origin codex/r4a-managed-mcp-installer-fix
 git -C /opt/ouf/mcp fetch origin codex/r4a-managed-file-rollout
 cd /opt/ouf/mcp
-git show 657f9c02b4073f6f11689b2679e6bb5e7815b171:scripts/r4a_attachment_rollout.py | sudo python3 - --mcp-commit 657f9c02b4073f6f11689b2679e6bb5e7815b171 --mode picker --picker-url https://api.ouf-lab.it/trusted-human/managed-files/ --onboarding-revision dfe91df9ec1d75c33ce3be465ea9e0ad032ef156 --materialization /etc/ouf/deploy-snapshots/r4a-mcp-routes-vqa3yS
+git show 87244ac92b0cfc7a920f174ae0645738a2ba79be:scripts/r4a_attachment_rollout.py | sudo python3 - --mcp-commit 87244ac92b0cfc7a920f174ae0645738a2ba79be --mode picker --picker-url https://api.ouf-lab.it/trusted-human/managed-files/ --onboarding-revision dfe91df9ec1d75c33ce3be465ea9e0ad032ef156 --materialization /etc/ouf/deploy-snapshots/r4a-mcp-routes-vqa3yS
 ```
 
-Expected: `MANAGED_ATTACHMENT_ROLLOUT=PASS`, `MODE=PICKER` and
-`UPLOAD_LIVE_TEST_PENDING=true`. A passing installer still creates no asset.
+Expected: `MANAGED_ATTACHMENT_ROLLOUT=PASS`, `MODE=PICKER`,
+`PICKER_ROLLBACK_STATE=...` and `UPLOAD_LIVE_TEST_PENDING=true`.
+A passing installer still creates no asset.
 Do not repeat it after a pass unless handling an explicit rollback or update.
 
 ## One live CSV test
@@ -70,3 +71,10 @@ Ingestion and UDP smoke are subsequent steps; an Asset ID alone does not
 claim their completion. Repeat separately with an oversized CSV and wrong
 media type before declaring the Gateway T28 release gate closed. The route
 snapshots and old containers stay available for rollback.
+
+If the live test fails, use the printed `PICKER_ROLLBACK_STATE` with the same
+pinned MCP script and `--rollback-state` to restore MCP and the picker route in
+one operation. If Onboarding also needs restoration, use its printed
+`ROLLBACK_STATE` with the same pinned Onboarding script in `rollback` mode.
+Both rollback commands require the Git objects already fetched in the two
+checkouts and preserve the DB dump. No automatic database restore is attempted.
