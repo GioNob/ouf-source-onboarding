@@ -38,8 +38,8 @@ old container; the root-owned DB dump and stopped original are retained.
 ## Stage 2: Gateway UI route and the same MCP upload tool
 
 Pinned Gateway revision:
-`f5d7b0d5580ad1c602d436035c3b9dd7cfec14dd`.
-Pinned MCP revision: `208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca`.
+`50eaffae9ce16064ca0c1d69aa13ea50169b772f`.
+Pinned MCP revision: `d2e57cd15cd0fc210ef6ca62d66b9e839060e1a8`.
 
 Fetch Gateway and MCP as `oufadmin`. The private materialization directory
 from the earlier R4a route installation must contain `runtime.json`,
@@ -52,13 +52,36 @@ set -o pipefail
 git -C /opt/ouf/gateway fetch origin codex/r4a-managed-mcp-installer-fix
 git -C /opt/ouf/mcp fetch origin codex/r4a-managed-file-rollout
 cd /opt/ouf/mcp
-git show 208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca:scripts/r4a_attachment_rollout.py | sudo python3 - --mcp-commit 208e5dd0259eb54c0d0ee8c516cc87c14a7ed6ca --mode picker --picker-url https://api.ouf-lab.it/trusted-human/managed-files/ --onboarding-revision e1d5d59cbb07c5f7b6e4b73c2e1f57c24b6c3300 --materialization /etc/ouf/deploy-snapshots/r4a-mcp-routes-vqa3yS
+git show d2e57cd15cd0fc210ef6ca62d66b9e839060e1a8:scripts/r4a_attachment_rollout.py | sudo python3 - --mcp-commit d2e57cd15cd0fc210ef6ca62d66b9e839060e1a8 --mode picker --picker-url https://api.ouf-lab.it/trusted-human/managed-files/ --onboarding-revision e1d5d59cbb07c5f7b6e4b73c2e1f57c24b6c3300 --materialization /etc/ouf/deploy-snapshots/r4a-mcp-routes-vqa3yS
 ```
 
 Expected: `MANAGED_ATTACHMENT_ROLLOUT=PASS`, `MODE=PICKER`,
 `PICKER_ROLLBACK_STATE=...` and `UPLOAD_LIVE_TEST_PENDING=true`.
 A passing installer still creates no asset.
 Do not repeat it after a pass unless handling an explicit rollback or update.
+
+## Already active picker: restore the missing OIDC login route
+
+The first lab picker rollout completed with the UI route but without the
+`/oauth2/authorization/ouf-ths` and `/login/oauth2/code/ouf-ths` routes.
+Its browser session later expired and APISIX returned `404 Route Not Found`
+for the login URL. Do not repeat the MCP/Onboarding cutover. Install only the
+missing login/callback route with the pinned Gateway repair; it snapshots both
+route IDs, checks the existing picker, verifies a login redirect and restores
+its snapshot on failure. It does not rotate credentials or swap containers.
+
+```bash
+cd /opt/ouf/gateway || exit 1
+git fetch origin codex/r4a-managed-mcp-installer-fix
+set -o pipefail
+git show 50eaffae9ce16064ca0c1d69aa13ea50169b772f:ops/apisix/repair_managed_file_picker_login.py | sudo python3 - --revision 50eaffae9ce16064ca0c1d69aa13ea50169b772f --materialization /etc/ouf/deploy-snapshots/r4a-mcp-routes-vqa3yS
+```
+
+Require `OIDC_LOGIN_ROUTE_ACTIVE=true` and `PICKER_LOGIN_ROUTE=PASS`. Keep
+`BACKUP=...` alongside the existing picker rollback state. Refresh the
+browser OUF session through the authorization URL, then retry the upload.
+A future coordinated rollout from the pinned revisions above installs all
+three picker/authorization/callback paths in one snapshot.
 
 ## One live CSV test
 
