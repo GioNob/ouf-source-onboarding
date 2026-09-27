@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -23,8 +24,10 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.net.HttpURLConnection;
 import java.util.Map;
+import java.util.UUID;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileStagingStore;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileChatHandoff;
 
 /** Session-backed browser adapter to the existing governed upload capability. */
 @RestController
@@ -36,9 +39,11 @@ public class ManagedFilePickerPage {
   private final OAuth2AuthorizedClientService clients;
   private final TrustedActorResolver actors;
   private final ObjectMapper json;
+  private final ManagedFileChatHandoff handoffs;
 
   public ManagedFilePickerPage(@Value("${ouf.managed-file-picker.gateway-upload-url}") String url,
-      OAuth2AuthorizedClientService clients, TrustedActorResolver actors, ObjectMapper json) {
+      OAuth2AuthorizedClientService clients, TrustedActorResolver actors, ObjectMapper json,
+      ManagedFileChatHandoff handoffs) {
     this.uploadUrl = URI.create(url);
     if (!"/api/managed-sources/v1/files".equals(uploadUrl.getPath()) || uploadUrl.getRawQuery() != null
         || uploadUrl.getRawFragment() != null || uploadUrl.getUserInfo() != null
@@ -47,6 +52,7 @@ public class ManagedFilePickerPage {
     this.clients = clients;
     this.actors = actors;
     this.json = json;
+    this.handoffs = handoffs;
   }
 
   private void requireSession(HttpServletRequest request) {
@@ -79,7 +85,8 @@ public class ManagedFilePickerPage {
   /** Browser session adapter; invokes the one existing Gateway upload API. */
   @PostMapping(path="/trusted-human/managed-files/upload", consumes="text/csv")
   public ResponseEntity<Map<String,String>> upload(HttpServletRequest request,
-      @RequestHeader("X-Content-SHA256") String hash) throws IOException {
+      @RequestHeader("X-Content-SHA256") String hash,
+      @RequestParam(value="handoff",required=false) UUID handoff) throws IOException {
     requireSession(request);
     long declaredSize = request.getContentLengthLong();
     if (declaredSize > MAX_BYTES)
@@ -116,6 +123,8 @@ public class ManagedFilePickerPage {
         var result = json.readTree(bounded);
         var id = result.path("asset_id").asText();
         if (!id.matches("[0-9a-f-]{36}")) throw new IOException("Gateway upload result missing asset ID");
+        if (handoff != null) handoffs.complete(handoff, UUID.fromString(id), actors.requireHuman(request,
+            "ouf.managed-source.file.upload").subject());
         return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore())
             .body(Map.of("assetId", id, "status", "STAGED"));
       }
