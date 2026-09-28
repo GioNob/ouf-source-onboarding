@@ -1,0 +1,31 @@
+{
+  "strategyId": "GOVERNED_IDENTITY",
+  "strategyVersion": "1",
+  "policyRef": "identity://policy/1",
+  "governedIdentity": {
+    "ref": "identity://policy/1",
+    "version": "1",
+    "tenantId": "tenant-a",
+    "canonicalClass": "urn:T",
+    "sourceId": "s",
+    "maxCandidates": 10,
+    "allowAutoNew": false,
+    "signals": [
+      {
+        "id": "urn:key",
+        "semanticRef": "urn:key@set-1",
+        "comparator": "CONCEPT",
+        "excludesOnDisagreement": true,
+        "uniqueWithinScope": true,
+        "assertionRef": "assertion://key/1"
+      }
+    ],
+    "sufficientRules": [
+      {
+        "id": "key-rule",
+        "signalIds": ["urn:key"],
+        "assertionRef": "assertion://rule/1"
+      }
+    ]
+  }
+}
