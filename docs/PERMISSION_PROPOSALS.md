@@ -16,7 +16,7 @@ Registrare attraverso l'API amministrativa esistente questi descriptor, owner `a
 | authorization.permissions.propose | COMMAND | Proposta UPSERT/REVOKE di un singolo grant |
 | authorization.proposal.read | READ | Ricevuta/stato della propria proposta |
 
-Concedere esplicitamente questi permessi ai soggetti o ruoli incaricati e pubblicare il bundle tramite amministrazione governata. Nessuna concessione automatica a tutti gli utenti. Anche un superadmin che usa MCP necessita dei grant/scope degli strumenti: la conferma THS rivaluta separatamente la sua autorità protetta o il grant amministrativo corrente. `permissions.read` espone grant configurati, non una lista utenti IAM né una prova di accesso effettivo. La simulazione resta nell'API amministrativa di review.
+Concedere esplicitamente questi permessi ai soggetti o ruoli incaricati e pubblicare il bundle tramite amministrazione governata. Nessuna concessione automatica a tutti gli utenti. Anche un superadmin che usa MCP necessita dei grant/scope degli strumenti: la conferma THS rivaluta separatamente la sua autorità protetta o il grant amministrativo corrente. `permissions.read` espone grant configurati, non una lista utenti IAM né una prova di accesso effettivo. La vista `CAPABILITIES` espone i descriptor HUMAN del bundle attivo per preparare un ruolo completo; non crea grant. La simulazione resta nell'API amministrativa di review.
 
 Per un grant basato sul ruolo usare `constraints.externalRoleRef` con il valore canonico attestato da IAM; non inventare il ruolo dal testo della chat. Per un grant nominale usare il subject ID IAM, non email/username. Tenant, validità, capability e vincoli restano parte della policy validata dal dominio.
 
