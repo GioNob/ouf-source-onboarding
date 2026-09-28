@@ -4,6 +4,10 @@ La fonte è generica: CSV, altri file e verticali via API percorrono Ingestion,
 che produce handoff per oggetto con `canonicalPayload` e provenienza. UDP non
 riceve il file né decide in base all'estensione. Il profilo di risoluzione
 pubblicato governa il confronto degli oggetti canonici.
+Per i CSV gestiti il profiler rimuove il BOM UTF-8 dal solo testo parsato,
+conserva l'hash dei byte originali e registra il separatore rilevato nel
+profilo approvato. Il runtime pubblicato passa `csvDelimiter` a Ingestion;
+un CSV con `;` e campi citati non può essere riletto come CSV con virgole.
 La `sourceObjectIdentity` tecnica serve al lineage e all'idempotenza della
 fonte; un binding ACTIVE valido preserva la continuità dell'osservazione
 sorgente, ma non identifica da solo l'oggetto urbano condiviso fra fonti.
