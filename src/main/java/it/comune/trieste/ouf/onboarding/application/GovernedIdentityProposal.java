@@ -26,7 +26,7 @@ final class GovernedIdentityProposal {
         || !(policy.get("allowAutoNew") instanceof Boolean)
         || !(policy.get("maxCandidates") instanceof Number max) || max.doubleValue()!=max.intValue()
         || max.intValue()<1 || max.intValue()>1000) throw invalid();
-    List<?> signals=list(policy.get("signals"),1,32),rules=list(policy.get("sufficientRules"),1,1);
+    List<?> signals=list(policy.get("signals"),1,32),rules=list(policy.get("sufficientRules"),1,32);
     Set<String> compared=new HashSet<>();
     for(Object item:signals){
       Map<?,?> signal=map(item,SIGNAL);
@@ -46,7 +46,7 @@ final class GovernedIdentityProposal {
       String id=string(rule.get("id"));
       if(!ids.add(id) || blank(rule.get("assertionRef")))throw invalid();
       List<?> members=list(rule.get("signalIds"),1,32);
-      if(new HashSet<>(members).size()!=members.size() || !compared.equals(new HashSet<>(members)))throw invalid();
+      if(new HashSet<>(members).size()!=members.size() || !compared.containsAll(members))throw invalid();
     }
   }
   private static Map<?,?> map(Object value,Set<String> fields){
