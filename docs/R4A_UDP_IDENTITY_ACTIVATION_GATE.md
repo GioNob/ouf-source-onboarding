@@ -58,7 +58,10 @@ OIDC HUMAN, che non è consegnato al browser JavaScript. Spring CSRF protegge
 la conferma; hash e versioni sono ricontrollati da UDP. Configurare e verificare
 la route Gateway con capability `resolution.issue.read` e
 `resolution.match.approve`, la sessione IAM, TLS e la card nel lab prima del
-deploy. La proiezione autorizzata MCP per la tabella chatbot manca ancora;
+deploy. La THS offre `CREATE_NEW` per le issue governed con copertura
+completa: dopo la conferma del pacchetto, il worker crea e materializza
+l'oggetto nella stessa transazione solo se la copertura è ancora valida.
+La proiezione autorizzata MCP prepara la tabella nel chatbot;
 anche il backfill tenant delle issue storiche senza candidati richiede
 riconciliazione. Nessun risultato R-SMOKE o R-INSTALL segue da questa gate.
 
