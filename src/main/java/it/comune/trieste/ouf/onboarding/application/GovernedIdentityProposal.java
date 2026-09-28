@@ -26,27 +26,27 @@ final class GovernedIdentityProposal {
         || !(policy.get("allowAutoNew") instanceof Boolean)
         || !(policy.get("maxCandidates") instanceof Number max) || max.doubleValue()!=max.intValue()
         || max.intValue()<1 || max.intValue()>1000) throw invalid();
-    List<?> signals=list(policy.get("signals"),1,32),rules=list(policy.get("sufficientRules"),1,16);
-    Map<String,Boolean> uniqueness=new HashMap<>();
+    List<?> signals=list(policy.get("signals"),1,32),rules=list(policy.get("sufficientRules"),1,1);
+    Set<String> compared=new HashSet<>();
     for(Object item:signals){
       Map<?,?> signal=map(item,SIGNAL);
       String id=string(signal.get("id"));
       String ref=string(signal.get("semanticRef"));
       if(!mappedProperties.contains(id) || !ref.matches("[^@\\s]+@[^@\\s]+")
+          || blank(signal.get("assertionRef"))
           || !COMPARATORS.contains(signal.get("comparator"))
-          || !(signal.get("uniqueWithinScope") instanceof Boolean unique)
-          || !(signal.get("excludesOnDisagreement") instanceof Boolean excludes)
-          || ((unique||excludes) && blank(signal.get("assertionRef")))
-          || uniqueness.putIfAbsent(id,unique)!=null)throw invalid();
+          || !Boolean.FALSE.equals(signal.get("uniqueWithinScope"))
+          || !Boolean.FALSE.equals(signal.get("excludesOnDisagreement"))
+          || !compared.add(id))throw invalid();
     }
+    if(!compared.equals(mappedProperties))throw invalid();
     Set<String> ids=new HashSet<>();
     for(Object item:rules){
       Map<?,?> rule=map(item,RULE);
       String id=string(rule.get("id"));
       if(!ids.add(id) || blank(rule.get("assertionRef")))throw invalid();
       List<?> members=list(rule.get("signalIds"),1,32);
-      if(new HashSet<>(members).size()!=members.size() || !uniqueness.keySet().containsAll(members)
-          || members.stream().noneMatch(member->Boolean.TRUE.equals(uniqueness.get(member))))throw invalid();
+      if(new HashSet<>(members).size()!=members.size() || !compared.equals(new HashSet<>(members)))throw invalid();
     }
   }
   private static Map<?,?> map(Object value,Set<String> fields){
