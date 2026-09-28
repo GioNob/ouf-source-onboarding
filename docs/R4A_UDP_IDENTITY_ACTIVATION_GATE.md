@@ -13,8 +13,11 @@ esatto di tutte le proprietà canoniche *possibili* nella mappatura, e una regol
 che confronti i campi effettivamente esposti da ciascun oggetto. L'oggetto
 con più campi può essere quello in ingresso o quello già presente in UDP:
 tutti i campi di quello con meno proprietà devono corrispondere. Un singolo campo non è dichiarato
-univoco; coordinate e indirizzi discordanti sono indizi per la revisione, non
-esclusioni automatiche. La proposta resta inattiva: UDP non esegue ancora
+univoco; una coordinata o un indirizzo discordante mentre altri campi
+coincidono richiede revisione. Se tutti i campi
+corrispondenti confrontabili sono diversi, i due oggetti sono distinti;
+un campo non confrontabile o assente non prova questa distinzione.
+La proposta resta inattiva: UDP non esegue ancora
 questo profilo nel worker pubblicato. Anche `weighted` resta bloccato con
 `ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE`, senza modificare la storia delle
 approvazioni. Per ora il runtime accetta solo il profilo legacy completo.
@@ -22,7 +25,12 @@ approvazioni. Per ora il runtime accetta solo il profilo legacy completo.
 La fixture JSON è identica in Onboarding e UDP e verifica il contratto di
 trasferimento della configurazione; non attesta che esistano un indice completo,
 una policy approvata o un runtime pubblicato. Prima dell'attivazione servono
-la verifica della compatibilità sul bundle congelato, copertura dei candidati,
+la verifica della compatibilità sul bundle congelato, un indice inverso dei
+valori canonici con backfill e copertura attestata. La ricerca deve partire da
+tutte le proprietà esposte, prendere l'unione dei candidati indicizzati e
+confrontare solo questi: la scansione di tutti gli oggetti della classe è stata
+rimossa e, senza indice completo, UDP restituisce copertura non verificata.
+Servono inoltre
 comparazione delle strutture canoniche non scalari e il flusso THS con elenco
 integrale degli issue, proposte modificabili e conferma atomica esclusivamente
 umana. Nessun risultato R-SMOKE o R-INSTALL segue da questa gate.
