@@ -91,12 +91,12 @@ public class ConfigurationValidator {
       var materialization=object(udp,"materialization").orElse(Map.of());
       if(materialization.get("properties") instanceof List<?> properties)for(Object property:properties)
         if(property instanceof Map<?,?> entry && entry.get("propertyIri") instanceof String iri)materialized.add(iri);
-      mapped.retainAll(materialized);
+      if(!mapped.equals(materialized))throw new IllegalArgumentException("ONB_CANONICAL_MAPPING_INCOMPLETE");
       GovernedIdentityProposal.validate(resolution,resolution.get("governedIdentity"),sourceId,classes,mapped);
       out.add(new Finding("INFO","ONB_GOVERNED_IDENTITY_PROPOSAL",path,
-          "Structural proposal accepted for human review; assertion publication and UDP execution remain activation gates."));
+          "Complete canonical comparison proposal accepted for human review; UDP execution remains an activation gate."));
     }catch(IllegalArgumentException failure){error(out,"ONB_GOVERNED_IDENTITY_INVALID",path,
-        "Require a versioned source/class-scoped policy, mapped signals, explicit assertion refs and sufficient rules. UDP execution remains unavailable.");}
+        "Require a versioned source/class-scoped policy comparing every mapped canonical property, without field uniqueness or exclusion. UDP execution remains unavailable.");}
   }
 
   private static void validateGeoPackageAndRelationships(Map<String,Object> configuration,List<Finding> out){
