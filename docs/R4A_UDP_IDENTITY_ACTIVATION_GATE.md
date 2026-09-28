@@ -4,6 +4,8 @@ La fonte è generica: CSV, altri file e verticali via API percorrono Ingestion,
 che produce handoff per oggetto con `canonicalPayload` e provenienza. UDP non
 riceve il file né decide in base all'estensione. Il profilo di risoluzione
 pubblicato governa il confronto degli oggetti canonici.
+L'eventuale `sourceObjectId` serve al lineage e all'idempotenza della fonte;
+non è assunto come identificatore stabile dell'oggetto urbano condiviso.
 
 Onboarding valida una proposta `governedIdentity` soltanto in DRAFT. Esige
 scope di tenant, classe e fonte, versione semantica e comparatori, insieme
