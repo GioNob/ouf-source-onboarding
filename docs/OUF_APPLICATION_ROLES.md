@@ -32,8 +32,14 @@ L'authority protetta segue il bootstrap e il trasferimento separati.
 
 ## Chatbot e conferma THS
 
-1. Chiamare `authorization.permissions.read` con `view: "ROLES"`.
+1. Chiamare `authorization.permissions.read` con `view: "ROLES"` e con
+   `view: "CAPABILITIES"`. Quest'ultima vista legge i descrittori del bundle
+   attivo compatibili con HUMAN ed esclude le autorità bootstrap/superadmin.
 2. Preparare il nuovo catalogo completo preservando tutte le voci non interessate.
+   Per `ouf-admin`, associare il `sub` IAM verificato al ruolo applicativo
+   `admin` con un permesso esplicito per **ciascuna** capability della vista,
+   senza selezione manuale basata sui grant esistenti. Ogni permesso deve
+   dichiarare i livelli e le etichette dati ammessi quando la risorsa li usa.
 3. Chiamare `authorization.permissions.propose` con `operation: "REPLACE_ROLES"`,
    `reason` e `roleCatalogue`. Omettere `grantId` e `grant`.
 4. Aprire il collegamento THS. La card mostra catalogo precedente e proposto,
