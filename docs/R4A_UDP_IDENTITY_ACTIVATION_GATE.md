@@ -40,8 +40,16 @@ anche classi con campi variabili, ma
 nessun processo di attestazione di
 produzione lo invoca ancora; le
 mutazioni invalidano le eventuali attestazioni precedenti. Servono inoltre
-la comparazione delle strutture canoniche non scalari e il rendering THS del
-pacchetto UDP con elenco integrale delle issue del tenant, proposte modificabili
-e conferma esclusivamente umana. UDP prepara una conferma atomica con impronta
-e versioni, ma la THS/Gateway e la proiezione autorizzata MCP non sono ancora
-collegate. Nessun risultato R-SMOKE o R-INSTALL segue da questa gate.
+la comparazione delle strutture canoniche non scalari e la verifica live del
+pacchetto di review. UDP prepara elenco, proposte e conferma atomica. La THS
+espone `/trusted-human/resolution/` soltanto quando è configurato
+`ouf.authorization.ths.enabled=true` e
+`ouf.resolution.ths.gateway-base-url=https://<gateway>`. Il suo backend
+inoltra GET/POST all'owner UDP attraverso Gateway con il token della sessione
+OIDC HUMAN, che non è consegnato al browser JavaScript. Spring CSRF protegge
+la conferma; hash e versioni sono ricontrollati da UDP. Configurare e verificare
+la route Gateway con capability `resolution.issue.read` e
+`resolution.match.approve`, la sessione IAM, TLS e la card nel lab prima del
+deploy. La proiezione autorizzata MCP per la tabella chatbot manca ancora;
+anche il backfill tenant delle issue storiche senza candidati richiede
+riconciliazione. Nessun risultato R-SMOKE o R-INSTALL segue da questa gate.
