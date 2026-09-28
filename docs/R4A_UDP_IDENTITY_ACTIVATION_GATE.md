@@ -40,6 +40,8 @@ anche classi con campi variabili, ma
 nessun processo di attestazione di
 produzione lo invoca ancora; le
 mutazioni invalidano le eventuali attestazioni precedenti. Servono inoltre
-la comparazione delle strutture canoniche non scalari e il flusso THS con elenco
-integrale degli issue, proposte modificabili e conferma atomica esclusivamente
-umana. Nessun risultato R-SMOKE o R-INSTALL segue da questa gate.
+la comparazione delle strutture canoniche non scalari e il rendering THS del
+pacchetto UDP con elenco integrale delle issue del tenant, proposte modificabili
+e conferma esclusivamente umana. UDP prepara una conferma atomica con impronta
+e versioni, ma la THS/Gateway e la proiezione autorizzata MCP non sono ancora
+collegate. Nessun risultato R-SMOKE o R-INSTALL segue da questa gate.
