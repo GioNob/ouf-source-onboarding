@@ -13,5 +13,10 @@ class ResolutionActivationGateTest {
     assertThatThrownBy(() -> ResolutionActivationGate.requireExecutable(config))
         .isInstanceOfSatisfying(DomainFailure.class,
             failure -> assertThat(failure.code()).isEqualTo("ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE"));
+    var incomplete=Map.<String,Object>of("extractionProfile",Map.of("runtime",Map.of("udp",
+        Map.of("resolution",Map.of("strategyId","CANONICAL_KEY","matchProperty","name")))));
+    assertThatThrownBy(() -> ResolutionActivationGate.requireExecutable(incomplete))
+        .isInstanceOfSatisfying(DomainFailure.class,
+            failure -> assertThat(failure.code()).isEqualTo("ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE"));
   }
 }
