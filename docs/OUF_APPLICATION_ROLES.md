@@ -52,6 +52,12 @@ L'authority protetta segue il bootstrap e il trasferimento separati.
    Catalogo, grant compilati, versione policy e audit sono pubblicati nella
    stessa transazione. Il chatbot non può confermare.
 
+Ogni nuova capability, inclusa `urban.identity.preflight`, va registrata e
+pubblicata nel bundle Authorization prima di ripetere la vista `CAPABILITIES`
+e aggiornare il ruolo `ouf-admin` con l'intero insieme. La capability SERVICE
+`ouf.udp.identity.attestation.read` va concessa all'identità workload
+`ouf-source-onboarding`, non al browser o al chatbot.
+
 Esempio del campo `roleCatalogue` (date e identificatori da verificare):
 ```json
 {
