@@ -55,8 +55,15 @@
         node('pre', null, JSON.stringify({candidati: issue.candidateRefs, evidenze: issue.evidence}, null, 2)));
       info.append(details);
       const proposal = node('td');
+      const evidence = Array.isArray(issue.evidence) ? issue.evidence[0] : null;
+      const canCreate = evidence && evidence.complete === true &&
+        evidence.outcome === 'REVIEW_REQUIRED' &&
+        typeof evidence.coverageRef === 'string' &&
+        evidence.coverageRef.startsWith('indexed-snapshot://');
       const [actionBox, action] = select('Decisione', [['', 'Seleziona una decisione'],
-        ['APPROVE', 'Collega a un oggetto'], ['DISMISS', 'Chiudi il caso']],
+        ['APPROVE', 'Collega a un oggetto'],
+        ...(canCreate ? [['CREATE_NEW', 'Crea un oggetto distinto']] : []),
+        ['DISMISS', 'Chiudi il caso']],
         issue.suggestedTargetUrbanObjectId ? 'APPROVE' : '');
       action.className = 'action';
       const [targetBox, target] = select('Oggetto di destinazione',
