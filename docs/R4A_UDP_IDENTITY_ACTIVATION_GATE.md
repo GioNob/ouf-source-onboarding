@@ -2,7 +2,8 @@
 
 Onboarding may validate, review and approve a `resolution.weighted` proposal.
 The current UDP published runtime rejects that profile with
-`UDP_WEIGHTED_RUNTIME_UNAVAILABLE`. Accordingly, activation now fails with
+`UDP_WEIGHTED_RUNTIME_UNAVAILABLE`. A future `resolution.governedIdentity`
+profile is likewise unavailable in UDP. Accordingly, activation fails with
 `ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE` before publishing a bundle or changing
 the active version, even when a human has approved and Ingestion has attested
 compatibility. This gate does not change the proposal or its approval history.
