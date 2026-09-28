@@ -16,8 +16,8 @@ final class ResolutionActivationGate {
     Object udp = rt.get("udp");
     if (!(udp instanceof Map<?,?> profile)) return;
     Object resolution = profile.get("resolution");
-    if (resolution instanceof Map<?,?> rule && rule.containsKey("weighted"))
+    if (resolution instanceof Map<?,?> rule && (rule.containsKey("weighted") || rule.containsKey("governedIdentity")))
       throw new DomainFailure(HttpStatus.CONFLICT,"ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE",
-          "UDP weighted identity runtime is unavailable; this resolution cannot be activated");
+          "UDP governed identity runtime is unavailable; this resolution cannot be activated");
   }
 }
