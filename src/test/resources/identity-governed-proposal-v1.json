@@ -15,8 +15,8 @@
         "id": "urn:key",
         "semanticRef": "urn:key@set-1",
         "comparator": "CONCEPT",
-        "excludesOnDisagreement": true,
-        "uniqueWithinScope": true,
+        "excludesOnDisagreement": false,
+        "uniqueWithinScope": false,
         "assertionRef": "assertion://key/1"
       }
     ],
