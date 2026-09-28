@@ -21,11 +21,14 @@ tutti i campi comuni confrontabili sono diversi, anche quando uno dei due
 oggetti espone altri campi, sono distinti secondo questa strategia;
 `allowAutoNew` è la dichiarazione source-scoped per creare automaticamente;
 un campo non confrontabile o assente non prova questa distinzione.
-La proposta resta inattiva in Onboarding: UDP ha collegato il profilo al
-worker pubblicato e verifica la copertura indicizzata prima di una decisione
-automatica, ma manca l'attestazione iniziale della policy approvata. Anche `weighted` resta bloccato con
-`ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE`, senza modificare la storia delle
-approvazioni. Per ora il runtime accetta solo il profilo legacy completo.
+La proposta resta inattiva finché il preflight non ha ricostruito e attestato
+la copertura per l'hash esatto della configurazione congelata. UDP ha collegato
+il profilo al worker pubblicato e verifica la copertura indicizzata prima di
+una decisione automatica. Onboarding interroga l'attestazione corrente via
+Gateway all'attivazione, usando una credenziale SERVICE con la capability
+`ouf.udp.identity.attestation.read`. Una risposta assente, non valida o
+difforme blocca l'attivazione. Anche `weighted` resta bloccato con
+`ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE`.
 
 La fixture JSON è identica in Onboarding e UDP e verifica il contratto di
 trasferimento della configurazione; non attesta che esistano un indice completo,
@@ -38,7 +41,10 @@ rimossa e, senza indice completo, UDP restituisce copertura non verificata.
 UDP ha preparato gli indici dei valori, il catalogo delle forme distinte dei
 campi e la ricerca delle sole forme disgiunte; un backfill esplicito copre
 anche classi con campi variabili, ma nessun processo di attestazione di
-produzione lo invoca ancora. Il worker aggiorna i token per l'oggetto che
+produzione lo invoca automaticamente: un amministratore HUMAN con
+`urban.identity.preflight` deve richiamare
+`POST /api/udp/v1/governance/identity/preflight` con `sourceId`,
+`configurationHash` e l'esatta `configuration` congelata. Il worker aggiorna i token per l'oggetto che
 materializza nella stessa transazione; le altre mutazioni invalidano
 l'attestazione. `JSON_V1` confronta strutture JSON canoniche con chiavi
 ordinate, ordine delle liste conservato e numeri normalizzati. Servono la
@@ -55,3 +61,19 @@ la route Gateway con capability `resolution.issue.read` e
 deploy. La proiezione autorizzata MCP per la tabella chatbot manca ancora;
 anche il backfill tenant delle issue storiche senza candidati richiede
 riconciliazione. Nessun risultato R-SMOKE o R-INSTALL segue da questa gate.
+
+## Collegamento dell'installazione
+
+Prima del preflight registrare entrambe le capability nel catalogo di
+Authorization e pubblicare le route Gateway di questa PR; concedere
+`urban.identity.preflight` a `ouf-admin` e
+`ouf.udp.identity.attestation.read` soltanto all'identità SERVICE di
+Onboarding. Configurare `OUF_ONB_UDP_IDENTITY_GATEWAY_URL` con la base URL
+del Gateway e `OUF_ONB_UDP_IDENTITY_TOKEN_FILE` con il percorso di un token
+workload ruotabile, senza inserirlo nel bundle o nei log. Il preflight è una
+scansione una tantum del perimetro tenant/classe sotto lock: la route attuale
+ha timeout di 60 secondi, quindi per perimetri più grandi serve un job
+asincrono prima di dichiarare pronta l'attivazione. Una mutazione concorrente
+o successiva rende l'attestazione non valida; rieseguire il preflight. Il
+controllo live tra Onboarding e UDP e lo smoke completo restano da eseguire
+nel lab con IAM, Gateway e credenziali reali.
