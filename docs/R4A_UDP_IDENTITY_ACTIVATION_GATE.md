@@ -9,8 +9,10 @@ non è assunto come identificatore stabile dell'oggetto urbano condiviso.
 
 Onboarding valida una proposta `governedIdentity` soltanto in DRAFT. Esige
 scope di tenant, classe e fonte, versione semantica e comparatori, insieme
-esatto di tutte le proprietà canoniche mappate, e una regola di uguaglianza
-completa che comprenda ogni proprietà. Un singolo campo non è dichiarato
+esatto di tutte le proprietà canoniche *possibili* nella mappatura, e una regola
+che confronti i campi effettivamente esposti da ciascun oggetto. L'oggetto
+con più campi può essere quello in ingresso o quello già presente in UDP:
+tutti i campi di quello con meno proprietà devono corrispondere. Un singolo campo non è dichiarato
 univoco; coordinate e indirizzi discordanti sono indizi per la revisione, non
 esclusioni automatiche. La proposta resta inattiva: UDP non esegue ancora
 questo profilo nel worker pubblicato. Anche `weighted` resta bloccato con
