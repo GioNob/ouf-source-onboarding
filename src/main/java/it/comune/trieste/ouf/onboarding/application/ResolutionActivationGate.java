@@ -2,10 +2,13 @@ package it.comune.trieste.ouf.onboarding.application;
 
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.http.HttpStatus;
 
 /** Keep a reviewed identity proposal inactive until the UDP runtime supports it. */
 final class ResolutionActivationGate {
+  private static final Set<String> LEGACY_FIELDS=Set.of("strategyId","strategyVersion","policyRef",
+      "canonicalType","canonicalKeyProperty","matchProperty");
   private ResolutionActivationGate() {}
 
   static void requireExecutable(Map<String,Object> configuration) {
@@ -16,8 +19,10 @@ final class ResolutionActivationGate {
     Object udp = rt.get("udp");
     if (!(udp instanceof Map<?,?> profile)) return;
     Object resolution = profile.get("resolution");
-    if (resolution instanceof Map<?,?> rule && (rule.containsKey("weighted") || rule.containsKey("governedIdentity")))
+    if (!profile.containsKey("resolution")) return;
+    if (!(resolution instanceof Map<?,?> rule) || !rule.keySet().equals(LEGACY_FIELDS)
+        || LEGACY_FIELDS.stream().anyMatch(key -> !(rule.get(key) instanceof String value) || value.isBlank()))
       throw new DomainFailure(HttpStatus.CONFLICT,"ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE",
-          "UDP governed identity runtime is unavailable; this resolution cannot be activated");
+          "UDP cannot execute this identity resolution profile; activation is blocked");
   }
 }
