@@ -27,6 +27,9 @@ valid. The assertion reference is not a proof that the asserted uniqueness is
 true: a future publication check must resolve its approval, scope,
 cardinality and validity. Temporal, relation and spatial identity comparators
 are not accepted by this initial scalar proposal check.
+The proposal test and the UDP decoder test use byte-identical
+`identity-governed-proposal-v1.json` fixtures. This checks the exchanged shape
+while the activation gate still rejects it.
 
 The gate is temporary until UDP implements the general governed identity
 policy and Onboarding can verify the exact published contract and UDP runtime
