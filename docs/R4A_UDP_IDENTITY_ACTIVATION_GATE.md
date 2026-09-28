@@ -21,8 +21,9 @@ tutti i campi comuni confrontabili sono diversi, anche quando uno dei due
 oggetti espone altri campi, sono distinti secondo questa strategia;
 `allowAutoNew` è la dichiarazione source-scoped per creare automaticamente;
 un campo non confrontabile o assente non prova questa distinzione.
-La proposta resta inattiva: UDP non esegue ancora
-questo profilo nel worker pubblicato. Anche `weighted` resta bloccato con
+La proposta resta inattiva in Onboarding: UDP ha collegato il profilo al
+worker pubblicato e verifica la copertura indicizzata prima di una decisione
+automatica, ma manca l'attestazione iniziale della policy approvata. Anche `weighted` resta bloccato con
 `ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE`, senza modificare la storia delle
 approvazioni. Per ora il runtime accetta solo il profilo legacy completo.
 
@@ -36,11 +37,12 @@ confrontare solo questi: la scansione di tutti gli oggetti della classe è stata
 rimossa e, senza indice completo, UDP restituisce copertura non verificata.
 UDP ha preparato gli indici dei valori, il catalogo delle forme distinte dei
 campi e la ricerca delle sole forme disgiunte; un backfill esplicito copre
-anche classi con campi variabili, ma
-nessun processo di attestazione di
-produzione lo invoca ancora; le
-mutazioni invalidano le eventuali attestazioni precedenti. Servono inoltre
-la comparazione delle strutture canoniche non scalari e la verifica live del
+anche classi con campi variabili, ma nessun processo di attestazione di
+produzione lo invoca ancora. Il worker aggiorna i token per l'oggetto che
+materializza nella stessa transazione; le altre mutazioni invalidano
+l'attestazione. `JSON_V1` confronta strutture JSON canoniche con chiavi
+ordinate, ordine delle liste conservato e numeri normalizzati. Servono la
+verifica di ogni tipo canonico e policy concreta e la verifica live del
 pacchetto di review. UDP prepara elenco, proposte e conferma atomica. La THS
 espone `/trusted-human/resolution/` soltanto quando è configurato
 `ouf.authorization.ths.enabled=true` e
