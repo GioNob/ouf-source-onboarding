@@ -15,7 +15,8 @@ con più campi può essere quello in ingresso o quello già presente in UDP:
 tutti i campi di quello con meno proprietà devono corrispondere. Un singolo campo non è dichiarato
 univoco; una coordinata o un indirizzo discordante mentre altri campi
 coincidono richiede revisione. Se tutti i campi
-corrispondenti confrontabili sono diversi, i due oggetti sono distinti;
+corrispondenti confrontabili sono diversi e nessuno dei due espone altri
+campi, i due oggetti sono distinti;
 un campo non confrontabile o assente non prova questa distinzione.
 La proposta resta inattiva: UDP non esegue ancora
 questo profilo nel worker pubblicato. Anche `weighted` resta bloccato con
