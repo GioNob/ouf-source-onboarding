@@ -32,19 +32,16 @@ class ConfigurationValidatorContractTest {
     weights.put("minimumMargin",0.1);weights.put("signals",List.of(Map.of("property","urn:unknown","comparator","TEXT","weight",1.0)));
     assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code).contains("ONB_WEIGHTED_IDENTITY_INVALID");
   }
-  @Test @SuppressWarnings("unchecked") void governedIdentityProposalRequiresMappedScopedAssertedEvidence(){
+  @Test @SuppressWarnings("unchecked") void governedIdentityProposalRequiresMappedScopedAssertedEvidence() throws Exception {
     var c=base();var semantic=new LinkedHashMap<>((Map<String,Object>)c.get("semanticMapping"));
     semantic.put("propertyMappings",List.of(Map.of("sourceField","code","targetPropertyIri","urn:key","transform","identity")));
     c.put("semanticMapping",semantic);
-    var signal=new LinkedHashMap<String,Object>(Map.of("id","urn:key","semanticRef","urn:key@set-1",
-        "comparator","CONCEPT","excludesOnDisagreement",true,"uniqueWithinScope",true,
-        "assertionRef","assertion://key/1"));
-    var policy=new LinkedHashMap<String,Object>(Map.of("ref","identity://policy/1","version","1",
-        "tenantId","tenant-a","canonicalClass","urn:T","sourceId","s","maxCandidates",10,
-        "allowAutoNew",false,"signals",List.of(signal),"sufficientRules",
-        List.of(Map.of("id","unique-key","signalIds",List.of("urn:key"),"assertionRef","assertion://rule/1"))));
-    var resolution=Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1",
-        "policyRef","identity://policy/1","governedIdentity",policy);
+    Map<String,Object> resolution;
+    try(var input=getClass().getResourceAsStream("/identity-governed-proposal-v1.json")) {
+      resolution=new com.fasterxml.jackson.databind.ObjectMapper().readValue(input,Map.class);
+    }
+    var policy=(Map<String,Object>)resolution.get("governedIdentity");
+    var signal=(Map<String,Object>)((List<?>)policy.get("signals")).getFirst();
     var extraction=new LinkedHashMap<>((Map<String,Object>)c.get("extractionProfile"));
     extraction.put("runtime",Map.of("udp",Map.of("resolution",resolution,"materialization",
         Map.of("properties",List.of(Map.of("propertyIri","urn:key"))))));c.put("extractionProfile",extraction);
