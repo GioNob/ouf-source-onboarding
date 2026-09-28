@@ -46,12 +46,17 @@ class ConfigurationValidatorContractTest {
     extraction.put("runtime",Map.of("udp",Map.of("resolution",resolution,"materialization",
         Map.of("properties",List.of(Map.of("propertyIri","urn:key"))))));c.put("extractionProfile",extraction);
     assertThat(validator.validate("s",c).valid()).isTrue();
+    semantic.put("propertyMappings",List.of(Map.of("sourceField","code","targetPropertyIri","urn:key","transform","identity"),
+        Map.of("sourceField","address","targetPropertyIri","urn:address","transform","identity")));
+    assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code)
+        .contains("ONB_GOVERNED_IDENTITY_INVALID");
+    semantic.put("propertyMappings",List.of(Map.of("sourceField","code","targetPropertyIri","urn:key","transform","identity")));
     policy.put("sourceId","other");assertThat(validator.validate("s",c).findings())
         .extracting(ConfigurationValidator.Finding::code).contains("ONB_GOVERNED_IDENTITY_INVALID");
     policy.put("sourceId","s");signal.remove("assertionRef");
     assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code)
         .contains("ONB_GOVERNED_IDENTITY_INVALID");
-    signal.put("assertionRef","assertion://key/1");signal.put("uniqueWithinScope",false);
+    signal.put("assertionRef","assertion://key/1");signal.put("uniqueWithinScope",true);
     assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code)
         .contains("ONB_GOVERNED_IDENTITY_INVALID");
   }
