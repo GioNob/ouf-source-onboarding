@@ -9,7 +9,7 @@ final class GovernedIdentityProposal {
   private static final Set<String> SIGNAL=Set.of("id","semanticRef","comparator",
       "excludesOnDisagreement","uniqueWithinScope","assertionRef");
   private static final Set<String> RULE=Set.of("id","signalIds","assertionRef");
-  private static final Set<String> COMPARATORS=Set.of("CONCEPT","TEXT_V1","DECIMAL_V1");
+  private static final Set<String> COMPARATORS=Set.of("CONCEPT","TEXT_V1","DECIMAL_V1","JSON_V1");
   private GovernedIdentityProposal() {}
 
   static void validate(Map<String,Object> resolution, Object raw, String sourceId,
