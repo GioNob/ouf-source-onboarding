@@ -1,46 +1,24 @@
-# R4a: UDP identity compatibility gate
+# R4a: gate dell'identità canonica UDP
 
-Onboarding may validate, review and approve a `resolution.weighted` proposal.
-The current UDP published runtime rejects that profile with
-`UDP_WEIGHTED_RUNTIME_UNAVAILABLE`. A future `resolution.governedIdentity`
-profile is likewise unavailable in UDP. Accordingly, activation fails with
-`ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE` before publishing a bundle or changing
-the active version, even when a human has approved and Ingestion has attested
-compatibility. This gate does not change the proposal or its approval history.
-For a configured resolution, activation currently accepts only the complete
-six-field legacy profile. Unrecognized fields in the resolution configuration
-and incomplete profiles also fail closed rather than relying on a runtime fallback.
+La fonte è generica: CSV, altri file e verticali via API percorrono Ingestion,
+che produce handoff per oggetto con `canonicalPayload` e provenienza. UDP non
+riceve il file né decide in base all'estensione. Il profilo di risoluzione
+pubblicato governa il confronto degli oggetti canonici.
 
-This gate concerns the published configuration consumed by UDP. Onboarding
-does not send the uploaded file to UDP: Ingestion reads the staged source,
-produces per-record handoffs with a mapped `canonicalPayload` and provenance,
-and UDP resolves or creates the canonical Urban Object identity.
+Onboarding valida una proposta `governedIdentity` soltanto in DRAFT. Esige
+scope di tenant, classe e fonte, versione semantica e comparatori, insieme
+esatto di tutte le proprietà canoniche mappate, e una regola di uguaglianza
+completa che comprenda ogni proprietà. Un singolo campo non è dichiarato
+univoco; coordinate e indirizzi discordanti sono indizi per la revisione, non
+esclusioni automatiche. La proposta resta inattiva: UDP non esegue ancora
+questo profilo nel worker pubblicato. Anche `weighted` resta bloccato con
+`ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE`, senza modificare la storia delle
+approvazioni. Per ora il runtime accetta solo il profilo legacy completo.
 
-Onboarding now checks the structure of a `governedIdentity` proposal while it
-is a DRAFT. It requires exact policy ref/version, tenant/class/source scope,
-bounded candidate count, explicit source-scoped creation choice, signal
-property IRIs tied to semantic and materialization mappings, pinned semantic
-reference syntax and typed comparators,
-assertion references for uniqueness or exclusion, and sufficient rules with
-an asserted unique signal. The proposal remains inactive even if structurally
-valid. The assertion reference is not a proof that the asserted uniqueness is
-true: a future identity-policy publication check must resolve its approval,
-scope, cardinality and validity. The Semantic Registry pins property meaning
-and version, not object-resolution authority. Temporal, relation and spatial identity comparators
-are not accepted by this initial scalar proposal check.
-The proposal test and the UDP decoder test use byte-identical
-`identity-governed-proposal-v1.json` fixtures. This checks the exchanged shape
-while the activation gate still rejects it.
-
-The gate is temporary until UDP implements the general governed identity
-policy and Onboarding can verify the exact published contract and UDP runtime
-compatibility for the frozen configuration. An Ingestion compatibility
-attestation alone does not establish UDP compatibility. The cinema DRAFT must
-remain inactive; no R-SMOKE or R-INSTALL result follows from this change.
-
-Next: define the immutable policy with exact semantic publication bindings,
-typed comparators, justified uniqueness/sufficiency and exclusion assertions,
-scope and cardinality, temporal/spatial applicability, bounded indexed candidate
-coverage, and durable HUMAN review. The weighted score may rank or explain
-candidates but cannot authorize MATCH on its own. The future activation check
-must pin a compatible UDP implementation to the approved configuration hash.
+La fixture JSON è identica in Onboarding e UDP e verifica il contratto di
+trasferimento della configurazione; non attesta che esistano un indice completo,
+una policy approvata o un runtime pubblicato. Prima dell'attivazione servono
+la verifica della compatibilità sul bundle congelato, copertura dei candidati,
+comparazione delle strutture canoniche non scalari e il flusso THS con elenco
+integrale degli issue, proposte modificabili e conferma atomica esclusivamente
+umana. Nessun risultato R-SMOKE o R-INSTALL segue da questa gate.
