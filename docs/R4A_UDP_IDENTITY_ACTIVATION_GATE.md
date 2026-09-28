@@ -24,8 +24,9 @@ reference syntax and typed comparators,
 assertion references for uniqueness or exclusion, and sufficient rules with
 an asserted unique signal. The proposal remains inactive even if structurally
 valid. The assertion reference is not a proof that the asserted uniqueness is
-true: a future publication check must resolve its approval, scope,
-cardinality and validity. Temporal, relation and spatial identity comparators
+true: a future identity-policy publication check must resolve its approval,
+scope, cardinality and validity. The Semantic Registry pins property meaning
+and version, not object-resolution authority. Temporal, relation and spatial identity comparators
 are not accepted by this initial scalar proposal check.
 The proposal test and the UDP decoder test use byte-identical
 `identity-governed-proposal-v1.json` fixtures. This checks the exchanged shape
