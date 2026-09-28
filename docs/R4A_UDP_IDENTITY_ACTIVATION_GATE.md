@@ -34,8 +34,9 @@ valori canonici con backfill e copertura attestata. La ricerca deve partire da
 tutte le proprietà esposte, prendere l'unione dei candidati indicizzati e
 confrontare solo questi: la scansione di tutti gli oggetti della classe è stata
 rimossa e, senza indice completo, UDP restituisce copertura non verificata.
-UDP ha preparato gli indici dei valori e delle forme dei campi, la ricerca
-per semi e un backfill esplicito anche per classi con campi variabili, ma
+UDP ha preparato gli indici dei valori, il catalogo delle forme distinte dei
+campi e la ricerca delle sole forme disgiunte; un backfill esplicito copre
+anche classi con campi variabili, ma
 nessun processo di attestazione di
 produzione lo invoca ancora; le
 mutazioni invalidano le eventuali attestazioni precedenti. Servono inoltre
