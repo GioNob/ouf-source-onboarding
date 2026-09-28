@@ -30,7 +30,9 @@ valori canonici con backfill e copertura attestata. La ricerca deve partire da
 tutte le proprietà esposte, prendere l'unione dei candidati indicizzati e
 confrontare solo questi: la scansione di tutti gli oggetti della classe è stata
 rimossa e, senza indice completo, UDP restituisce copertura non verificata.
-Servono inoltre
-comparazione delle strutture canoniche non scalari e il flusso THS con elenco
+UDP ha preparato lo schema dell'indice e la ricerca per semi, ma nessun
+backfill o processo di attestazione di produzione è ancora attivo; le
+mutazioni invalidano le eventuali attestazioni precedenti. Servono inoltre
+la comparazione delle strutture canoniche non scalari e il flusso THS con elenco
 integrale degli issue, proposte modificabili e conferma atomica esclusivamente
 umana. Nessun risultato R-SMOKE o R-INSTALL segue da questa gate.
