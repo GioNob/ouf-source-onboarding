@@ -48,6 +48,7 @@ public class ConfigurationValidator {
       if("DELTA_PATCH".equals(mode)){Optional<Map<String,Object>> delta=object(configuration,"deltaPatchContract");if(delta.isEmpty())delta=object(configuration,"bundle").flatMap(b->object(b,"deltaPatchContract"));if(delta.isEmpty())error(out,"ONB_DELTA_CONTRACT_REQUIRED","/deltaPatchContract","DELTA_PATCH requires a compiled logical contract");else validateDelta(delta.get(),out);}
     });
     validateWeightedIdentity(configuration,out);
+    validateGovernedIdentity(configuration,sourceId,out);
     validateGeoPackageAndRelationships(configuration,out);
     spatial(configuration).ifPresent(profile->validateSpatial(profile,out));
     if(out.isEmpty()) out.add(new Finding("INFO","ONB_CONFIGURATION_VALID","/","Configuration satisfies the executable onboarding validation profile"));
@@ -72,6 +73,30 @@ public class ConfigurationValidator {
       for(var signal:policy.signals())if(!mapped.contains(signal.property())||(signal.spatial()&&!Objects.equals(signal.property(),geometry.get("sourceField"))))throw new IllegalArgumentException();
       out.add(new Finding("INFO","ONB_WEIGHTED_IDENTITY_HUMAN_DECISION",path,"Approval pins signals, weights, thresholds, candidate limit and margin. Scores do not determine property authority."));
     }catch(IllegalArgumentException failure){error(out,"ONB_WEIGHTED_IDENTITY_INVALID",path,"Require mapped signals, positive weights summing to one, bounded candidates, blocking evidence, review/high thresholds and a positive margin; spatial signals require the approved geometry.");}
+  }
+
+  private static void validateGovernedIdentity(Map<String,Object> configuration,String sourceId,List<Finding> out){
+    var udp=object(configuration,"extractionProfile").flatMap(ex->object(ex,"runtime"))
+        .flatMap(rt->object(rt,"udp")).orElse(Map.of());
+    var resolution=object(udp,"resolution").orElse(Map.of());
+    if(!resolution.containsKey("governedIdentity"))return;
+    String path="/extractionProfile/runtime/udp/resolution/governedIdentity";
+    try{
+      Set<String> classes=new HashSet<>(),mapped=new HashSet<>(),materialized=new HashSet<>();
+      var semantic=object(configuration,"semanticMapping").orElse(Map.of());
+      if(semantic.get("targetClasses") instanceof List<?> targets)for(Object target:targets)
+        if(target instanceof Map<?,?> entry && entry.get("classIri") instanceof String iri)classes.add(iri);
+      if(semantic.get("propertyMappings") instanceof List<?> mappings)for(Object mapping:mappings)
+        if(mapping instanceof Map<?,?> entry && entry.get("targetPropertyIri") instanceof String iri)mapped.add(iri);
+      var materialization=object(udp,"materialization").orElse(Map.of());
+      if(materialization.get("properties") instanceof List<?> properties)for(Object property:properties)
+        if(property instanceof Map<?,?> entry && entry.get("propertyIri") instanceof String iri)materialized.add(iri);
+      if(!mapped.equals(materialized))throw new IllegalArgumentException("ONB_CANONICAL_MAPPING_INCOMPLETE");
+      GovernedIdentityProposal.validate(resolution,resolution.get("governedIdentity"),sourceId,classes,mapped);
+      out.add(new Finding("INFO","ONB_GOVERNED_IDENTITY_PROPOSAL",path,
+          "Complete canonical comparison proposal accepted for human review; UDP execution remains an activation gate."));
+    }catch(IllegalArgumentException failure){error(out,"ONB_GOVERNED_IDENTITY_INVALID",path,
+        "Require a versioned source/class-scoped policy comparing every mapped canonical property, without field uniqueness or exclusion. UDP execution remains unavailable.");}
   }
 
   private static void validateGeoPackageAndRelationships(Map<String,Object> configuration,List<Finding> out){

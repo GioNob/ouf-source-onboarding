@@ -56,6 +56,15 @@ class PermissionProposalRuntimeTest {
   when(decoder.decode("human-session-only")).thenReturn(Jwt.withTokenValue("human-session-only").header("alg","RS256").issuer(ISSUER).subject("admin").audience(List.of("gateway")).issuedAt(now).expiresAt(now.plusSeconds(300)).claim("tenant_id","tenant-a").claim("ouf_actor_type","HUMAN").claim("acr","1").claim("scope","authorization.policy.admin").claim("externalRoleRefs",List.of("ente:bootstrap")).build());
  }
  PermissionProposalService.Change change(){return new PermissionProposalService.Change("UPSERT","status-grant",new Grant("status-grant","ouf.system.status","tenant-a","giovanni",null,null,now.minusSeconds(5),now.plusSeconds(3600)),"Concedere lettura stato");}
+ @Test void capabilityViewEnumeratesTheActiveHumanDescriptorSet()throws Exception{
+  byte[] body=json.writeValueAsBytes(Map.of("Arguments",Map.of("view","CAPABILITIES")));
+  http.perform(post(API+"read").header("X-OUF-Authorization-Receipt",receipt("read",PermissionProposalService.READ,body,now.plusSeconds(30).getEpochSecond()))
+      .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk())
+      .andExpect(jsonPath("$.length()").value(descriptors.size()))
+      .andExpect(jsonPath("$[0].capabilityId").value("authorization.permissions.propose"));
+  assertThat(proposals.humanCapabilities(proposer)).extracting(CapabilityDescriptor::capabilityId)
+      .containsExactlyElementsOf(descriptors.stream().map(CapabilityDescriptor::capabilityId).sorted().toList());
+ }
  String receipt(String mode,String cap,byte[] body,long expiry)throws Exception{
   var map=new LinkedHashMap<String,Object>();map.put("v",1);map.put("purpose","authorization-proposal-owner");map.put("method","POST");map.put("path",API+mode);map.put("bodyHash",HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body)));map.put("capability",cap);map.put("iat",now.getEpochSecond());map.put("exp",expiry);map.put("issuer",ISSUER);map.put("audience","gateway");map.put("workload","ouf-mcp-server");map.put("subject","giovanni");map.put("tenant","tenant-a");map.put("acr","1");map.put("roles","");map.put("scope",String.join(" ",proposer.scopes()));map.put("idempotencyKey","tool-attempt");
   String payload=Base64.getUrlEncoder().withoutPadding().encodeToString(json.writeValueAsBytes(map));Mac mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(KEY.getBytes(StandardCharsets.US_ASCII),"HmacSHA256"));return payload+"."+Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(("ouf-authorization-owner-v1."+payload).getBytes(StandardCharsets.US_ASCII)));
