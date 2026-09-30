@@ -126,7 +126,30 @@ class ManagedFileRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
   }
   @Test void malformedUtf8IsRejected(){assertThatThrownBy(()->profiler.profile(new byte[]{'i','d','\n',(byte)0xC3,(byte)0x28},"text/csv")).hasMessageContaining("valid UTF-8");}
+  @Test @SuppressWarnings("unchecked") void csvWithBomSemicolonAndQuotedSemicolonKeepsCanonicalHeaders(){
+    byte[] csv="\uFEFFnome_teatro;precisione_coordinate\r\nTeatro Miela;\"edificio; circa 10 m\"\r\n"
+        .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    var profile=profiler.profile(csv,"text/csv");
+    assertThat(profile.columns()).extracting(ManagedFileProfiler.ColumnProfile::name)
+        .containsExactly("nome_teatro","precisione_coordinate");
+    assertThat(profile.metadata()).containsEntry("delimiter",";").containsEntry("rows",1);
+    assertThat(profile.sample().getFirst()).containsEntry("precisione_coordinate","edificio; circa 10 m");
+    UUID asset=(UUID)files.register(null,"object://staging/teatri.csv",hashes.ofBytes(csv),
+        "text/csv",csv.length,"human:test","retention://30d").get("asset_id");
+    UUID profileId=(UUID)files.profile(asset,csv,"object://samples/teatri.json").get("profile_id");
+    var fields=List.of(
+        new ManagedFileService.FieldDecision("nome_teatro","INCLUDE","OPEN",
+            "https://example.org/name","IDENTITY",null,null,null),
+        new ManagedFileService.FieldDecision("precisione_coordinate","INCLUDE","OPEN",
+            "https://example.org/precision","IDENTITY",null,null,null));
+    var draft=files.onboard(asset,profileId,"teatri-test","Teatri di prova","Comune",
+        "https://example.org/Venue",List.of("core@1"),List.of(),fields,human,"csv-dialect");
+    var config=(Map<String,Object>)draft.get("configuration");
+    var extraction=(Map<String,Object>)config.get("extractionProfile");
+    assertThat((Map<String,Object>)extraction.get("runtime")).containsEntry("csvDelimiter",";");
+  }
   @Test @SuppressWarnings("unchecked") void managedFileCanSelectAndClassifyEveryColumn(){byte[] csv="id,name\n1,A\n".getBytes();UUID asset=(UUID)files.register(null,"object://staging/classified.csv",hashes.ofBytes(csv),"text/csv",csv.length,"agent:test","retention://30d").get("asset_id");UUID profile=(UUID)files.profile(asset,csv,"object://samples/classified.json").get("profile_id");List<ManagedFileService.FieldDecision> decisions=List.of(new ManagedFileService.FieldDecision("id","INCLUDE","OPEN","https://example.org/id","IDENTITY","ids","1","semantic://maps/ids@1"),new ManagedFileService.FieldDecision("name","EXCLUDE","PERSONAL",null,null,null,null,null));var draft=files.onboard(asset,profile,"classified-csv","Classified CSV","Comune","https://example.org/Object",List.of("core@1"),List.of("id"),decisions,human,"corr");Map<String,Object> config=(Map<String,Object>)draft.get("configuration"),extraction=(Map<String,Object>)config.get("extractionProfile"),semantic=(Map<String,Object>)config.get("semanticMapping");assertThat(String.valueOf(extraction.get("projection"))).contains("id").doesNotContain("name");assertThat(String.valueOf(config.get("dataAccessPolicies"))).contains("OPEN").doesNotContain("PERSONAL");assertThat(String.valueOf(semantic.get("vocabularyMappings"))).contains("ids","semantic://maps/ids@1");}
   @Test void managedFileQuarantineIsHumanGovernedAndAppendOnly(){byte[] csv="id\n1\n".getBytes();UUID asset=(UUID)files.register(null,"object://staging/quarantine.csv",hashes.ofBytes(csv),"text/csv",csv.length,"agent:test","retention://30d").get("asset_id");UUID q=UUID.randomUUID();db.sql("insert into ouf_onboarding.managed_file_quarantine(quarantine_id,asset_id,reason_code,evidence_ref,safe_detail,correlation_id) values(:q,:a,'ONB_FILE_PROFILE_FAILED',:e,'password=[REDACTED]','corr-q')").param("q",q).param("a",asset).param("e","quarantine://managed-files/"+asset+"/"+q).update();db.sql("update ouf_onboarding.managed_file_asset set status='QUARANTINED' where asset_id=:a").param("a",asset).update();assertThatThrownBy(()->files.resolveQuarantine(q,"RELEASED",human,"authz:none","corr")).hasMessageContaining("Authorization did not grant");var reviewer=new OnboardingService.Actor("human:reviewer","HUMAN_USER",Set.of("ouf.onboarding.quarantine.release"));assertThat(files.resolveQuarantine(q,"RELEASED",reviewer,"authz:q1","corr-q")).containsEntry("state","RELEASED");assertThat(files.asset(asset)).containsEntry("status","STAGED");assertThatThrownBy(()->db.sql("delete from ouf_onboarding.managed_file_quarantine where quarantine_id=:q").param("q",q).update()).hasStackTraceContaining("append-only");assertThat(db.sql("select count(*) from ouf_onboarding.audit_event where event_type='MANAGED_FILE_QUARANTINE_RELEASED'").query(Long.class).single()).isOne();}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
 }
+

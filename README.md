@@ -16,6 +16,7 @@ This first executable increment contains the PostgreSQL 17 source/version workfl
 - asynchronous, idempotent managed-file profiling jobs owned by the Onboarding control plane;
 - managed-file DRAFT generation with immutable `assetId`, `fileProfileId`, `stagingRef`, and content hash references in the runtime bundle;
 - an `INGESTION-COMPAT` attestation gate that checks consumer acceptance without waiting for data ingestion;
+- a governed UDP identity activation gate that rechecks the exact frozen configuration hash and current indexed coverage through Gateway;
 - append-only approval evidence and audit;
 - atomic ACTIVE bundle switch with historical bundle retention.
 - immutable technical `SourceRuntimeProfile`, `SourceSchemaBinding`, and `RouteBinding` projections for Gateway consumption;
@@ -42,6 +43,12 @@ The intended MCP/agent experience is: “I want to add this CSV as an object sou
 7. let Ingestion Runtime observe the ACTIVE bundle, read the staged file once, create one canonical object per data row, and persist runtime lineage/watermarks outside this module.
 
 The AI agent may propose and drive the workflow, but approval and activation remain human-only. Request identity is derived from a validated server principal and trusted role mapping; actor identity headers are not accepted.
+
+For governed canonical identity, prepare the UDP index once with the approved
+frozen configuration before activation. Set `OUF_ONB_UDP_IDENTITY_GATEWAY_URL`
+and `OUF_ONB_UDP_IDENTITY_TOKEN_FILE` for the Onboarding SERVICE call; absent
+configuration or stale UDP coverage blocks activation. See
+[`docs/R4A_UDP_IDENTITY_ACTIVATION_GATE.md`](docs/R4A_UDP_IDENTITY_ACTIVATION_GATE.md).
 
 Authentication, principal normalization, tenant/resource authorization and policy decisions are owned by the OUF Authorization module. Onboarding consumes only the trusted server principal, roles, authentication-context reference and `ouf.authorizedCapabilities` request context produced by that integration; it does not validate JWTs or own IAM policy. Domain guards remain fail-closed, including the dedicated `ouf.ingestion.configuration.attest` capability required for compatibility attestation.
 
