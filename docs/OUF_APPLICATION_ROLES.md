@@ -32,8 +32,18 @@ L'authority protetta segue il bootstrap e il trasferimento separati.
 
 ## Chatbot e conferma THS
 
-1. Chiamare `authorization.permissions.read` con `view: "ROLES"`.
+1. Chiamare `authorization.permissions.read` con `view: "ROLES"` e con
+   `view: "CAPABILITIES"`. Quest'ultima vista legge i descrittori del bundle
+   attivo compatibili con HUMAN ed esclude le autorità bootstrap/superadmin.
 2. Preparare il nuovo catalogo completo preservando tutte le voci non interessate.
+   Per `ouf-admin`, associare il `sub` IAM verificato al ruolo applicativo
+   `admin` con un permesso esplicito per **ciascuna** capability della vista,
+   senza selezione manuale basata sui grant esistenti. Per l'accesso massimo
+   previsto dal modello corrente, includere `OPEN`, `ANONYMOUS`, `PERSONAL`,
+   `SENSITIVE`, `RESTRICTED` in `allowedDataLabels` e `PUBLIC_OPERATIONAL`,
+   `TENANT_OPERATIONAL`, `RESTRICTED_OPERATIONAL`, `SECURITY_SENSITIVE` in
+   `allowedDetailLevels`. Scope IAM, tenant, tipo HUMAN, eventuali DENY e
+   controllo THS restano comunque applicabili.
 3. Chiamare `authorization.permissions.propose` con `operation: "REPLACE_ROLES"`,
    `reason` e `roleCatalogue`. Omettere `grantId` e `grant`.
 4. Aprire il collegamento THS. La card mostra catalogo precedente e proposto,
@@ -41,6 +51,12 @@ L'authority protetta segue il bootstrap e il trasferimento separati.
 5. Un umano amministratore conferma nella sessione IAM, con CSRF, hash ed ETag.
    Catalogo, grant compilati, versione policy e audit sono pubblicati nella
    stessa transazione. Il chatbot non può confermare.
+
+Ogni nuova capability, inclusa `urban.identity.preflight`, va registrata e
+pubblicata nel bundle Authorization prima di ripetere la vista `CAPABILITIES`
+e aggiornare il ruolo `ouf-admin` con l'intero insieme. La capability SERVICE
+`ouf.udp.identity.attestation.read` va concessa all'identità workload
+`ouf-source-onboarding`, non al browser o al chatbot.
 
 Esempio del campo `roleCatalogue` (date e identificatori da verificare):
 ```json

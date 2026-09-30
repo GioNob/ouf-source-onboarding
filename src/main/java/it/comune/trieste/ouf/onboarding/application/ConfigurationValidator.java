@@ -49,6 +49,7 @@ public class ConfigurationValidator {
     });
     validateWeightedIdentity(configuration,out);
     validateManagedPublication(configuration,out);
+    validateGovernedIdentity(configuration,sourceId,out);
     validateGeoPackageAndRelationships(configuration,out);
     spatial(configuration).ifPresent(profile->validateSpatial(profile,out));
     if(out.isEmpty()) out.add(new Finding("INFO","ONB_CONFIGURATION_VALID","/","Configuration satisfies the executable onboarding validation profile"));
@@ -97,6 +98,30 @@ public class ConfigurationValidator {
       for(var signal:policy.signals())if(!mapped.contains(signal.property())||(signal.spatial()&&!Objects.equals(signal.property(),geometry.get("sourceField"))))throw new IllegalArgumentException();
       out.add(new Finding("INFO","ONB_WEIGHTED_IDENTITY_HUMAN_DECISION",path,"Approval pins signals, weights, thresholds, candidate limit and margin. Scores do not determine property authority."));
     }catch(IllegalArgumentException failure){error(out,"ONB_WEIGHTED_IDENTITY_INVALID",path,"Require mapped signals, positive weights summing to one, bounded candidates, blocking evidence, review/high thresholds and a positive margin; spatial signals require the approved geometry.");}
+  }
+
+  private static void validateGovernedIdentity(Map<String,Object> configuration,String sourceId,List<Finding> out){
+    var udp=object(configuration,"extractionProfile").flatMap(ex->object(ex,"runtime"))
+        .flatMap(rt->object(rt,"udp")).orElse(Map.of());
+    var resolution=object(udp,"resolution").orElse(Map.of());
+    if(!resolution.containsKey("governedIdentity"))return;
+    String path="/extractionProfile/runtime/udp/resolution/governedIdentity";
+    try{
+      Set<String> classes=new HashSet<>(),mapped=new HashSet<>(),materialized=new HashSet<>();
+      var semantic=object(configuration,"semanticMapping").orElse(Map.of());
+      if(semantic.get("targetClasses") instanceof List<?> targets)for(Object target:targets)
+        if(target instanceof Map<?,?> entry && entry.get("classIri") instanceof String iri)classes.add(iri);
+      if(semantic.get("propertyMappings") instanceof List<?> mappings)for(Object mapping:mappings)
+        if(mapping instanceof Map<?,?> entry && entry.get("targetPropertyIri") instanceof String iri)mapped.add(iri);
+      var materialization=object(udp,"materialization").orElse(Map.of());
+      if(materialization.get("properties") instanceof List<?> properties)for(Object property:properties)
+        if(property instanceof Map<?,?> entry && entry.get("propertyIri") instanceof String iri)materialized.add(iri);
+      if(!mapped.equals(materialized))throw new IllegalArgumentException("ONB_CANONICAL_MAPPING_INCOMPLETE");
+      GovernedIdentityProposal.validate(resolution,resolution.get("governedIdentity"),sourceId,classes,mapped);
+      out.add(new Finding("INFO","ONB_GOVERNED_IDENTITY_PROPOSAL",path,
+          "Complete canonical comparison proposal accepted for human review; UDP execution remains an activation gate."));
+    }catch(IllegalArgumentException failure){error(out,"ONB_GOVERNED_IDENTITY_INVALID",path,
+        "Require a versioned source/class-scoped policy comparing every mapped canonical property, without field uniqueness or exclusion. UDP execution remains unavailable.");}
   }
 
   private static void validateGeoPackageAndRelationships(Map<String,Object> configuration,List<Finding> out){
@@ -185,3 +210,4 @@ public class ConfigurationValidator {
   private static void error(List<Finding> out,String code,String path,String message){out.add(new Finding("ERROR",code,path,message));}
   private static void validateDelta(Map<String,Object> delta,List<Finding> out){requireEnum(delta,"mode",Set.of("DELTA_PATCH"),"/deltaPatchContract/mode",out);requireText(delta,"baseReference","/deltaPatchContract/baseReference",out);Object operations=delta.get("operations");if(!(operations instanceof List<?> ops)||ops.isEmpty()||ops.stream().anyMatch(v->!Set.of("SET","REMOVE").contains(String.valueOf(v))))error(out,"ONB_DELTA_OPERATIONS_INVALID","/deltaPatchContract/operations","Operations must be a non-empty subset of SET and REMOVE");Object bindings=delta.get("propertyBindings");if(!(bindings instanceof List<?> items)||items.isEmpty())error(out,"ONB_DELTA_BINDINGS_REQUIRED","/deltaPatchContract/propertyBindings","At least one direct property binding is required");else for(int i=0;i<items.size();i++){if(!(items.get(i) instanceof Map<?,?> raw)){error(out,"ONB_DELTA_BINDING_INVALID","/deltaPatchContract/propertyBindings/"+i,"Binding must be an object");continue;}Map<String,Object> item=new LinkedHashMap<>();raw.forEach((k,v)->item.put(String.valueOf(k),v));for(String key:List.of("sourcePath","targetProperty","changeSection"))requireText(item,key,"/deltaPatchContract/propertyBindings/"+i+"/"+key,out);}}
 }
+

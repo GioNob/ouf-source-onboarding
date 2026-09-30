@@ -8,7 +8,7 @@
     "/api/internal/v1/authorization/permissions/read": {
       "post": {
         "operationId": "delegatedPermissionRead",
-        "description": "Verified Gateway envelope. Select view ROLES for the tenant role catalogue, or filter subjectId/externalRoleRef for configured grants. Role view forbids grant filters. Tenant and issuer come from verified identity.",
+        "description": "Verified Gateway envelope. ROLES reads the tenant role catalogue; CAPABILITIES reads all active HUMAN-compatible descriptors except protected bootstrap/superadmin authority; GRANTS filters configured grants. Catalogue views forbid grant filters. Tenant and issuer come from verified identity.",
         "security": [
           {
             "ownerReceipt": []
@@ -16,7 +16,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Configured grants page"
+            "description": "Configured grants page, role catalogue, or HUMAN-compatible capability descriptors"
           },
           "403": {
             "description": "Receipt or dedicated capability denied"
@@ -302,7 +302,8 @@
             "type": "string",
             "enum": [
               "GRANTS",
-              "ROLES"
+              "ROLES",
+              "CAPABILITIES"
             ]
           }
         },
@@ -313,7 +314,7 @@
             ],
             "properties": {
               "view": {
-                "const": "ROLES"
+                "enum": ["ROLES", "CAPABILITIES"]
               }
             },
             "not": {

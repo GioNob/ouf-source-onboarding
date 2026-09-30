@@ -41,6 +41,16 @@ for attempt in {1..45}; do
   if curl --silent --show-error --fail --max-time 3 \
        http://127.0.0.1:8080/actuator/health/readiness >/dev/null 2>&1; then
     test "$(docker inspect "$name" --format '{{.State.Running}}')" = true
+    # The release must expose the managed read owner port and reject an anonymous actor.
+    status="$(curl --silent --show-error --max-time 5 --output "$work/read-denial.json" --write-out '%{http_code}' \
+      'http://127.0.0.1:8080/api/internal/v1/onboarding/managed-files/content?ref=object://managed-files/11111111-1111-1111-1111-111111111111')"
+    test "$status" = 403
+    python3 - "$work/read-denial.json" <<'PY'
+import json, sys
+body=json.load(open(sys.argv[1]))
+assert 'ONB_AUTHORIZATION_DENIED' in json.dumps(body)
+PY
+    echo 'MANAGED_READ_OWNER_ENDPOINT=PASS ANONYMOUS_HTTP=403'
     echo 'STAGING_IMAGE_BOOT=PASS'
     echo 'READINESS_HTTP=200'
     echo 'FAKE_CREDENTIALS_ONLY=true'
