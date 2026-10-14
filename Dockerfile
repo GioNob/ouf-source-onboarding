@@ -7,6 +7,8 @@ RUN cd authorization-sdk && sha256sum -c SOURCE_SHA256SUMS && timeout --signal=T
 RUN timeout --signal=TERM --kill-after=30s 15m mvn -B -ntp -DskipTests package
 
 FROM eclipse-temurin:21-jre
+# Java is the sole entrypoint; the base-image Pebble Go supervisor is unused.
+RUN rm -f /usr/bin/pebble
 RUN useradd --system --uid 10003 --no-create-home onboarding
 WORKDIR /app
 COPY --from=build /build/target/source-onboarding-*.jar application.jar

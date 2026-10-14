@@ -88,7 +88,7 @@ public class WorkflowThsApi {
   }
   private HttpResponse<String> send(HttpRequest.Builder builder,String access)throws Exception{
     var response=http.send(builder.header("Authorization","Bearer "+access).header("Accept","application/json")
-        .timeout(Duration.ofSeconds(15)).build(),HttpResponse.BodyHandlers.ofString());
+        .timeout(Duration.ofSeconds(builder.build().uri().getPath().endsWith("/review/activate")?55:15)).build(),HttpResponse.BodyHandlers.ofString());
     if(response.body().length()>1048576)throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_OWNER_RESPONSE_TOO_LARGE");return response;
   }
   private String token(HttpServletRequest request){

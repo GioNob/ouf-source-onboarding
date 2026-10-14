@@ -12,7 +12,7 @@ import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.*;
 
@@ -28,7 +28,7 @@ class InstallationConfigurationLifecycleRuntimeTest {
   @Autowired InstallationConfigurationService service;
   @Autowired ObjectMapper json;
   @Autowired JdbcClient db;
-  @MockBean InstallationEnvironmentProbe environmentProbe;
+  @MockitoBean InstallationEnvironmentProbe environmentProbe;
 
   private InstallationConfigurationService.Actor actor() {
     return new InstallationConfigurationService.Actor("installer-human", UUID.randomUUID().toString());

@@ -19,8 +19,8 @@ import java.security.MessageDigest;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.*;
@@ -40,7 +40,7 @@ class PermissionProposalRuntimeTest {
  static {try{KEYFILE=Files.createTempFile("ouf-owner-test-",".key");Files.writeString(KEYFILE,KEY);KEYFILE.toFile().deleteOnExit();}catch(Exception e){throw new ExceptionInInitializerError(e);}}
  @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));r.add("ouf.authorization.delegation.key-file",()->KEYFILE.toString());}
  @Autowired JdbcClient db;@Autowired ObjectMapper json;@Autowired MockMvc http;@Autowired PermissionProposalService proposals;@Autowired AuthorizationAdminService admin;@Autowired AuthorizationPolicyRegistry registry;@Autowired ClientRegistrationRepository registrations;@Autowired PlatformTransactionManager transactions;
- @MockBean JwtDecoder decoder;@MockBean OAuth2AuthorizedClientService clients;@MockBean AuthorizationRuntimeSynchronizer runtime;
+ @MockitoBean JwtDecoder decoder;@MockitoBean OAuth2AuthorizedClientService clients;@MockitoBean AuthorizationRuntimeSynchronizer runtime;
  PrincipalContext root,proposer;Instant now;List<CapabilityDescriptor> descriptors;ClientRegistration registration;
  AuthorizationAdminService.Actor actor(PrincipalContext p){return new AuthorizationAdminService.Actor(p.subjectId(),p.tenantId(),"HUMAN","fixture:admin",UUID.randomUUID().toString(),p);}
  PrincipalContext person(String subject,String tenant,Set<String> roles,Set<String> scopes){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,null,"1",ISSUER,"gateway",scopes,new PrincipalContext.IdentityClaims(roles,"1",Set.of(),Instant.now()));}
@@ -98,9 +98,7 @@ class PermissionProposalRuntimeTest {
     .redirectUri(saved.getRedirectUri()).state(saved.getState()).build();
   var exchange=new org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationExchange(saved,authorizationResponse);
   var grant=new org.springframework.security.oauth2.client.endpoint.OAuth2AuthorizationCodeGrantRequest(registration,exchange);
-  var tokenRequest=new org.springframework.security.oauth2.client.endpoint.OAuth2AuthorizationCodeGrantRequestEntityConverter().convert(grant);
-  assertThat(tokenRequest).isNotNull();
-  var form=(org.springframework.util.MultiValueMap<?,?>)tokenRequest.getBody();
+  var form=new org.springframework.security.oauth2.client.endpoint.DefaultOAuth2TokenRequestParametersConverter<org.springframework.security.oauth2.client.endpoint.OAuth2AuthorizationCodeGrantRequest>().convert(grant);
   assertThat(form).isNotNull();
   assertThat(form.get("code_verifier")).isEqualTo(List.of(verifier));
   var second=http.perform(get("/oauth2/authorization/ouf-ths")).andExpect(status().is3xxRedirection()).andReturn();

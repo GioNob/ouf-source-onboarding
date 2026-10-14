@@ -13,8 +13,8 @@ import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.*;
@@ -30,7 +30,7 @@ class AuthorizationAdminRuntimeTest {
  @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));}
  @Autowired it.comune.trieste.ouf.onboarding.authorization.AuthorizationAdminService admin;
  @Autowired MockMvc http;@Autowired ObjectMapper json;@Autowired JdbcClient db;@Autowired AuthorizationPolicyRegistry registry;
- @MockBean AuthorizationRuntimeSynchronizer runtimeSynchronizer;
+ @MockitoBean AuthorizationRuntimeSynchronizer runtimeSynchronizer;
  private final String root="/api/trusted-human/v1/authorization";
  @BeforeEach void clean(){db.sql("truncate ouf_authorization.role_catalogue,ouf_authorization.superadmin_history,ouf_authorization.superadmin_transfer,ouf_authorization.superadmin_binding,ouf_authorization.admin_audit,ouf_authorization.policy_draft,ouf_authorization.capability_registration,ouf_authorization.authorization_decision_audit,ouf_authorization.active_policy_bundle,ouf_authorization.policy_bundle,ouf_authorization.bootstrap_latch cascade").update();db.sql("insert into ouf_authorization.bootstrap_latch(singleton_key,completed) values(true,false)").update();}
  private RequestPostProcessor actor(String type,boolean writeProof){return r->{var caps=registry.active().isEmpty()?Set.of("authorization.bootstrap"):Set.of("authorization.policy.admin");TestAuthorization.bind(r,"admin",type,caps);r.setAttribute(ServletAuthorization.TRUSTED_PRINCIPAL,SuperadminFixtures.principal("admin",type,caps));r.setAttribute("ouf.statelessBearerWriteValidated",writeProof);return r;};}

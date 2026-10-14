@@ -75,6 +75,17 @@ jobs:
         run: |
           docker build -t ouf-source-onboarding:${{ github.sha }} .
           test "$(docker image inspect ouf-source-onboarding:${{ github.sha }} --format '{{.Config.User}}')" = "10003:10003"
+      - name: Scan exact production image including unfixed HIGH CRITICAL UNKNOWN
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: ouf-source-onboarding:${{ github.sha }}
+          format: json
+          output: target/trivy-image.json
+          list-all-pkgs: true
+          scanners: vuln
+          severity: HIGH,CRITICAL,UNKNOWN
+          ignore-unfixed: false
+          exit-code: 1
       - name: Boot image with managed-file staging enabled
         run: timeout --signal=TERM --kill-after=10s 3m bash scripts/ci_r4a_staging_container_smoke.sh ouf-source-onboarding:${{ github.sha }}
       - name: Upload evidence
@@ -87,4 +98,5 @@ jobs:
             authorization-sdk/target/surefire-reports/
             authorization-sdk/SOURCE_SHA256SUMS
             target/sdk-packaging.txt
+            target/trivy-image.json
           if-no-files-found: warn
