@@ -53,6 +53,29 @@ class OnboardingWorkflowRuntimeTest {
   @Test void validationFindingsArePersistedAndBlockSubmit(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");var draft=service.createVersion("s",Map.of(),human,"c");UUID id=(UUID)draft.get("onboarding_version_id");var validation=service.validate("s",id,human,"validation-correlation");assertThat(validation.get("result")).isEqualTo("FAIL");assertThat((Long)validation.get("errorCount")).isGreaterThan(0);assertThatThrownBy(()->service.submit("s",id,0,human,"c")).hasMessageContaining("blocking validation errors");assertThat(db.sql("select count(*) from ouf_onboarding.validation_run where onboarding_version_id=:v").param("v",id).query(Long.class).single()).isEqualTo(1);}
   @Test void validationEvidenceIsAppendOnly(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");var draft=service.createVersion("s",validConfiguration("s",1),human,"c");UUID id=(UUID)draft.get("onboarding_version_id");service.validate("s",id,human,"c");assertThatThrownBy(()->db.sql("delete from ouf_onboarding.validation_run where onboarding_version_id=:v").param("v",id).update()).hasStackTraceContaining("validation_run is append-only");}
   @Test void genericServiceCannotAttestIngestionCompatibility(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");var draft=service.createVersion("s",validConfiguration("s",1),human,"c");UUID id=(UUID)draft.get("onboarding_version_id");service.submit("s",id,0,human,"c");assertThatThrownBy(()->service.attestIngestionCompatibility("s",id,true,"forged",new OnboardingService.Actor("service:other","SERVICE"),"c")).hasMessageContaining("Authorization-owned");}
+  @Test @SuppressWarnings("unchecked") void weightedIdentityCannotActivateAfterHumanAndIngestionApproval(){
+    service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");
+    var config=new LinkedHashMap<>(validConfiguration("s",1));
+    var extraction=new LinkedHashMap<>((Map<String,Object>)config.get("extractionProfile"));
+    var runtime=new LinkedHashMap<>((Map<String,Object>)extraction.get("runtime"));
+    var weighted=Map.of("signals",List.of(Map.of("property","urn:name","comparator","TEXT","weight",1.0)),
+        "blockingProperties",List.of("urn:name"),"maxCandidates",20,"highThreshold",0.9,
+        "reviewThreshold",0.5,"minimumMargin",0.1,"allowSpatialIdentity",false);
+    runtime.put("udp",Map.of("resolution",Map.of("strategyId","ATTRIBUTE_WEIGHTED","strategyVersion","1",
+        "policyRef","identity://v1","weighted",weighted),
+        "materialization",Map.of("properties",List.of(Map.of("propertyIri","urn:name")))));
+    extraction.put("runtime",runtime);config.put("extractionProfile",extraction);
+    var draft=service.createVersion("s",config,human,"c");UUID id=(UUID)draft.get("onboarding_version_id");
+    service.submit("s",id,0,human,"c");var challenge=service.createChallenge("s",id,human,"c");
+    service.confirm("s",id,(UUID)challenge.get("challenge_id"),human,"c","acr:mfa");
+    service.attestIngestionCompatibility("s",id,true,"ingestion accepted",ingestion,"c");
+    assertThatThrownBy(()->service.activate("s",id,human,"c"))
+        .isInstanceOfSatisfying(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,
+            failure->assertThat(failure.code()).isEqualTo("ONB_UDP_IDENTITY_RUNTIME_UNAVAILABLE"));
+    assertThat(service.version("s",id).get("state")).isEqualTo("APPROVED");
+    assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration where source_id='s'")
+        .query(Long.class).single()).isZero();
+  }
   @Test void activationPublishesTechnicalGatewayProjectionsAndHistoricalBundle(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");UUID id=approve("s",Map.of("revision",1));Map<String,Object> active=service.activate("s",id,human,"c");UUID publication=(UUID)active.get("publication_id");assertThat(projections.projections("s",publication)).extracting(p->p.get("projection_type")).containsExactly("ROUTE_BINDING","SOURCE_RUNTIME_PROFILE","SOURCE_SCHEMA_BINDING");assertThat(service.historicalBundle("s",id).get("checksum")).isEqualTo(active.get("checksum"));assertThat(service.bundleHistory("s")).hasSize(1);}
   @Test void unresolvedBreakingSchemaDriftBlocksActivation(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");UUID id=approve("s",Map.of("revision",1));Map<String,Object> issue=surveillance.report("s","schema://s/2","sha256:old","sha256:new","BREAKING",Map.of("removed",List.of("id")));assertThatThrownBy(()->service.activate("s",id,human,"c")).hasMessageContaining("schema drift");surveillance.resolve("s",(UUID)issue.get("issue_id"));assertThat(service.activate("s",id,human,"c").get("source_id")).isEqualTo("s");}
   @Test void approvalCardShowsExactFrozenContextAndHumanCanReject(){service.createSource("s","Source","EXTERNAL_API","PULL","owner",Map.of(),human,"c");var draft=service.createVersion("s",validConfiguration("s",1),human,"c");UUID id=(UUID)draft.get("onboarding_version_id");service.submit("s",id,0,human,"c");var challenge=service.createChallenge("s",id,agent,"c");UUID challengeId=(UUID)challenge.get("challenge_id");assertThat(service.approvalCard(challengeId)).containsEntry("configuration_hash",service.version("s",id).get("configuration_hash")).containsEntry("trustedApprovalRef","ths://approval-challenges/"+challengeId).containsKey("changedSections");assertThat(service.reject("s",id,challengeId,human,"c","acr:mfa").get("state")).isEqualTo("REJECTED");}

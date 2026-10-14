@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="it">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OUF · Importa file</title><script src="picker.js" defer></script></head>
+<body>
+<main>
+  <h1>Importa un file in OUF</h1>
+  <p>Seleziona un file dal tuo computer. OUF verificherà il formato prima del caricamento. Al momento il caricamento gestisce CSV.</p>
+  <form id="upload"><label for="file">Scegli file</label> <input id="file" type="file" required><button id="send" type="submit">Carica file</button></form>
+  <p id="status" role="status" aria-live="polite"></p>
+  <p id="result" hidden></p>
+</main>
+</body>
+</html>

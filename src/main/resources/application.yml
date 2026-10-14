@@ -14,6 +14,9 @@ management:
 ouf:
   onboarding:
     approval-challenge-ttl: PT10M
+    udp-identity:
+      gateway-url: ${OUF_ONB_UDP_IDENTITY_GATEWAY_URL:}
+      token-file: ${OUF_ONB_UDP_IDENTITY_TOKEN_FILE:}
     profile-worker:
       id: ${OUF_ONB_PROFILE_WORKER_ID:onboarding-profiler}
       lease: ${OUF_ONB_PROFILE_WORKER_LEASE:PT2M}

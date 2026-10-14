@@ -34,6 +34,12 @@ public class InstallationRuntimeProjectionService {
       Map<String,String> environment,
       Map<String,String> secretReferences) {}
 
+  public record OnboardingProjection(
+      Map<String,String> environment) {}
+
+  public record ServicesProjection(
+      Map<String,String> bindings) {}
+
   public record Projection(
       String installationId,
       long revision,
@@ -41,7 +47,9 @@ public class InstallationRuntimeProjectionService {
       CaddyProjection caddy,
       GatewayProjection gateway,
       IamProjection iam,
-      McpProjection mcp) {}
+      McpProjection mcp,
+      OnboardingProjection onboarding,
+      ServicesProjection services) {}
 
   public Projection project(String installationId, long revision) {
     var source = configurations.get(installationId, revision);
@@ -55,6 +63,16 @@ public class InstallationRuntimeProjectionService {
     String issuerHost = host(issuer, "INSTALLATION_ISSUER_HOST_INVALID");
     String apiHost = host(api, "INSTALLATION_API_HOST_INVALID");
     String mcpClientId = required(p, "/iam/workloadClients/mcpServer");
+    String tenantId = required(p, "/organization/tenantId");
+
+    Map<String,String> serviceBindings = new TreeMap<>();
+    JsonNode serviceNode = p.at("/networking/serviceBindings");
+    if (serviceNode.isObject()) {
+      serviceNode.fields().forEachRemaining(e -> {
+        if (e.getValue().isTextual() && !e.getValue().asText().isBlank())
+          serviceBindings.put(e.getKey(), e.getValue().asText());
+      });
+    }
 
     Map<String,String> workloadClients = new TreeMap<>();
     JsonNode workloadNode = p.at("/iam/workloadClients");
@@ -101,6 +119,9 @@ public class InstallationRuntimeProjectionService {
     secretRefs.put("MCP_OIDC_CLIENT_SECRET_FILE", mcpClientSecret);
     secretRefs.put("MCP_FINGERPRINT_KEY_FILE", mcpFingerprintKey);
 
+    Map<String,String> onboardingEnv = new TreeMap<>();
+    onboardingEnv.put("OUF_RUNTIME_PUBLICATIONS_TENANT_ID", tenantId);
+
     return new Projection(
         installationId,
         revision,
@@ -108,7 +129,9 @@ public class InstallationRuntimeProjectionService {
         caddy,
         gateway,
         new IamProjection(Map.copyOf(workloadClients)),
-        new McpProjection(Map.copyOf(env), Map.copyOf(secretRefs)));
+        new McpProjection(Map.copyOf(env), Map.copyOf(secretRefs)),
+        new OnboardingProjection(Map.copyOf(onboardingEnv)),
+        new ServicesProjection(Map.copyOf(serviceBindings)));
   }
 
   public Projection projectActive(String installationId) {
