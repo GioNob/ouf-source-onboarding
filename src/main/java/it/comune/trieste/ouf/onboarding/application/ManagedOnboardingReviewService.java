@@ -132,6 +132,9 @@ public class ManagedOnboardingReviewService {
     if(!publications.isEmpty())result.put("publication",publications.getFirst());
     result.put("ingestionCompatibilityObserved",db.sql("select coalesce((select compatible from ouf_onboarding.consumer_compatibility_attestation where onboarding_version_id=:v and consumer='INGESTION_RUNTIME' and configuration_hash=:h order by created_at desc,attestation_id desc limit 1),false)")
         .param("v",current.get("onboarding_version_id")).param("h",current.get("configuration_hash")).query(Boolean.class).single());
+    var progress=db.sql("select readiness_started_at,readiness_attempts,readiness_generation,readiness_phase,readiness_lease_until,readiness_next_at,readiness_last_code from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:v")
+        .param("v",current.get("onboarding_version_id")).query().listOfRows();
+    if(!progress.isEmpty()){var value=new LinkedHashMap<String,Object>(progress.getFirst());value.put("profile","managed-review-activation.v1");value.put("maximumAttempts",128);value.put("maximumElapsedSeconds",86400);value.put("requiresAuthenticatedHumanResume",true);result.put("activationProgress",value);}
     return result;
   }
   private Map<String,Object> humanReview(PrincipalContext p,UUID challenge){
@@ -147,6 +150,51 @@ public class ManagedOnboardingReviewService {
     var version=onboarding.version(String.valueOf(review.get("source_id")),(UUID)review.get("onboarding_version_id"));
     card.put("onboardingState",version.get("state"));card.put("lockVersion",version.get("lock_version"));
     card.put("progress",receipt(version,review));return card;
+  }
+  public record ActivationClaim(UUID challenge,UUID version,String source,String hash,long lockVersion,long generation,
+      Map<String,Object> configuration,Map<String,Object> progress,boolean reconciled){}
+  @Transactional(noRollbackFor=DomainFailure.class)
+  @SuppressWarnings("unchecked") public ActivationClaim claimActivation(PrincipalContext p,UUID challenge,Decision decision){
+    var review=humanReview(p,challenge);
+    db.sql("select challenge_id from ouf_onboarding.managed_onboarding_review where challenge_id=:c for update").param("c",challenge).query(UUID.class).single();
+    String source=String.valueOf(review.get("source_id"));UUID version=(UUID)review.get("onboarding_version_id");
+    var current=onboarding.version(source,version);String hash=String.valueOf(current.get("configuration_hash"));
+    if(decision==null||!Objects.equals(decision.configurationHash(),hash)||!Objects.equals(review.get("configuration_hash"),hash))throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
+    if("ACTIVE".equals(current.get("state")))return new ActivationClaim(challenge,version,source,hash,((Number)current.get("lock_version")).longValue(),0,Map.of(),receipt(current,review),true);
+    if(!"APPROVED".equals(current.get("state"))||!"CONFIRMED".equals(onboarding.approvalCard(challenge).get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_APPROVAL_REQUIRED");
+    if(((Number)current.get("lock_version")).longValue()!=decision.expectedVersion())throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
+    var state=db.sql("select *,readiness_lease_until>clock_timestamp() leased,readiness_next_at>clock_timestamp() delayed,readiness_started_at+interval '24 hours'<=clock_timestamp()+interval '50 seconds' elapsed from ouf_onboarding.managed_onboarding_review where challenge_id=:c").param("c",challenge).query().singleRow();
+    if(Boolean.TRUE.equals(state.get("leased")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_IN_PROGRESS");
+    if("BLOCKED".equals(state.get("readiness_phase")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_BLOCKED");
+    if(((Number)state.get("readiness_attempts")).intValue()>=128||Boolean.TRUE.equals(state.get("elapsed"))){
+      db.sql("update ouf_onboarding.managed_onboarding_review set readiness_phase='EXHAUSTED',readiness_lease_until=null where challenge_id=:c").param("c",challenge).update();
+      throw fail(HttpStatus.CONFLICT,"ONB_READINESS_BUDGET_EXHAUSTED");
+    }
+    if(Boolean.TRUE.equals(state.get("delayed")))throw fail(HttpStatus.TOO_MANY_REQUESTS,"ONB_READINESS_BACKOFF");
+    long generation=db.sql("update ouf_onboarding.managed_onboarding_review set readiness_started_at=coalesce(readiness_started_at,clock_timestamp()),readiness_attempts=readiness_attempts+1,readiness_generation=readiness_generation+1,readiness_phase='CHECKING_COMPATIBILITY',readiness_lease_until=least(clock_timestamp()+interval '60 seconds',coalesce(readiness_started_at,clock_timestamp())+interval '24 hours'),readiness_next_at=null,readiness_last_code=null where challenge_id=:c returning readiness_generation").param("c",challenge).query(Long.class).single();
+    return new ActivationClaim(challenge,version,source,hash,decision.expectedVersion(),generation,(Map<String,Object>)current.get("configuration"),receipt(current,review),false);
+  }
+  @Transactional public void activationPhase(ActivationClaim claim,String phase){
+    if(!Set.of("CHECKING_IDENTITY","ACTIVATING").contains(phase))throw fail(HttpStatus.BAD_REQUEST,"ONB_READINESS_PHASE_INVALID");
+    if(db.sql("update ouf_onboarding.managed_onboarding_review set readiness_phase=:p where challenge_id=:c and readiness_generation=:g and readiness_lease_until>clock_timestamp()").param("p",phase).param("c",claim.challenge()).param("g",claim.generation()).update()!=1)
+      throw fail(HttpStatus.CONFLICT,"ONB_READINESS_LEASE_LOST");
+  }
+  @Transactional public Map<String,Object> finishActivation(PrincipalContext p,ActivationClaim claim,String authentication){
+    var state=db.sql("select readiness_generation,readiness_lease_until>clock_timestamp() valid from ouf_onboarding.managed_onboarding_review where challenge_id=:c for update").param("c",claim.challenge()).query().singleRow();
+    if(((Number)state.get("readiness_generation")).longValue()!=claim.generation()||!Boolean.TRUE.equals(state.get("valid")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_LEASE_LOST");
+    humanAction(p,claim.challenge(),"activate",new Decision(claim.hash(),claim.lockVersion()),authentication);
+    db.sql("update ouf_onboarding.managed_onboarding_review set readiness_phase='ACTIVE',readiness_lease_until=null,readiness_next_at=null,readiness_last_code=null where challenge_id=:c and readiness_generation=:g").param("c",claim.challenge()).param("g",claim.generation()).update();
+    return receipt(onboarding.version(claim.source(),claim.version()),humanReview(p,claim.challenge()));
+  }
+  @Transactional public void activationFailure(ActivationClaim claim,String code,boolean transientFailure){activationFailure(claim,code,transientFailure,0);}
+  @Transactional public void activationFailure(ActivationClaim claim,String code,boolean transientFailure,int retryAfterSeconds){
+    String safe=code!=null&&code.matches("[A-Z0-9_]{1,100}")?code:"ONB_READINESS_FAILED";
+    var counts=db.sql("select readiness_attempts from ouf_onboarding.managed_onboarding_review where challenge_id=:c and readiness_generation=:g").param("c",claim.challenge()).param("g",claim.generation()).query(Integer.class).optional();
+    if(counts.isEmpty())return;
+    int base=switch(counts.get()){case 1->5;case 2->15;case 3->60;case 4->300;default->900;};
+    int delay=Math.max(retryAfterSeconds,java.util.concurrent.ThreadLocalRandom.current().nextInt(Math.max(1,base*4/5),base*6/5+1));
+    db.sql("update ouf_onboarding.managed_onboarding_review set readiness_phase=:p,readiness_lease_until=null,readiness_next_at=case when :retry then clock_timestamp()+make_interval(secs=>:delay) else null end,readiness_last_code=:code where challenge_id=:c and readiness_generation=:g and readiness_phase<>'ACTIVE'")
+        .param("p",transientFailure?"PAUSED":"BLOCKED").param("retry",transientFailure).param("delay",delay).param("code",safe).param("c",claim.challenge()).param("g",claim.generation()).update();
   }
   public record Decision(String configurationHash,long expectedVersion){}
   @Transactional public Map<String,Object> humanAction(PrincipalContext p,UUID challenge,String action,Decision decision,String authentication){

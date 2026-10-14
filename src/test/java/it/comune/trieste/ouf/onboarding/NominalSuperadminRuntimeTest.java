@@ -13,8 +13,8 @@ import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.*;
@@ -29,7 +29,7 @@ class NominalSuperadminRuntimeTest {
  @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));}
  @Autowired SuperadminAuthority authority;@Autowired AuthorizationAdminService admin;@Autowired AuthorizationPolicyRegistry registry;
  @Autowired JdbcClient db;@Autowired MockMvc http;@Autowired ObjectMapper json;@Autowired PlatformTransactionManager transactions;
- @MockBean AuthorizationRuntimeSynchronizer runtime;
+ @MockitoBean AuthorizationRuntimeSynchronizer runtime;
  private static final String ROOT="/api/trusted-human/v1/authorization";
  private PrincipalContext person(String subject,String role){return person(subject,role,"tenant-a","fixture-issuer");}
  private PrincipalContext person(String subject,String role,String tenant,String issuer){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,null,"auth",issuer,"aud",Set.of("authorization.bootstrap","authorization.policy.admin"),new PrincipalContext.IdentityClaims(role==null?Set.of():Set.of(role),"1",Set.of(),Instant.now()));}

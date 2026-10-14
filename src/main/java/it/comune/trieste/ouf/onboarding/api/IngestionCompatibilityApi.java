@@ -23,14 +23,18 @@ public class IngestionCompatibilityApi {
     this.actors=actors;
   }
 
-  public record Request(@NotBlank String sourceId,UUID onboardingVersionId,boolean compatible,@NotBlank String detail){}
+  public record Request(@NotBlank String sourceId,UUID onboardingVersionId,String configurationHash,boolean compatible,@NotBlank String detail){}
 
   @PostMapping
   ResponseEntity<Map<String,Object>> attest(@Valid @RequestBody Request body,@RequestHeader HttpHeaders headers,HttpServletRequest request){
     if(body.onboardingVersionId()==null)throw new IllegalArgumentException("onboardingVersionId required");
     var actor=actors.requireService(request,CAPABILITY);
-    var out=service.attestIngestionCompatibility(body.sourceId(),body.onboardingVersionId(),body.compatible(),body.detail(),actor,correlation(headers));
+    var out=service.attestIngestionCompatibilityBound(body.sourceId(),body.onboardingVersionId(),body.configurationHash(),body.compatible(),body.detail(),actor,correlation(headers));
     return ResponseEntity.status(HttpStatus.CREATED).body(out);
+  }
+
+  @GetMapping public Map<String,Object> read(@RequestParam String sourceId,@RequestParam UUID onboardingVersionId,@RequestParam String configurationHash,HttpServletRequest request){
+    return service.ingestionCompatibility(sourceId,onboardingVersionId,configurationHash,actors.requireService(request,"ouf.onboarding.configuration.read"));
   }
 
   private static String correlation(HttpHeaders headers){

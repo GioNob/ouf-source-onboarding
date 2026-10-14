@@ -12,8 +12,8 @@ import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.*;
@@ -26,7 +26,7 @@ class AuthorizationReviewRuntimeTest {
  @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));}
  @Autowired AuthorizationReviewService review;@Autowired AuthorizationAdminService admin;@Autowired AuthorizationPolicyRegistry registry;@Autowired SuperadminAuthority authority;
  @Autowired JdbcClient db;@Autowired MockMvc http;@Autowired ObjectMapper json;
- @MockBean AuthorizationRuntimeSynchronizer runtime;
+ @MockitoBean AuthorizationRuntimeSynchronizer runtime;
  static final String ROOT="/api/trusted-human/v1/authorization";
  final CapabilityDescriptor status=new CapabilityDescriptor("ouf.system.status","READ","operations.status.read",Set.of(PrincipalContext.ActorType.HUMAN));
  final CapabilityDescriptor management=new CapabilityDescriptor("authorization.policy.admin","EXECUTE","authorization.policy.admin",Set.of(PrincipalContext.ActorType.HUMAN));
