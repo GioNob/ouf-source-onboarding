@@ -42,6 +42,25 @@ jobs:
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Verify frozen rc3 contract pin
         run: sh scripts/verify-contract-freeze.sh
+      - name: Verify R4a Authorization lifecycle planner
+        run: python -m unittest tests/test_r4a_authorization_lifecycle.py
+      - name: Verify Keycloak scope and binding reconciliation
+        run: |
+          python -m pytest -q \
+            tests/test_r4a_keycloak_client_scope_catalogue.py \
+            tests/test_r4a_keycloak_client_scope_binding.py \
+            tests/test_r4a_keycloak_human_device_client.py \
+            tests/test_r4a_keycloak_workload_client.py \
+            tests/test_r4a_keycloak_workload_secret_file.py \
+            tests/test_r4a_human_token_scope_smoke.py \
+            tests/test_r4a_human_grant_lifecycle.py \
+            tests/test_r4a_onboarding_gateway_auth_smoke.py
+      - name: Verify Onboarding workload token claim inspector
+        run: python -m unittest tests.test_r4a_verify_onboarding_workload_token
+      - name: Verify R4a admin grant manifest and private deploy snapshot
+        run: python -m unittest tests.test_r4a_admin_all_human_manifest tests.test_r4a_admin_human_scope_bindings tests.test_r4a_stage_deploy_snapshot tests.test_r4a_minio_staging_bootstrap
+      - name: Verify Onboarding staged rollout failure recovery
+        run: python -m unittest tests.test_r4a_onboarding_rollout tests.test_r4a_onboarding_failed_rollout_reconcile
       - name: Compile, test and package
         run: |
           bash scripts/install-authorization-sdk.sh
@@ -56,6 +75,8 @@ jobs:
         run: |
           docker build -t ouf-source-onboarding:${{ github.sha }} .
           test "$(docker image inspect ouf-source-onboarding:${{ github.sha }} --format '{{.Config.User}}')" = "10003:10003"
+      - name: Boot image with managed-file staging enabled
+        run: timeout --signal=TERM --kill-after=10s 3m bash scripts/ci_r4a_staging_container_smoke.sh ouf-source-onboarding:${{ github.sha }}
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4

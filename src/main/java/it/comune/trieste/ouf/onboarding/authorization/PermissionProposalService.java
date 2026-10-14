@@ -42,6 +42,12 @@ public class PermissionProposalService {
  private void audit(String action,String target,PrincipalContext p,String policy){db.sql("insert into ouf_authorization.admin_audit values(:id,:action,:target,:subject,:tenant,'HUMAN',:policy,:correlation,transaction_timestamp())").param("id",UUID.randomUUID()).param("action",action).param("target",target).param("subject",p.subjectId()).param("tenant",p.tenantId()).param("policy",policy).param("correlation",UUID.randomUUID().toString()).update();}
  @Transactional public AuthorizationReviewService.GrantPage access(PrincipalContext p,String subject,String role,int limit,String after,String policyRef){return review.projectGrants(p,delegated(p,READ,"READ"),subject,role,limit,after,policyRef);}
  @Transactional public OufRoleCatalogue.Snapshot roleCatalogue(PrincipalContext p){delegated(p,READ,"READ");return roles.current(p.tenantId());}
+ @Transactional public List<CapabilityDescriptor> humanCapabilities(PrincipalContext p){
+  return delegated(p,READ,"READ").capabilities().stream()
+      .filter(c->c.allowedActors().contains(PrincipalContext.ActorType.HUMAN))
+      .filter(c->!c.capabilityId().startsWith("authorization.superadmin")&&!c.capabilityId().equals("authorization.bootstrap"))
+      .sorted(Comparator.comparing(CapabilityDescriptor::capabilityId)).toList();
+ }
  private boolean roleChange(Change c){return c!=null&&"REPLACE_ROLES".equals(c.operation());}
  private String proposalHash(PolicyBundle policy,Change c){return roleChange(c)?hash.of(Map.of("policy",policy,"roleCatalogue",c.roleCatalogue())):hash.of(policy);}
  private void validate(Change c,PrincipalContext p){
