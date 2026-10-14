@@ -29,7 +29,7 @@ public class ChatbotVerticalPublisherFixture {
       var service=TestAuthorization.runtime("fixture-ingestion","SERVICE",SERVICE);var human=TestAuthorization.runtime("fixture-human","HUMAN",HUMAN);
       var caps=new ArrayList<CapabilityDescriptor>(service.currentSnapshot().bundle().capabilities());caps.addAll(human.currentSnapshot().bundle().capabilities());
       var grants=new ArrayList<Grant>(service.currentSnapshot().bundle().grants());grants.addAll(human.currentSnapshot().bundle().grants());
-      TestAuthorization.install(service,new PolicyBundle("vertical-fixture",1,Instant.now(),caps,grants));
+      TestAuthorization.install(service,new PolicyBundle("fixture",2,Instant.now(),caps,grants));
       Filter filter=(input,output,chain)->{
         var request=(HttpServletRequest)input;var response=(HttpServletResponse)output;
         boolean workload=matches(request.getHeader("Authorization"),serviceToken),person=matches(request.getHeader("Authorization"),humanToken);
