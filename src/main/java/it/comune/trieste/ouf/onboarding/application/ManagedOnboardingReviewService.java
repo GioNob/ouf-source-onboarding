@@ -183,7 +183,8 @@ public class ManagedOnboardingReviewService {
     var state=db.sql("select readiness_generation,readiness_lease_until>clock_timestamp() valid from ouf_onboarding.managed_onboarding_review where challenge_id=:c for update").param("c",claim.challenge()).query().singleRow();
     if(((Number)state.get("readiness_generation")).longValue()!=claim.generation()||!Boolean.TRUE.equals(state.get("valid")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_LEASE_LOST");
     humanAction(p,claim.challenge(),"activate",new Decision(claim.hash(),claim.lockVersion()),authentication);
-    db.sql("update ouf_onboarding.managed_onboarding_review set readiness_phase='ACTIVE',readiness_lease_until=null,readiness_next_at=null,readiness_last_code=null where challenge_id=:c and readiness_generation=:g").param("c",claim.challenge()).param("g",claim.generation()).update();
+    if(db.sql("update ouf_onboarding.managed_onboarding_review set readiness_phase='ACTIVE',readiness_lease_until=null,readiness_next_at=null,readiness_last_code=null where challenge_id=:c and readiness_generation=:g and readiness_lease_until>clock_timestamp()").param("c",claim.challenge()).param("g",claim.generation()).update()!=1)
+      throw fail(HttpStatus.CONFLICT,"ONB_READINESS_LEASE_LOST");
     return receipt(onboarding.version(claim.source(),claim.version()),humanReview(p,claim.challenge()));
   }
   @Transactional public void activationFailure(ActivationClaim claim,String code,boolean transientFailure){activationFailure(claim,code,transientFailure,0);}
