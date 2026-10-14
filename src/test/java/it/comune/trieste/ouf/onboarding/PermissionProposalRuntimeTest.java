@@ -98,9 +98,7 @@ class PermissionProposalRuntimeTest {
     .redirectUri(saved.getRedirectUri()).state(saved.getState()).build();
   var exchange=new org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationExchange(saved,authorizationResponse);
   var grant=new org.springframework.security.oauth2.client.endpoint.OAuth2AuthorizationCodeGrantRequest(registration,exchange);
-  var tokenRequest=new org.springframework.security.oauth2.client.endpoint.OAuth2AuthorizationCodeGrantRequestEntityConverter().convert(grant);
-  assertThat(tokenRequest).isNotNull();
-  var form=(org.springframework.util.MultiValueMap<?,?>)tokenRequest.getBody();
+  var form=new org.springframework.security.oauth2.client.endpoint.DefaultOAuth2TokenRequestParametersConverter<org.springframework.security.oauth2.client.endpoint.OAuth2AuthorizationCodeGrantRequest>().convert(grant);
   assertThat(form).isNotNull();
   assertThat(form.get("code_verifier")).isEqualTo(List.of(verifier));
   var second=http.perform(get("/oauth2/authorization/ouf-ths")).andExpect(status().is3xxRedirection()).andReturn();
