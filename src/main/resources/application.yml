@@ -1,4 +1,6 @@
 spring:
+  # Preserve the owner JSON/JsonNode contract while GeoTools also loads patched Jackson 3.
+  http.converters.preferred-json-mapper: jackson2
   application.name: ouf-source-onboarding
   datasource:
     url: ${OUF_ONB_DB_URL:jdbc:postgresql://127.0.0.1:5432/ouf_onboarding}
