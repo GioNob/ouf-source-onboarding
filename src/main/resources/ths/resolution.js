@@ -48,7 +48,7 @@
   }
   function valid() {
     return !submitting && current && current.issues.length && selectedRows().length > 0 && selectedRows().every(row =>
-      row.querySelector('.action').value && row.querySelector('.reason-input').value.trim() &&
+      row.querySelector('.action').value &&
       (row.querySelector('.action').value !== 'APPROVE' || row.querySelector('.target').value));
   }
   function objectRow(label, object, columns) {
@@ -135,7 +135,7 @@
         issue.suggestedTargetUrbanObjectId || '', `target-${index}`);
       target.className = 'target'; target.disabled = issue.candidateRefs.length === 0;
       const rationale = node('div', 'rationale');
-      const label = node('label', null, 'Motivazione della scelta'), reason = node('textarea');
+      const label = node('label', null, 'Nota facoltativa'), reason = node('textarea');
       label.htmlFor = `reason-${index}`; reason.id = label.htmlFor; reason.className = 'reason-input'; reason.maxLength = 1000;
       reason.addEventListener('input', () => { confirm.disabled = !valid(); }); rationale.append(label, reason);
       const effect = node('p', 'decision-effect');
@@ -184,7 +184,16 @@
     try {
       const response = await fetch('api/package/confirm', {method: 'POST', credentials: 'same-origin',
         headers: {'Content-Type': 'application/json', ...csrf}, body: JSON.stringify({snapshotHash: current.snapshotHash, choices})});
-      if (!response.ok) throw new Error(`Conferma respinta (HTTP ${response.status}). Aggiorna e verifica di nuovo il pacchetto.`);
+      if (!response.ok) {
+        let code = '';
+        const raw = await response.text();
+        if (raw.length <= 8192) {
+          try { const problem = JSON.parse(raw); const candidate = problem.code || problem.detail;
+            if (typeof candidate === 'string' && /^[A-Z][A-Z0-9_]{1,159}$/.test(candidate)) code = ` · ${candidate}`;
+          } catch (_) { /* Never render arbitrary upstream response content. */ }
+        }
+        throw new Error(`Conferma respinta (HTTP ${response.status}${code}). Aggiorna e verifica di nuovo il pacchetto.`);
+      }
       const result = await response.json(); submitting = false; await load();
       message(`Pacchetto confermato: ${result.issueCount} decisioni, riferimento ${result.packageId}.`);
     } catch (error) {

@@ -45,7 +45,7 @@ test('Resolution compares actual incoming and selected candidate rows, keeps JSO
   assert.equal(await page.locator('tbody tr').first().locator('td').allTextContents().then(x=>x.includes('null')),true);
   await page.locator('.target').first().selectOption(b);assert.match(await page.locator('.candidate-row').first().textContent(),/Teatro candidato B/);assert.equal(posts.length,0);
   await page.locator('.technical-details summary').first().click();assert.match(await page.locator('pre').first().textContent(),/incomingObject/);
-  await page.locator('.reason-input').first().fill('Sono entità distinte dopo confronto');await page.locator('.action').first().selectOption('CREATE_NEW');
+  await page.locator('.action').first().selectOption('CREATE_NEW');
   assert.match(await page.locator('.decision-effect').first().textContent(),/oggetto distinto/);assert.match(await page.locator('.candidate-row').first().textContent(),/solo confronto/);
   fs.mkdirSync('target/browser-evidence',{recursive:true});await page.locator('.technical-details summary').first().click();await page.screenshot({path:'target/browser-evidence/resolution-comparison-desktop.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:'target/browser-evidence/resolution-comparison-mobile.png',fullPage:true});
@@ -53,7 +53,8 @@ test('Resolution compares actual incoming and selected candidate rows, keeps JSO
   await page.locator('.defer').nth(1).check();
   assert.match(await page.locator('#selection-status').textContent(),/1 casi da confermare · 1 lasciati in quarantena/);
   await page.locator('#confirm').click();await page.locator('#status').filter({hasText:'Conferma respinta'}).waitFor();
-  assert.equal(posts.length,1);assert.deepEqual(posts[0],{snapshotHash:'sha256:fixture',choices:[{issueId:a,expectedVersion:0,action:'CREATE_NEW',expectedReviewHash:'sha256:'+'a'.repeat(64),targetUrbanObjectId:null,reason:'Sono entità distinte dopo confronto'}]});
+  assert.equal(posts.length,1);assert.deepEqual(posts[0],{snapshotHash:'sha256:fixture',choices:[{issueId:a,expectedVersion:0,action:'CREATE_NEW',expectedReviewHash:'sha256:'+'a'.repeat(64),targetUrbanObjectId:null,reason:''}]});
+  assert.match(await page.locator('#status').textContent(),/UDP_REVIEW_PACKAGE_STALE/);
   assert.equal(await page.locator('#confirm').isDisabled(),true);
   issue.candidateObjects[b]={reference:b,available:false,fields:{}};await page.locator('#refresh').click();await page.locator('.target').first().selectOption(b);
   await page.getByText('Dati del candidato non disponibili: la riga non indica un oggetto vuoto.').waitFor();
