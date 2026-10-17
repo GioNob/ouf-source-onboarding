@@ -44,5 +44,15 @@ test('trusted review UI compares geometry and scalar values, submits exact evide
     await page.locator('input[value="two"]').check();await page.locator('#reason').fill('Conferma');await page.locator('#submit').click();await page.getByRole('status').filter({hasText:'I contributi sono cambiati'}).waitFor();
     assert.equal(await page.locator('#map-section').isHidden(),true);assert.deepEqual(errors,[]);
     fs.mkdirSync('target/browser-evidence',{recursive:true});await page.screenshot({path:'target/browser-evidence/property-stale.png',fullPage:true});
+    await page.unroute('**/api/udp/**');let writes=0;
+    const linked={...scalar,rule:{reconciliation:{cardinality:'SINGLE',normalizerRef:'NFC_TRIM',normalizerVersion:1}},currentValue:'Existing',evidenceCurrent:true,candidates:[{...scalar.candidates[0],normalizedValue:'Canonical name'},{...scalar.candidates[1],normalizedValue:null,explicitDeletion:true}]};
+    await page.route('**/api/udp/**',route=>{if(route.request().method()==='POST')writes++;return route.fulfill({json:linked});});
+    await page.goto(`${base}/trusted-human/r2f?kind=property&id=${id}`);await page.locator('#submit:not([disabled])').waitFor();
+    assert.match(await page.locator('#context').innerText(),/Existing/);
+    await page.locator('input[value="one"]').check();assert.match(await page.locator('#context').innerText(),/Canonical name/);
+    await page.locator('input[value="two"]').check();assert.match(await page.locator('#context').innerText(),/Cancellazione esplicita/);assert.equal(writes,0);
+    linked.evidenceCurrent=false;await page.reload();await page.getByRole('status').filter({hasText:'Apri la revisione aggiornata'}).waitFor();
+    assert.equal(await page.locator('#submit').isDisabled(),true);assert.equal(await page.locator('#choices').isDisabled(),true);assert.equal(writes,0);assert.deepEqual(errors,[]);
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 });
+
