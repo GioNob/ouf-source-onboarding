@@ -220,6 +220,37 @@ public class ManagedOnboardingReviewService {
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_INGESTION_CONFIGURATION_DRIFT");
     return current;
   }
+  /** Exact frozen managed-source read; Authorization evaluates the same owner resource as configuration GET. */
+  @Transactional public Map<String,Object> ingestionCompatibilityRead(PrincipalContext p,String source,UUID version,String hash){
+    var actor=compatibilityActor(p,source,version,hash,"ouf.onboarding.configuration.read","READ");
+    return onboarding.ingestionCompatibility(source,version,hash,actor);
+  }
+
+  /** Authorization audit and deduplicated attestation commit in the same owner transaction. */
+  @Transactional public Map<String,Object> ingestionCompatibilityAttest(PrincipalContext p,String source,UUID version,String hash,boolean compatible,String detail,String correlation){
+    var actor=compatibilityActor(p,source,version,hash,"ouf.ingestion.configuration.attest","COMMAND");
+    return onboarding.attestIngestionCompatibilityBound(source,version,hash,compatible,detail,actor,correlation);
+  }
+
+  private OnboardingService.Actor compatibilityActor(PrincipalContext p,String source,UUID version,String hash,String capability,String operation){
+    identity(source,version);
+    if(p==null||p.actorType()!=PrincipalContext.ActorType.SERVICE||!p.scopes().contains(capability))
+      throw fail(HttpStatus.FORBIDDEN,"ONB_COMPATIBILITY_AUTHORITY_REQUIRED");
+    var rows=db.sql("select tenant_id,configuration_hash from ouf_onboarding.managed_onboarding_review where source_id=:s and onboarding_version_id=:v")
+        .param("s",source).param("v",version).query().listOfRows();
+    if(rows.size()!=1||!Objects.equals(rows.getFirst().get("tenant_id"),p.tenantId()))
+      throw fail(HttpStatus.FORBIDDEN,"ONB_COMPATIBILITY_AUTHORIZATION_DENIED");
+    var current=onboarding.version(source,version);
+    if(hash==null||!hash.matches("sha256:[a-f0-9]{64}")||!Objects.equals(hash,current.get("configuration_hash"))
+        ||!Objects.equals(hash,rows.getFirst().get("configuration_hash"))
+        ||!Set.of("IN_REVIEW","APPROVED","ACTIVE","SUPERSEDED").contains(String.valueOf(current.get("state"))))
+      throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_COMPATIBILITY_CONFIGURATION_DRIFT");
+    var resource=new ResourceContext("published-configuration",source,p.tenantId(),null,Map.of("module","ONBOARDING","onboardingVersionId",version.toString()));
+    if(!policy.authorizeActive(p,resource,capability,operation,Instant.now()).allowed())
+      throw fail(HttpStatus.FORBIDDEN,"ONB_COMPATIBILITY_AUTHORIZATION_DENIED");
+    return new OnboardingService.Actor(p.subjectId(),"SERVICE",Set.of(capability));
+  }
+
   public record Resume(String configurationHash,long expectedVersion,long expectedGeneration,String blockedCode){}
   /** Explicit HUMAN reconciliation only. Retains the original attempts and elapsed-time budget. */
   @Transactional public Map<String,Object> resumeActivation(PrincipalContext p,UUID challenge,Resume request,String authentication){

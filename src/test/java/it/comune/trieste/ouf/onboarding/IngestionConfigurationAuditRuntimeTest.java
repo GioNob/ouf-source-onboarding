@@ -30,6 +30,7 @@ class IngestionConfigurationAuditRuntimeTest {
   @Autowired OnboardingService onboarding;
   @Autowired CanonicalHash hashes;
   @Autowired JdbcClient db;
+  @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
   @Autowired AuthorizationPolicyRegistry policy;
   @Autowired PlatformTransactionManager transactions;
   private final OnboardingService.Actor human=new OnboardingService.Actor("test-human","HUMAN_USER");
@@ -85,6 +86,63 @@ class IngestionConfigurationAuditRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_onboarding.approval_decision").query(Long.class).single()).isOne();
     assertThat(db.sql("select count(*) from ouf_onboarding.consumer_compatibility_attestation").query(Long.class).single()).isZero();
   }
+  @Test void compatibilityHttpReadAndAttestationUseRealConstrainedGrantsAndPreserveFrozenIdentity() throws Exception {
+    Instant now=Instant.now();
+    String prepare=ManagedOnboardingReviewService.PREPARE,read="ouf.onboarding.configuration.read",attest="ouf.ingestion.configuration.attest";
+    var constraints=new AuthorizationPolicy.GrantConstraints("ALLOW",null,"published-configuration","review-test",Map.of("module","ONBOARDING"),Set.of(),Set.of(),null,Set.of(),null);
+    policy.publishAndActivate(new AuthorizationPolicy.PolicyBundle("compatibility-regression",1,now,
+      List.of(new AuthorizationPolicy.CapabilityDescriptor(prepare,"COMMAND",prepare,Set.of(PrincipalContext.ActorType.HUMAN)),
+              new AuthorizationPolicy.CapabilityDescriptor(read,"READ",read,Set.of(PrincipalContext.ActorType.SERVICE)),
+              new AuthorizationPolicy.CapabilityDescriptor(attest,"COMMAND",attest,Set.of(PrincipalContext.ActorType.SERVICE))),
+      List.of(new AuthorizationPolicy.Grant("prepare",prepare,"test-tenant","test-human",null,null,now.minusSeconds(60),now.plusSeconds(3600)),
+              new AuthorizationPolicy.Grant("read",read,"test-tenant",null,"test-ingestion",null,now.minusSeconds(60),now.plusSeconds(3600),constraints),
+              new AuthorizationPolicy.Grant("attest",attest,"test-tenant",null,"test-ingestion",null,now.minusSeconds(60),now.plusSeconds(3600),constraints))),"fixture-policy-admin");
+    UUID version=draft();
+    var prepared=reviews.prepare(principal("test-human",PrincipalContext.ActorType.HUMAN,"test-mcp",Set.of(prepare)),
+      new ManagedOnboardingReviewService.Prepare("review-test",version,1,"prepare:compatibility",null),"fixture");
+    UUID challenge=(UUID)prepared.get("challengeId");String hash=prepared.get("configurationHash").toString();
+    var service=principal("service-user",PrincipalContext.ActorType.SERVICE,"test-ingestion",Set.of(read,attest));
+    var frozen=onboarding.version("review-test",version);
+    var http=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+      new it.comune.trieste.ouf.onboarding.api.IngestionCompatibilityApi(reviews)).build();
+    String path="/api/internal/v1/onboarding/compatibility/ingestion-runtime";
+    var trusted=new TrustedPrincipal(service);
+    http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)
+        .param("sourceId","review-test").param("onboardingVersionId",version.toString()).param("configurationHash",hash)
+        .requestAttr(ServletAuthorization.TRUSTED_PRINCIPAL,trusted))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.status").value("ABSENT"));
+    var body=Map.of("sourceId","review-test","onboardingVersionId",version.toString(),"configurationHash",hash,"compatible",true,"detail","bounded fixture probe PASS");
+    var first=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+        .contentType("application/json").content(json.writeValueAsBytes(body)).requestAttr(ServletAuthorization.TRUSTED_PRINCIPAL,trusted))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isCreated()).andReturn().getResponse().getContentAsString();
+    var second=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+        .contentType("application/json").content(json.writeValueAsBytes(body)).requestAttr(ServletAuthorization.TRUSTED_PRINCIPAL,trusted))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isCreated()).andReturn().getResponse().getContentAsString();
+    assertThat(json.readTree(second).get("attestation_id")).isEqualTo(json.readTree(first).get("attestation_id"));
+    http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path)
+        .param("sourceId","review-test").param("onboardingVersionId",version.toString()).param("configurationHash",hash)
+        .requestAttr(ServletAuthorization.TRUSTED_PRINCIPAL,trusted))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.compatible").value(true));
+    assertThat(onboarding.version("review-test",version)).isEqualTo(frozen);
+    assertThat(onboarding.approvalCard(challenge)).containsEntry("status","CREATED");
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_decision").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from ouf_onboarding.consumer_compatibility_attestation").query(Long.class).single()).isOne();
+    assertThat(policy.decisionAuditCount("test-tenant")).isGreaterThanOrEqualTo(5);
+    assertThatThrownBy(()->reviews.ingestionCompatibilityAttest(service,"review-test",version,"sha256:"+"0".repeat(64),true,"drift","fixture"))
+      .hasMessage("ONB_COMPATIBILITY_CONFIGURATION_DRIFT");
+    var otherTenant=new PrincipalContext(service.subjectId(),"other-tenant",service.actorType(),service.servicePrincipalId(),service.authenticationContextRef(),service.issuer(),service.audience(),service.scopes(),service.claims());
+    assertThatThrownBy(()->reviews.ingestionCompatibilityRead(otherTenant,"review-test",version,hash)).hasMessage("ONB_COMPATIBILITY_AUTHORIZATION_DENIED");
+    assertThatThrownBy(()->reviews.ingestionCompatibilityAttest(principal("service-user",PrincipalContext.ActorType.SERVICE,"test-ingestion",Set.of(read)),"review-test",version,hash,true,"scope","fixture"))
+      .hasMessage("ONB_COMPATIBILITY_AUTHORITY_REQUIRED");
+    for(var type:List.of(PrincipalContext.ActorType.HUMAN,PrincipalContext.ActorType.AI_AGENT))
+      assertThatThrownBy(()->reviews.ingestionCompatibilityRead(principal("service-user",type,"test-ingestion",Set.of(read)),"review-test",version,hash)).hasMessage("ONB_COMPATIBILITY_AUTHORITY_REQUIRED");
+    assertThatThrownBy(()->reviews.ingestionCompatibilityRead(principal("service-user",PrincipalContext.ActorType.SERVICE,"other-ingestion",Set.of(read)),"review-test",version,hash)).hasMessage("ONB_COMPATIBILITY_AUTHORIZATION_DENIED");
+    assertThat(db.sql("select count(*) from ouf_onboarding.consumer_compatibility_attestation").query(Long.class).single()).isOne();
+    assertThat(onboarding.version("review-test",version)).isEqualTo(frozen);
+  }
+
   private UUID draft(){
     byte[] csv="id,name\n1,Test\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     UUID asset=(UUID)files.register(null,"object://fixture/review.csv",hashes.ofBytes(csv),"text/csv",csv.length,"test-human","retention://test").get("asset_id");
