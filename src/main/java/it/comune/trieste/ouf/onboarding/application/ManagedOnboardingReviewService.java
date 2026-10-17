@@ -199,7 +199,8 @@ public class ManagedOnboardingReviewService {
   }
 
   /** Dedicated workload read: never exposes the HUMAN lifecycle wildcard to SERVICE. */
-  @Transactional(readOnly=true)
+  // Authorization is audited in the same transaction; domain configuration remains unchanged.
+  @Transactional
   public Map<String,Object> ingestionConfiguration(PrincipalContext p,String source,UUID version,String hash){
     identity(source,version);
     String capability="ouf.onboarding.configuration.read";
