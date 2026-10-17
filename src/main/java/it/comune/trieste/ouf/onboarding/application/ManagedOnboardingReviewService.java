@@ -197,6 +197,60 @@ public class ManagedOnboardingReviewService {
     db.sql("update ouf_onboarding.managed_onboarding_review set readiness_phase=:p,readiness_lease_until=null,readiness_next_at=case when :retry then clock_timestamp()+make_interval(secs=>:delay) else null end,readiness_last_code=:code where challenge_id=:c and readiness_generation=:g and readiness_phase<>'ACTIVE'")
         .param("p",transientFailure?"PAUSED":"BLOCKED").param("retry",transientFailure).param("delay",delay).param("code",safe).param("c",claim.challenge()).param("g",claim.generation()).update();
   }
+
+  /** Dedicated workload read: never exposes the HUMAN lifecycle wildcard to SERVICE. */
+  @Transactional(readOnly=true)
+  public Map<String,Object> ingestionConfiguration(PrincipalContext p,String source,UUID version,String hash){
+    identity(source,version);
+    String capability="ouf.onboarding.configuration.read";
+    if(p==null||p.actorType()!=PrincipalContext.ActorType.SERVICE||!p.scopes().contains(capability))
+      throw fail(HttpStatus.FORBIDDEN,"ONB_INGESTION_CONFIGURATION_AUTHORITY_REQUIRED");
+    var resource=new ResourceContext("source",source,p.tenantId(),null,Map.of("onboardingVersionId",version.toString()));
+    if(!policy.authorizeActive(p,resource,capability,"READ",Instant.now()).allowed())
+      throw fail(HttpStatus.FORBIDDEN,"ONB_INGESTION_CONFIGURATION_DENIED");
+    var rows=db.sql("select tenant_id,challenge_id,configuration_hash from ouf_onboarding.managed_onboarding_review where source_id=:s and onboarding_version_id=:v")
+        .param("s",source).param("v",version).query().listOfRows();
+    if(rows.size()!=1||!Objects.equals(rows.getFirst().get("tenant_id"),p.tenantId()))
+      throw fail(HttpStatus.FORBIDDEN,"ONB_INGESTION_CONFIGURATION_DENIED");
+    var current=onboarding.version(source,version);var review=rows.getFirst();
+    if(hash==null||!hash.matches("sha256:[a-f0-9]{64}")||!Objects.equals(hash,current.get("configuration_hash"))
+        ||!Objects.equals(hash,review.get("configuration_hash"))||!"APPROVED".equals(current.get("state"))
+        ||!"CONFIRMED".equals(onboarding.approvalCard((UUID)review.get("challenge_id")).get("status")))
+      throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_INGESTION_CONFIGURATION_DRIFT");
+    return current;
+  }
+  public record Resume(String configurationHash,long expectedVersion,long expectedGeneration,String blockedCode){}
+  /** Explicit HUMAN reconciliation only. Retains the original attempts and elapsed-time budget. */
+  @Transactional public Map<String,Object> resumeActivation(PrincipalContext p,UUID challenge,Resume request,String authentication){
+    var review=humanReview(p,challenge);
+    var state=db.sql("select *,readiness_lease_until>clock_timestamp() leased,readiness_started_at+interval '24 hours'<=clock_timestamp()+interval '50 seconds' elapsed from ouf_onboarding.managed_onboarding_review where challenge_id=:c for update")
+        .param("c",challenge).query().singleRow();
+    String source=String.valueOf(review.get("source_id"));UUID version=(UUID)review.get("onboarding_version_id");
+    db.sql("select onboarding_version_id from ouf_onboarding.onboarding_version where onboarding_version_id=:v for update").param("v",version).query(UUID.class).single();
+    var current=onboarding.version(source,version);
+    if(request==null||!Objects.equals(request.configurationHash(),current.get("configuration_hash"))
+        ||!Objects.equals(request.configurationHash(),review.get("configuration_hash"))
+        ||request.expectedVersion()!=((Number)current.get("lock_version")).longValue()
+        ||request.expectedGeneration()!=((Number)state.get("readiness_generation")).longValue()
+        ||!Objects.equals(request.blockedCode(),state.get("readiness_last_code")))
+      throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
+    if(!"APPROVED".equals(current.get("state"))||!"CONFIRMED".equals(onboarding.approvalCard(challenge).get("status")))
+      throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_APPROVAL_REQUIRED");
+    if(!"BLOCKED".equals(state.get("readiness_phase"))||Boolean.TRUE.equals(state.get("leased"))
+        ||state.get("readiness_started_at")==null||((Number)state.get("readiness_attempts")).intValue()<1||request.expectedGeneration()<1
+        ||!"ONB_READINESS_DEPENDENCY_403".equals(request.blockedCode()))
+      throw fail(HttpStatus.CONFLICT,"ONB_READINESS_RESUME_NOT_ALLOWED");
+    if(((Number)state.get("readiness_attempts")).intValue()>=128||Boolean.TRUE.equals(state.get("elapsed")))
+      throw fail(HttpStatus.CONFLICT,"ONB_READINESS_BUDGET_EXHAUSTED");
+    if(authentication==null||authentication.isBlank())throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHENTICATION_REQUIRED");
+    db.sql("update ouf_onboarding.managed_onboarding_review set readiness_generation=readiness_generation+1,readiness_phase='PAUSED',readiness_lease_until=null,readiness_next_at=null where challenge_id=:c")
+        .param("c",challenge).update();
+    onboarding.auditReadinessResume(source,version,new OnboardingService.Actor(p.subjectId(),"HUMAN_USER",Set.of("ouf.onboarding.configuration.write")),
+        Map.of("challengeId",challenge.toString(),"previousGeneration",request.expectedGeneration(),"previousCode",request.blockedCode(),
+            "attemptsPreserved",state.get("readiness_attempts"),"authenticationContextRef",authentication));
+    return receipt(current,review);
+  }
+
   public record Decision(String configurationHash,long expectedVersion){}
   @Transactional public Map<String,Object> humanAction(PrincipalContext p,UUID challenge,String action,Decision decision,String authentication){
     if(!Set.of("confirm","reject","activate").contains(action)||decision==null)
