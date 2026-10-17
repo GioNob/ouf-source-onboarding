@@ -21,6 +21,11 @@ class GovernedIdentityProposalTest {
         "policyRef","identity://policy/1","governedIdentity",policy);
     assertThatCode(()->GovernedIdentityProposal.validate(resolution,policy,"source-a",
         Set.of("urn:Place"),Set.of("urn:name","urn:address"))).doesNotThrowAnyException();
+    policy.put("distinctRules",List.of(Map.of("id","different-name-and-address","signalIds",List.of("urn:name","urn:address"),"assertionRef","assertion://distinct")));
+    assertThatCode(()->GovernedIdentityProposal.validate(resolution,policy,"source-a",Set.of("urn:Place"),Set.of("urn:name","urn:address"))).doesNotThrowAnyException();
+    policy.put("distinctRules",List.of(Map.of("id","weak","signalIds",List.of("urn:name"),"assertionRef","assertion://weak")));
+    assertThatThrownBy(()->GovernedIdentityProposal.validate(resolution,policy,"source-a",Set.of("urn:Place"),Set.of("urn:name","urn:address"))).hasMessage("ONB_GOVERNED_IDENTITY_INVALID");
+    policy.remove("distinctRules");
     policy.put("sufficientRules",List.of(Map.of("id","bad-rule","signalIds",List.of("urn:unknown"),
         "assertionRef","assertion://bad")));
     assertThatThrownBy(()->GovernedIdentityProposal.validate(resolution,policy,"source-a",
@@ -28,3 +33,4 @@ class GovernedIdentityProposalTest {
         .hasMessage("ONB_GOVERNED_IDENTITY_INVALID");
   }
 }
+

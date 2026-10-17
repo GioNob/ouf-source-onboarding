@@ -28,7 +28,9 @@ class ResolutionThsApiTest {
     var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
     var forwarded=new AtomicReference<String>();
     var path=new AtomicReference<String>();
+    var requestBody=new AtomicReference<String>();
     server.createContext("/api/udp/v1/governance/resolution/issues/package",exchange->{
+      requestBody.set(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));
       forwarded.set(exchange.getRequestHeaders().getFirst("Authorization"));
       path.set(exchange.getRequestURI().getPath());
       String payload="POST".equals(exchange.getRequestMethod())
@@ -64,6 +66,13 @@ class ResolutionThsApiTest {
           .doesNotContain("private-human-token");
       assertThat(forwarded.get()).isEqualTo("Bearer private-human-token");
       assertThat(path.get()).isEqualTo("/api/udp/v1/governance/resolution/issues/package");
+      var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(api).build();
+      String body="{\"snapshotHash\":\"sha256:test\",\"choices\":[{\"issueId\":\"00000000-0000-4000-8000-000000000001\",\"expectedVersion\":0,\"action\":\"CREATE_NEW\",\"reason\":\"\",\"targetUrbanObjectId\":null,\"expectedReviewHash\":\"sha256:"+"a".repeat(64)+"\"}]}";
+      mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/trusted-human/resolution/api/package/confirm")
+          .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body)
+          .requestAttr("ouf.permissionThsSession",Boolean.TRUE))
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+      assertThat(requestBody.get()).isEqualTo(body);
       var confirmed=api.confirm("{}".getBytes(StandardCharsets.UTF_8),request);
       assertThat(confirmed.getBody()).contains("tested");
       assertThat(path.get()).endsWith("/package/confirm");
