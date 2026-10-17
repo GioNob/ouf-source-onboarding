@@ -33,7 +33,9 @@ test('Resolution compares actual incoming and selected candidate rows, keeps JSO
    if(req.method()==='POST'){posts.push(req.postDataJSON());await route.fulfill({status:409,json:{code:'UDP_REVIEW_PACKAGE_STALE'}});}
    else await route.fulfill(fail?{status:403,json:{detail:'denied'}}:{json:{package:{snapshotHash:'sha256:fixture',issues:[issue,later]},csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture-csrf'}});
   });
-  await page.goto(`${base}/trusted-human/resolution/`);await page.locator('article.case-card').first().waitFor();
+  await page.goto(`${base}/trusted-human/resolution/`);await page.waitForFunction(()=>document.querySelector('article.case-card')||document.getElementById('status').classList.contains('error'));
+  assert.equal(await page.locator('#status').evaluate(e=>e.classList.contains('error')),false,await page.locator('#status').textContent());
+  await page.locator('article.case-card').first().waitFor();
   assert.equal(posts.length,0);assert.equal(await page.locator('table.object-comparison thead tr').count(),2);assert.equal(await page.locator('table.object-comparison tbody tr').count(),4);
   assert.match(await page.locator('tbody tr').first().textContent(),/Teatro in ingresso/);assert.match(await page.locator('.candidate-row').first().textContent(),/Teatro candidato A/);
   assert.equal(await page.locator('img').count(),0);assert.equal(await page.evaluate(()=>window.injected),undefined);
@@ -55,5 +57,5 @@ test('Resolution compares actual incoming and selected candidate rows, keeps JSO
   await page.getByText('Dati del candidato non disponibili: la riga non indica un oggetto vuoto.').waitFor();
   fail=true;await page.locator('#refresh').click();await page.locator('#status').filter({hasText:'HTTP 403'}).waitFor();assert.equal(await page.locator('article.case-card').count(),0);
   assert.equal(posts.length,1);assert.deepEqual(errors,[]);
- }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
+ }catch(error){fs.mkdirSync('target/browser-evidence',{recursive:true});await page.screenshot({path:'target/browser-evidence/resolution-failure.png',fullPage:true});throw error;}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 });
