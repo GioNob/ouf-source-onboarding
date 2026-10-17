@@ -63,7 +63,7 @@ class IngestionConfigurationAuditRuntimeTest {
     assertThat(failure).isNotNull();
     SQLException sql=null;
     for(Throwable cause=failure;cause!=null;cause=cause.getCause())if(cause instanceof SQLException problem){sql=problem;break;}
-    assertThat(sql).isNotNull();assertThat(sql.getSQLState()).isEqualTo("25006");
+    assertThat(sql!=null).isTrue();assertThat(sql.getSQLState()).isEqualTo("25006");
     assertThat(policy.decisionAuditCount("test-tenant")).isEqualTo(auditBefore);
 
     assertThat(reviews.ingestionConfiguration(service,"review-test",version,hash))
