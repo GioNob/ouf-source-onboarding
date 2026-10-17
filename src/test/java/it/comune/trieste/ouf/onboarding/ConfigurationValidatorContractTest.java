@@ -6,6 +6,26 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 
 class ConfigurationValidatorContractTest {
+  @Test @SuppressWarnings("unchecked") void linkedPropertiesAreChannelIndependentAndRejectUnsupportedContracts(){
+    var rule=new LinkedHashMap<String,Object>(Map.of("policyRef","urn:ouf:policy:linked-object-property-reconciliation:v1","cardinality","SINGLE","normalizerRef","NFC_TRIM","normalizerVersion",1,"validity","SOURCE_INTERVAL","revisionField","recordRevision"));
+    var property=new LinkedHashMap<String,Object>(Map.of("propertyIri","urn:name","sourceField","urn:name","datatype","string","accessLabel","RESTRICTED","authorityOrder",List.of("registry","survey"),"reconciliation",rule));
+    var profile=new LinkedHashMap<String,Object>(Map.of("properties",List.of(property)));
+    var c=base();var extraction=new LinkedHashMap<>((Map<String,Object>)c.get("extractionProfile"));
+    extraction.put("runtime",Map.of("udp",Map.of("materialization",profile)));c.put("extractionProfile",extraction);
+    var bundle=new LinkedHashMap<>((Map<String,Object>)c.get("bundle"));c.put("bundle",bundle);
+    for(String kind:List.of("EXTERNAL_API","DYNAMIC_LAYER","FILE","GEOPACKAGE")){
+      bundle.put("source",Map.of("sourceId","s","sourceKind",kind,"acquisitionMode","PULL"));
+      assertThat(validator.validate("s",c).valid()).as(kind).isTrue();
+    }
+    rule.put("normalizerRef","FUZZY_UNVERSIONED");assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code).contains("ONB_PROPERTY_RECONCILIATION_UNSUPPORTED");
+    rule.put("normalizerRef","NFC_TRIM");rule.put("deletionField","removeName");assertThat(validator.validate("s",c).valid()).isTrue();
+    rule.remove("revisionField");assertThat(validator.validate("s",c).valid()).isFalse();
+    rule.put("revisionField","recordRevision");rule.put("cardinality","MULTI");assertThat(validator.validate("s",c).valid()).isFalse();
+    rule.remove("deletionField");assertThat(validator.validate("s",c).valid()).isTrue();
+    profile.put("bitemporalProperties",List.of("urn:name"));assertThat(validator.validate("s",c).valid()).isFalse();
+    profile.remove("bitemporalProperties");rule.put("normalizerVersion",1.5);assertThat(validator.validate("s",c).valid()).isFalse();
+    rule.put("normalizerVersion",1);rule.put("unexpectedSwitch",true);assertThat(validator.validate("s",c).valid()).isFalse();
+  }
   private final ConfigurationValidator validator=new ConfigurationValidator();
   @Test void managedDraftCannotPassWithoutExecutableProfilesAndSemanticPublication(){
     var draft=base();var bundle=new LinkedHashMap<String,Object>((Map<String,Object>)draft.get("bundle"));
@@ -84,4 +104,5 @@ class ConfigurationValidatorContractTest {
   @SuppressWarnings("unchecked") private static Map<String,Object> withSpatial(Map<String,Object> geometry){var c=base();var extraction=new LinkedHashMap<>((Map<String,Object>)c.get("extractionProfile"));extraction.put("runtime",Map.of("udp",Map.of("spatial",Map.of("policyRef","crs://v1","geometry",geometry,"relationships",List.of()))));c.put("extractionProfile",extraction);return c;}
   private static Map<String,Object> base(){Map<String,Object> config=new LinkedHashMap<>();config.put("syncProfile",Map.of("bootstrap","FULL_SNAPSHOT","incremental","NONE"));config.put("extractionProfile",Map.of("profileId","ep","version","1","sourceId","s","selection",Map.of(),"projection",Map.of(),"sync",Map.of()));config.put("semanticMapping",Map.of("mappingId","sm","sourceType",Map.of("sourceId","s","typeCode","T"),"targetClasses",List.of(Map.of("ontologyId","core","ontologyVersion","1","classIri","urn:T")),"semanticRefs",List.of("core@1")));config.put("bundle",Map.of("bundleId","b","bundleVersion","1","environment","test","source",Map.of("sourceId","s","sourceKind","EXTERNAL_API","acquisitionMode","PULL"),"bindingRef","gateway://test","createdFromOnboardingVersion","pending","effectiveFrom","2026-01-01T00:00:00Z","checksum","sha256:x","status","APPROVED"));return config;}
 }
+
 
