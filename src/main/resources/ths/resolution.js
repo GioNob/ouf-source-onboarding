@@ -54,7 +54,7 @@
   function objectRow(label, object, columns) {
     const row = node('tr');
     const heading = node('th'); heading.scope = 'row'; heading.append(node('strong', null, label));
-    if (object) {
+    if (object && (object.reference || object.sourceId)) {
       const reference = object.sourceId ? `Sorgente: ${object.sourceId}\nRecord: ${object.sourceObjectId}` : `ID: ${object.reference}`;
       heading.append(node('small', 'object-reference', reference));
       if (object.revision !== null && object.revision !== undefined) heading.append(node('small', 'object-reference', `Revisione ${object.revision}`));
@@ -70,6 +70,7 @@
   function comparison(issue, target, action) {
     const box = node('div', 'comparison');
     const unavailable = node('p', 'preview-state');
+    const explanation = node('div', 'property-explanation');
     const scroll = node('div', 'comparison-scroll'); scroll.tabIndex = 0;
     scroll.setAttribute('aria-label', 'Confronto dei campi, scorribile orizzontalmente');
     const table = node('table', 'object-comparison');
@@ -77,7 +78,8 @@
     const incoming = issue.incomingObject;
     const candidates = issue.candidateObjects || {};
     const columns = [...new Set([...Object.keys(incoming && incoming.fields || {}),
-      ...Object.values(candidates).flatMap(o => Object.keys(o.fields || {}))])].sort();
+      ...Object.values(candidates).flatMap(o => Object.keys(o.fields || {})),
+      ...Object.values(issue.propertyPreviews || {}).flatMap(p => Object.keys(p.properties || {}))])].sort();
     const head = node('thead'), titles = node('tr');
     const corner = node('th', null, 'Oggetto'); corner.scope = 'col'; titles.append(corner);
     const names = columns.map(fieldName);
@@ -98,13 +100,45 @@
             && JSON.stringify(incoming.fields[key]) !== JSON.stringify(candidate.fields[key])) cell.classList.add('different');
       });
       body.append(row);
+      explanation.replaceChildren();
+      if (action.value === 'APPROVE') {
+        const preview = (issue.propertyPreviews || {})[target.value];
+        if (preview && preview.available) {
+          const properties = preview.properties || {};
+          const projected = {fields: {}};
+          columns.forEach(key => { if (properties[key] && properties[key].available && properties[key].status !== 'DELETED') projected.fields[key] = properties[key].proposedValue; });
+          const result = objectRow('Risultato previsto del collegamento', projected, columns);
+          result.className = 'result-row';
+          const names = {CONFLICT:'Conflitto: il valore corrente resta invariato', ADDED:'Aggiunta', RECONCILED:'Valore riconciliato', UNCHANGED:'Valore confermato', HUMAN_SELECTED:'Scelta umana già registrata', DELETED:'Cancellazione esplicita autorizzata', NO_VALID_CONTRIBUTION:'Nessun contributo valido: valore non disponibile alla consultazione'};
+          [...result.querySelectorAll('td')].forEach((cell, index) => {
+            const property = properties[columns[index]];
+            if (!property || !property.available) { cell.textContent = 'Regola dedicata · risultato non calcolato qui'; return; }
+            if (property.status === 'NO_VALID_CONTRIBUTION') cell.textContent = 'Non disponibile';
+            const description = names[property.status] || property.status;
+            cell.append(node('small', 'property-status', description));
+            if (property.conflict) cell.classList.add('property-conflict');
+            const detail = node('details', 'property-evidence');
+            detail.append(node('summary', null, `${fieldName(columns[index])} · ${description}`));
+            const rule = property.rule || {}, config = rule.reconciliation || {};
+            detail.append(node('p', null, config.cardinality === 'MULTI' ? 'Unione dei valori distinti; ogni provenienza resta conservata.' : 'Valore singolo; prevalgono le fonti nell’ordine dichiarato, altrimenti le differenze richiedono una scelta separata.'));
+            if (Array.isArray(rule.authorityOrder) && rule.authorityOrder.length) detail.append(node('p', null, `Priorità delle fonti: ${rule.authorityOrder.join(' → ')}`));
+            for (const contribution of property.contributions || []) {
+              const provenance = contribution.provenance || {}, source = provenance.sourceIdentity || {};
+              detail.append(node('p', 'source-evidence', `Fonte: ${contribution.sourceId} · record: ${source.sourceObjectId || '—'} · valore originale: ${contribution.valueJson} · accesso: ${contribution.accessLabel}`));
+            }
+            explanation.append(detail);
+          });
+          body.append(result);
+          explanation.prepend(node('p', 'reconciliation-help', 'Il collegamento conferma l’identità. I conflitti sui singoli campi restano aperti per una scelta separata; gli altri campi possono avanzare. L’anteprima sarà verificata nuovamente alla conferma.'));
+        } else explanation.append(node('p', 'reconciliation-help', 'Anteprima delle proprietà non disponibile: manca una policy di riconciliazione verificata per questo record. Nessun risultato viene dedotto dai soli campi uguali.'));
+      }
       if (!incoming || !incoming.available) unavailable.textContent = 'Dati del record in ingresso non disponibili in questa risposta.';
       else if (!target.value) unavailable.textContent = 'Seleziona un candidato per confrontarne i campi.';
       else if (!candidate || !candidate.available) unavailable.textContent = 'Dati del candidato non disponibili: la riga non indica un oggetto vuoto.';
-      else unavailable.textContent = 'Le celle evidenziate hanno valori diversi. — indica un campo non presente; null è un valore esplicito.';
+      else unavailable.textContent = 'Le celle evidenziate hanno valori diversi. — indica un campo non presente; null e campi vuoti non implicano una cancellazione.';
     }
     target.addEventListener('change', update); action.addEventListener('change', update); update();
-    scroll.append(table); box.append(scroll, unavailable); return box;
+    scroll.append(table); box.append(scroll, unavailable, explanation); return box;
   }
   function render(pkg) {
     rows.replaceChildren();
@@ -202,3 +236,4 @@
   });
   load();
 })();
+
