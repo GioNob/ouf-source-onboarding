@@ -77,7 +77,10 @@ test('Resolution compares actual incoming and selected candidate rows, keeps JSO
   await page.locator('.target').first().selectOption(b);assert.equal(await page.locator('.result-row').count(),0);
   assert.match(await page.locator('.property-explanation').first().textContent(),/Anteprima delle proprietà non disponibile/);
   await page.locator('.target').first().selectOption(a);await page.locator('.action').first().selectOption('CREATE_NEW');assert.equal(await page.locator('.result-row').count(),0);
-  issue.candidateObjects[b]={reference:b,available:false,fields:{}};await page.locator('#refresh').click();await page.locator('.target').first().selectOption(b);
+  issue.candidateObjects[b]={reference:b,available:false,fields:{}};await page.locator('#refresh').click();
+  // Wait for the replacement snapshot, not the old select still present during fetch.
+  await page.locator('.target').first().locator('option').filter({hasText:'Oggetto · '+b}).waitFor({state:'attached'});
+  await page.locator('.target').first().selectOption(b);
   await page.getByText('Dati del candidato non disponibili: la riga non indica un oggetto vuoto.').waitFor();
   fail=true;await page.locator('#refresh').click();await page.locator('#status').filter({hasText:'HTTP 403'}).waitFor();assert.equal(await page.locator('article.case-card').count(),0);
   assert.equal(posts.length,1);assert.deepEqual(errors,[]);
