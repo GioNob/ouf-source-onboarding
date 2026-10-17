@@ -56,9 +56,34 @@ test('Resolution compares actual incoming and selected candidate rows, keeps JSO
   assert.equal(posts.length,1);assert.deepEqual(posts[0],{snapshotHash:'sha256:fixture',choices:[{issueId:a,expectedVersion:0,action:'CREATE_NEW',expectedReviewHash:'sha256:'+'a'.repeat(64),targetUrbanObjectId:null,reason:''}]});
   assert.match(await page.locator('#status').textContent(),/UDP_REVIEW_PACKAGE_STALE/);
   assert.equal(await page.locator('#confirm').isDisabled(),true);
-  issue.candidateObjects[b]={reference:b,available:false,fields:{}};await page.locator('#refresh').click();await page.locator('.target').first().selectOption(b);
+  const properties = {
+   'urn:test:nome': {available:true,currentValue:'Teatro candidato A',incomingValue:'Teatro in ingresso',proposedValue:'Teatro candidato A',status:'CONFLICT',conflict:true,rule:{authorityOrder:[],reconciliation:{cardinality:'SINGLE'}},contributions:[{sourceId:'layer-live',accessLabel:'RESTRICTED',valueJson:'"<img src=x onerror=alert(1)>"',provenance:{sourceIdentity:{sourceObjectId:'feature-2'}}}]},
+   'urn:test:indirizzo': {available:true,proposedValue:'Via Roma 1',status:'RECONCILED',rule:{authorityOrder:['registry-api','file'],reconciliation:{cardinality:'SINGLE'}},contributions:[]},
+   'urn:test:posti': {available:true,proposedValue:0,status:'ADDED',rule:{reconciliation:{cardinality:'SINGLE'}},contributions:[]}
+  };
+  issue.propertyPreviews = {[a]:{available:true,properties}};
+  await page.locator('#refresh').click();await page.locator('.result-row').waitFor();
+  assert.match(await page.locator('.result-row').textContent(),/Risultato previsto del collegamento/);
+  assert.match(await page.locator('.property-conflict').textContent(),/Conflitto: il valore corrente resta invariato/);
+  assert.equal(await page.locator('.result-row td').allTextContents().then(values=>values.some(v=>v.startsWith('0'))),true);
+  await page.locator('.property-evidence summary').first().click();
+  assert.match(await page.locator('.property-explanation').first().textContent(),/layer-live.*feature-2/);
+  assert.equal(await page.locator('img').count(),0);
+  assert.equal(posts.length,1);
+  await page.screenshot({path:'target/browser-evidence/property-reconciliation-mobile.png',fullPage:true});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.setViewportSize({width:1440,height:1000});
+  await page.screenshot({path:'target/browser-evidence/property-reconciliation-desktop.png',fullPage:true});
+  await page.locator('.target').first().selectOption(b);assert.equal(await page.locator('.result-row').count(),0);
+  assert.match(await page.locator('.property-explanation').first().textContent(),/Anteprima delle proprietà non disponibile/);
+  await page.locator('.target').first().selectOption(a);await page.locator('.action').first().selectOption('CREATE_NEW');assert.equal(await page.locator('.result-row').count(),0);
+  issue.candidateObjects[b]={reference:b,available:false,fields:{}};await page.locator('#refresh').click();
+  // Wait for the replacement snapshot, not the old select still present during fetch.
+  await page.locator('.target').first().locator('option').filter({hasText:'Oggetto · '+b}).waitFor({state:'attached'});
+  await page.locator('.target').first().selectOption(b);
   await page.getByText('Dati del candidato non disponibili: la riga non indica un oggetto vuoto.').waitFor();
   fail=true;await page.locator('#refresh').click();await page.locator('#status').filter({hasText:'HTTP 403'}).waitFor();assert.equal(await page.locator('article.case-card').count(),0);
   assert.equal(posts.length,1);assert.deepEqual(errors,[]);
  }catch(error){fs.mkdirSync('target/browser-evidence',{recursive:true});await page.screenshot({path:'target/browser-evidence/resolution-failure.png',fullPage:true});throw error;}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 });
+

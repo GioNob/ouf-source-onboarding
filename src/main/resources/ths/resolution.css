@@ -13,3 +13,13 @@ footer{display:flex;gap:12px;justify-content:flex-end;margin-top:24px}button{bor
 @media(max-width:560px){.case-controls{grid-template-columns:1fr}.rationale{grid-column:auto}footer{flex-direction:column}.object-comparison tr>:first-child{min-width:145px;max-width:160px}.case-card{padding:12px}.case-heading h2{font-size:1.15rem}}
 
 .defer-label{display:flex;gap:9px;align-items:center;font-size:.95rem;margin:16px 0 4px;cursor:pointer}.defer-label input{width:20px;height:20px;accent-color:#315e83}.defer-help{font-size:.82rem;color:#536779;margin:0 0 18px}.deferred{border-color:#a9b7c2}.deferred .case-controls{opacity:.65}#selection-status{text-align:right;font-weight:600;color:#315e83}.deferred .decision-effect{background:#fff4dc}
+
+
+.result-row {background:#edf7f1}
+.property-status {display:block;margin-top:.6rem;font-weight:600;white-space:normal}
+.property-conflict {background:#fff1d6}
+.property-explanation {margin-top:1rem;overflow-wrap:anywhere}
+.property-evidence {padding:.65rem 0;border-top:1px solid #d5dfeb}
+.property-evidence summary {cursor:pointer;font-weight:600}
+.source-evidence {font-size:.9rem}
+.reconciliation-help {line-height:1.5}
