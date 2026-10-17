@@ -17,9 +17,10 @@ test('Resolution compares actual incoming and selected candidate rows, keeps JSO
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;
  try {browser=await chromium.launch({headless:true});} catch(error) {await new Promise(resolve=>server.close(resolve));throw error;}
+ let page;
  try{
   const base=`http://127.0.0.1:${server.address().port}`,a='00000000-0000-4000-8000-000000000001',b='00000000-0000-4000-8000-000000000002';
-  const page=await browser.newPage({viewport:{width:1440,height:1000}}),posts=[],errors=[];page.on('pageerror',e=>errors.push(e.message));
+  page=await browser.newPage({viewport:{width:1440,height:1000}});const posts=[],errors=[];page.on('pageerror',e=>errors.push(e.message));
   const fields={'urn:test:nome':'Teatro in ingresso','urn:test:indirizzo':'Via Roma 1','urn:test:posti':0,'urn:test:note':null,'urn:test:html':'<img src=x onerror="window.injected=true">'};
   const issue={issueId:a,reviewHash:'sha256:'+'a'.repeat(64),version:0,reasonCode:'UNRESOLVED_IDENTITY',candidateRefs:[a,b],suggestedTargetUrbanObjectId:a,
    evidence:[{complete:true,outcome:'REVIEW_REQUIRED',coverageRef:'indexed-snapshot://fixture'}],
@@ -34,6 +35,7 @@ test('Resolution compares actual incoming and selected candidate rows, keeps JSO
    else await route.fulfill(fail?{status:403,json:{detail:'denied'}}:{json:{package:{snapshotHash:'sha256:fixture',issues:[issue,later]},csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture-csrf'}});
   });
   await page.goto(`${base}/trusted-human/resolution/`);await page.waitForFunction(()=>document.querySelector('article.case-card')||document.getElementById('status').classList.contains('error'));
+  console.log('RESOLUTION_STATUS',await page.locator('#status').textContent(),'ERRORS',errors);
   assert.equal(await page.locator('#status').evaluate(e=>e.classList.contains('error')),false,await page.locator('#status').textContent());
   await page.locator('article.case-card').first().waitFor();
   assert.equal(posts.length,0);assert.equal(await page.locator('table.object-comparison thead tr').count(),2);assert.equal(await page.locator('table.object-comparison tbody tr').count(),4);
