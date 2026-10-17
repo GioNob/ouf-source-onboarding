@@ -69,14 +69,16 @@ public class ConfigurationValidator {
         if(!(property.get("reconciliation") instanceof Map<?,?> rule))throw new IllegalArgumentException();
         if(!Set.of("policyRef","cardinality","normalizerRef","normalizerVersion","validity","revisionField","deletionField").containsAll(rule.keySet()))throw new IllegalArgumentException();
         for(String field:List.of("propertyIri","sourceField","datatype","accessLabel"))if(!(property.get(field) instanceof String s)||s.isBlank())throw new IllegalArgumentException();
+        String datatype=Objects.toString(property.get("datatype"),"");
+        if("http://www.w3.org/2001/XMLSchema#string".equals(datatype))datatype="string";
         if(!"urn:ouf:policy:linked-object-property-reconciliation:v1".equals(rule.get("policyRef"))
             ||!Set.of("SINGLE","MULTI").contains(Objects.toString(rule.get("cardinality"),""))
             ||!Set.of("EXACT_TYPED","NFC_TRIM").contains(Objects.toString(rule.get("normalizerRef"),""))
             ||!(rule.get("normalizerVersion") instanceof Number n)||new java.math.BigDecimal(n.toString()).compareTo(java.math.BigDecimal.ONE)!=0
             ||!Set.of("UNBOUNDED","SOURCE_INTERVAL").contains(Objects.toString(rule.get("validity"),""))
-            ||!Set.of("string","number","integer","boolean","object").contains(property.get("datatype")))throw new IllegalArgumentException();
+            ||!Set.of("string","number","integer","boolean","object").contains(datatype))throw new IllegalArgumentException();
         for(String field:List.of("revisionField","deletionField"))if(rule.get(field)!=null&&(!(rule.get(field) instanceof String s)||s.isBlank()))throw new IllegalArgumentException();
-        if("NFC_TRIM".equals(rule.get("normalizerRef"))&&!"string".equals(property.get("datatype")))throw new IllegalArgumentException();
+        if("NFC_TRIM".equals(rule.get("normalizerRef"))&&!"string".equals(datatype))throw new IllegalArgumentException();
         if(!(property.get("authorityOrder") instanceof List<?> order)||new HashSet<>(order).size()!=order.size()||order.stream().anyMatch(v->!(v instanceof String s)||s.isBlank()))throw new IllegalArgumentException();
         if(rule.get("deletionField")!=null&&(!"SINGLE".equals(rule.get("cardinality"))||rule.get("revisionField")==null||order.isEmpty()))throw new IllegalArgumentException();
         if(profile.get("bitemporalProperties") instanceof List<?> temporal&&temporal.contains(property.get("propertyIri"))&&("MULTI".equals(rule.get("cardinality"))||rule.get("deletionField")!=null))throw new IllegalArgumentException();

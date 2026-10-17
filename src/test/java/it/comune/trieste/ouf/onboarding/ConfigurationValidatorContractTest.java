@@ -26,6 +26,20 @@ class ConfigurationValidatorContractTest {
     profile.remove("bitemporalProperties");rule.put("normalizerVersion",1.5);assertThat(validator.validate("s",c).valid()).isFalse();
     rule.put("normalizerVersion",1);rule.put("unexpectedSwitch",true);assertThat(validator.validate("s",c).valid()).isFalse();
   }
+  @Test @SuppressWarnings("unchecked") void publishedXsdStringIsValidatedWithoutRewritingConfiguration(){
+    String iri="http://www.w3.org/2001/XMLSchema#string";
+    var rule=new LinkedHashMap<String,Object>(Map.of("policyRef","urn:ouf:policy:linked-object-property-reconciliation:v1","cardinality","SINGLE","normalizerRef","EXACT_TYPED","normalizerVersion",1,"validity","SOURCE_INTERVAL"));
+    var property=new LinkedHashMap<String,Object>(Map.of("propertyIri","urn:name","sourceField","urn:name","datatype",iri,"accessLabel","RESTRICTED","authorityOrder",List.of("registry"),"reconciliation",rule));
+    var c=base();var extraction=new LinkedHashMap<>((Map<String,Object>)c.get("extractionProfile"));
+    extraction.put("runtime",Map.of("udp",Map.of("materialization",Map.of("properties",List.of(property)))));c.put("extractionProfile",extraction);
+    for(String normalizer:List.of("EXACT_TYPED","NFC_TRIM")){
+      rule.put("normalizerRef",normalizer);assertThat(validator.validate("s",c).valid()).isTrue();
+      assertThat(property.get("datatype")).isEqualTo(iri);
+    }
+    for(String invalid:List.of("xsd:string","https://www.w3.org/2001/XMLSchema#string","http://www.w3.org/2001/XMLSchema#date")){
+      property.put("datatype",invalid);assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code).contains("ONB_PROPERTY_RECONCILIATION_UNSUPPORTED");
+    }
+  }
   private final ConfigurationValidator validator=new ConfigurationValidator();
   @Test void managedDraftCannotPassWithoutExecutableProfilesAndSemanticPublication(){
     var draft=base();var bundle=new LinkedHashMap<String,Object>((Map<String,Object>)draft.get("bundle"));
