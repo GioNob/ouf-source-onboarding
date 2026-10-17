@@ -52,7 +52,7 @@ test('trusted review UI compares geometry and scalar values, submits exact evide
     await page.locator('input[value="one"]').check();assert.match(await page.locator('#context').innerText(),/Canonical name/);
     await page.locator('input[value="two"]').check();assert.match(await page.locator('#context').innerText(),/Cancellazione esplicita/);assert.equal(writes,0);
     linked.evidenceCurrent=false;await page.reload();await page.getByRole('status').filter({hasText:'Apri la revisione aggiornata'}).waitFor();
-    assert.equal(await page.locator('#submit').isDisabled(),true);assert.equal(await page.locator('#choices').isDisabled(),true);assert.equal(writes,0);assert.deepEqual(errors,[]);
+    assert.equal(await page.locator('#submit').isDisabled(),true);assert.equal(await page.locator('#choices input').first().isDisabled(),true);assert.equal(writes,0);assert.deepEqual(errors,[]);
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 });
 
