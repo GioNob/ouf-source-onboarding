@@ -47,13 +47,24 @@ class IngestionConfigurationAuditRuntimeTest {
       List.of(new AuthorizationPolicy.CapabilityDescriptor(prepare,"COMMAND",prepare,Set.of(PrincipalContext.ActorType.HUMAN)),
               new AuthorizationPolicy.CapabilityDescriptor(read,"READ",read,Set.of(PrincipalContext.ActorType.SERVICE))),
       List.of(new AuthorizationPolicy.Grant("prepare",prepare,"test-tenant","test-human",null,null,now.minusSeconds(60),now.plusSeconds(3600)),
-              new AuthorizationPolicy.Grant("read",read,"test-tenant","service-user","test-ingestion",null,now.minusSeconds(60),now.plusSeconds(3600)))),"fixture-policy-admin");
+              new AuthorizationPolicy.Grant("read",read,"test-tenant","service-user","test-ingestion",null,now.minusSeconds(60),now.plusSeconds(3600),
+                new AuthorizationPolicy.GrantConstraints("ALLOW",null,"published-configuration","review-test",Map.of("module","ONBOARDING"),Set.of(),Set.of(),null,Set.of(),null)))),"fixture-policy-admin");
     UUID version=draft();
     var actor=principal("test-human",PrincipalContext.ActorType.HUMAN,"test-mcp",Set.of(prepare));
     var prepared=reviews.prepare(actor,new ManagedOnboardingReviewService.Prepare("review-test",version,1,"prepare:one",null),"fixture");
     UUID challenge=(UUID)prepared.get("challengeId");String hash=prepared.get("configurationHash").toString();
     onboarding.confirm("review-test",version,challenge,human,"fixture","test-auth");
     var service=principal("service-user",PrincipalContext.ActorType.SERVICE,"test-ingestion",Set.of(read));
+    var active=policy.load("read-audit-regression",1);
+    assertThat(AuthorizationPolicy.evaluate(active,service,
+      new ResourceContext("source","review-test","test-tenant",null,Map.of("onboardingVersionId",version.toString())),
+      read,"READ",Instant.now()).decisionCode()).isEqualTo("NO_APPLICABLE_GRANT");
+    assertThat(AuthorizationPolicy.evaluate(active,service,
+      new ResourceContext("published-configuration","review-test","test-tenant",null,Map.of("module","OTHER")),
+      read,"READ",Instant.now()).allowed()).isFalse();
+    assertThat(AuthorizationPolicy.evaluate(active,service,
+      new ResourceContext("published-configuration","another-source","test-tenant",null,Map.of("module","ONBOARDING")),
+      read,"READ",Instant.now()).allowed()).isFalse();
     var before=onboarding.version("review-test",version);
     long auditBefore=policy.decisionAuditCount("test-tenant");
 

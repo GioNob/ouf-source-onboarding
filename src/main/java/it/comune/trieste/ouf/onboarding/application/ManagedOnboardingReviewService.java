@@ -206,7 +206,7 @@ public class ManagedOnboardingReviewService {
     String capability="ouf.onboarding.configuration.read";
     if(p==null||p.actorType()!=PrincipalContext.ActorType.SERVICE||!p.scopes().contains(capability))
       throw fail(HttpStatus.FORBIDDEN,"ONB_INGESTION_CONFIGURATION_AUTHORITY_REQUIRED");
-    var resource=new ResourceContext("source",source,p.tenantId(),null,Map.of("onboardingVersionId",version.toString()));
+    var resource=new ResourceContext("published-configuration",source,p.tenantId(),null,Map.of("module","ONBOARDING","onboardingVersionId",version.toString()));
     if(!policy.authorizeActive(p,resource,capability,"READ",Instant.now()).allowed())
       throw fail(HttpStatus.FORBIDDEN,"ONB_INGESTION_CONFIGURATION_DENIED");
     var rows=db.sql("select tenant_id,challenge_id,configuration_hash from ouf_onboarding.managed_onboarding_review where source_id=:s and onboarding_version_id=:v")
