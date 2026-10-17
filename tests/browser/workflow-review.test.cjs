@@ -40,6 +40,11 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     await page.reload();await page.locator('article.card').waitFor();assert.equal(posts.length,2);
     let sourcePosts=0;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
     await page.route('**/trusted-human/onboarding/api/**',async route=>{
+      if(route.request().method()==='POST' && route.request().url().endsWith('/resume')){
+        sourcePosts++;assert.deepEqual(route.request().postDataJSON(),{configurationHash:'sha256:'+hash,expectedVersion:3,expectedGeneration:1,blockedCode:'ONB_READINESS_DEPENDENCY_403'});
+        source.progress.activationProgress={...source.progress.activationProgress,readiness_phase:'PAUSED',readiness_generation:2};
+        await route.fulfill({json:{state:'APPROVED'}});return;
+      }
       if(route.request().method()==='POST'){sourcePosts++;assert.deepEqual(route.request().postDataJSON(),{configurationHash:'sha256:'+hash,expectedVersion:source.lockVersion});await route.fulfill(route.request().url().endsWith('/activate')?{json:{state:'ACTIVE'}}:{status:412,json:{code:'ONB_REVIEW_STALE_CARD'}});}
       else await route.fulfill({json:{card:source,csrfHeader:'X-CSRF-TOKEN',csrfToken:'test-csrf'}});
     });
@@ -62,6 +67,16 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     await page.reload();await page.locator('article.card').waitFor();await page.locator('article input[type=checkbox]').check();
     assert.equal(await page.locator('#complete').isDisabled(),true);
     assert.equal(sourcePosts,priorSourcePosts+1);
+    source.progress.activationProgress={readiness_phase:'BLOCKED',readiness_generation:1,readiness_attempts:1,readiness_started_at:new Date().toISOString(),readiness_last_code:'ONB_READINESS_DEPENDENCY_403'};
+    await page.reload();await page.locator('article.card').waitFor();await page.locator('article input[type=checkbox]').check();
+    assert.equal(await page.locator('#complete').isDisabled(),true);assert.equal(await page.locator('#resume').isEnabled(),true);
+    const beforeResume=sourcePosts;await page.locator('#resume').click();
+    await page.getByRole('status').filter({hasText:'Ripresa registrata'}).waitFor();
+    assert.equal(sourcePosts,beforeResume+1);assert.equal(source.onboardingState,'APPROVED');
+    assert.equal(await page.locator('#complete').isDisabled(),true);
+    await page.reload();await page.locator('article.card').waitFor();await page.locator('article input[type=checkbox]').check();
+    assert.equal(await page.locator('#complete').isEnabled(),true);assert.equal(await page.locator('#resume').isDisabled(),true);
+    assert.equal(sourcePosts,beforeResume+1);
     fs.mkdirSync('target/browser-evidence',{recursive:true});await page.screenshot({path:'target/browser-evidence/workflow-source-review.png',fullPage:true});
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 });
