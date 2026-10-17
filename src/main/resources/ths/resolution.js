@@ -59,13 +59,7 @@
       heading.append(node('small', 'object-reference', reference));
       if (object.revision !== null && object.revision !== undefined) heading.append(node('small', 'object-reference', `Revisione ${object.revision}`));
     }
-    const deferLabel = node('label', 'defer-label');
-      const defer = node('input'); defer.type = 'checkbox'; defer.className = 'defer';
-      defer.checked = deferredCases.has(issue.issueId);
-      defer.disabled = typeof issue.reviewHash !== 'string';
-      deferLabel.append(defer, node('span', null, 'Lascia in quarantena'));
-      const deferHelp = node('p', 'defer-help', 'Questo caso resterà aperto. Potrai decidere in seguito e confermare intanto gli altri.');
-      row.append(heading, deferLabel, deferHelp);
+    row.append(heading);
     columns.forEach(key => {
       const cell = node('td', object && own(object.fields, key) ? 'value' : 'missing');
       cell.textContent = object && own(object.fields, key) ? display(object.fields[key]) : '—';
