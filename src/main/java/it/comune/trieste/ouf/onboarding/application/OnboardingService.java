@@ -85,6 +85,15 @@ public class OnboardingService {
 
   @Transactional public Map<String,Object> activate(String sourceId,UUID versionId,Actor actor,String correlation){
     if(!"HUMAN_USER".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_HUMAN_ACTIVATION_REQUIRED","Activation requires a HUMAN_USER identity");
+    // Serialize publications and revision preparation on the same source fence.
+    db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:s,0))) locked").param("s",sourceId).query(Integer.class).single();
+    db.sql("select source_id from ouf_onboarding.source where source_id=:s for update").param("s",sourceId).query(String.class).single();
+    var revision=db.sql("select r.parent_version_id,r.parent_configuration_hash,v.state,v.configuration_hash from ouf_onboarding.source_property_revision r join ouf_onboarding.onboarding_version v on v.onboarding_version_id=r.parent_version_id where r.onboarding_version_id=:v").param("v",versionId).query().listOfRows();
+    if(!revision.isEmpty()){
+      var base=revision.getFirst();
+      if(!"ACTIVE".equals(base.get("state"))||!Objects.equals(base.get("parent_configuration_hash"),base.get("configuration_hash")))
+        throw new DomainFailure(HttpStatus.PRECONDITION_FAILED,"ONB_REVISION_PARENT_DRIFT","ONB_REVISION_PARENT_DRIFT");
+    }
     surveillance.assertActivationAllowed(sourceId);
     Map<String,Object> v=version(sourceId,versionId);if(!"APPROVED".equals(v.get("state")))throw invalid("Version must be APPROVED");
     boolean compatible=db.sql("select compatible from ouf_onboarding.consumer_compatibility_attestation where onboarding_version_id=:v and consumer='INGESTION_RUNTIME' and configuration_hash=:h order by created_at desc,attestation_id desc limit 1").param("v",versionId).param("h",v.get("configuration_hash")).query(Boolean.class).optional().orElse(false);if(!compatible)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_INGESTION_COMPAT_REQUIRED","Ingestion Runtime must accept the frozen configuration before activation");

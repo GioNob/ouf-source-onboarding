@@ -105,6 +105,18 @@ public class ManagedOnboardingReviewService {
         .param("c",challenge.get("challenge_id")).param("h",current.get("configuration_hash")).update();
     return receipt(current,Map.of("challenge_id",challenge.get("challenge_id"),"configuration_hash",current.get("configuration_hash")));
   }
+
+  /** Internal owner composition; called in the revision transaction after full validation/submission. */
+  Map<String,Object> registerReview(PrincipalContext p,String source,UUID version,String key,String fingerprint,
+      Map<String,Object> frozen,OnboardingService.Actor actor,String correlation){
+    url(version);
+    var challenge=onboarding.createChallenge(source,version,actor,correlation);
+    db.sql("insert into ouf_onboarding.managed_onboarding_review(tenant_id,subject_id,command_key,request_hash,source_id,onboarding_version_id,challenge_id,configuration_hash) values(:t,:s,:k,:r,:source,:v,:c,:h)")
+        .param("t",p.tenantId()).param("s",p.subjectId()).param("k",key).param("r",fingerprint)
+        .param("source",source).param("v",version).param("c",challenge.get("challenge_id")).param("h",frozen.get("configuration_hash")).update();
+    return receipt(frozen,Map.of("challenge_id",challenge.get("challenge_id"),"configuration_hash",frozen.get("configuration_hash")));
+  }
+
   @Transactional public Map<String,Object> read(PrincipalContext p,String source,UUID version){
     authorize(p,READ,"READ",source,version);
     var current=ownedVersion(p,source,version);
@@ -113,7 +125,7 @@ public class ManagedOnboardingReviewService {
     if(!retained.isEmpty()&&(!Objects.equals(retained.getFirst().get("tenant_id"),p.tenantId())||!Objects.equals(retained.getFirst().get("subject_id"),p.subjectId())))throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
     return receipt(current,retained.isEmpty()?null:retained.getFirst());
   }
-  private Map<String,Object> receipt(Map<String,Object> current,Map<String,Object> review){
+  Map<String,Object> receipt(Map<String,Object> current,Map<String,Object> review){
     var result=new LinkedHashMap<String,Object>();
     result.put("sourceId",current.get("source_id"));result.put("onboardingVersionId",current.get("onboarding_version_id"));
     result.put("state",current.get("state"));result.put("lockVersion",current.get("lock_version"));
@@ -149,7 +161,10 @@ public class ManagedOnboardingReviewService {
     var review=humanReview(p,challenge);var card=new LinkedHashMap<>(onboarding.approvalCard(challenge));
     var version=onboarding.version(String.valueOf(review.get("source_id")),(UUID)review.get("onboarding_version_id"));
     card.put("onboardingState",version.get("state"));card.put("lockVersion",version.get("lock_version"));
-    card.put("progress",receipt(version,review));return card;
+    card.put("progress",receipt(version,review));
+    var revision=db.sql("select parent_version_id,parent_configuration_hash,publication_effect from ouf_onboarding.source_property_revision where onboarding_version_id=:v").param("v",version.get("onboarding_version_id")).query().listOfRows();
+    if(!revision.isEmpty()){card.put("revisionBase",revision.getFirst());card.put("publicationEffects",SourceRevisionService.effects());}
+    return card;
   }
   public record ActivationClaim(UUID challenge,UUID version,String source,String hash,long lockVersion,long generation,
       Map<String,Object> configuration,Map<String,Object> progress,boolean reconciled){}

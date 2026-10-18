@@ -47,12 +47,17 @@
       const rows = mapping.propertyMappings || [];
       element('h3', 'Campi inclusi e corrispondenze', article);
       const table = document.createElement('table'), head = document.createElement('tr');
-      for (const name of ['Campo del file', 'Proprietà', 'Trasformazione']) element('th', name, head);
+      for (const name of ['Campo della fonte', 'Proprietà', 'Trasformazione']) element('th', name, head);
       table.append(head);
       for (const row of rows) { const tr = document.createElement('tr'); for (const value of [row.sourceField, row.targetPropertyIri, row.transform]) element('td', value, tr); table.append(tr); }
       article.append(table);
       detail('Identità delle righe e classificazione di accesso', { sourceObjectIdentityPolicy: config.sourceObjectIdentityPolicy, dataAccessPolicies: config.dataAccessPolicies }, article);
       detail('Confronto con gli oggetti esistenti e materializzazione', config.extractionProfile?.runtime?.udp, article);
+      if (card.publicationEffects) {
+        element('h3', 'Effetto della nuova pubblicazione', article);
+        element('p', card.publicationEffects.description, article);
+        detail('Versione di partenza della revisione', card.revisionBase, article);
+      }
       detail('Configurazione completa da approvare', config, article);
       if(card.progress?.activationProgress) detail('Avanzamento delle verifiche e tentativi disponibili', card.progress.activationProgress, article);
       if (card.onboardingState === 'APPROVED' && !card.progress?.ingestionCompatibilityObserved) element('p', 'Approvazione registrata. “Verifica e attiva” controlla la configurazione con Ingestion e confronta l’identità con gli oggetti esistenti prima di attivare.', article);
