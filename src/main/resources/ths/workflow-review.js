@@ -53,6 +53,11 @@
       article.append(table);
       detail('Identità delle righe e classificazione di accesso', { sourceObjectIdentityPolicy: config.sourceObjectIdentityPolicy, dataAccessPolicies: config.dataAccessPolicies }, article);
       detail('Confronto con gli oggetti esistenti e materializzazione', config.extractionProfile?.runtime?.udp, article);
+      if (card.publicationEffects) {
+        element('h3', 'Effetto della nuova pubblicazione', article);
+        element('p', card.publicationEffects.description, article);
+        detail('Versione di partenza della revisione', card.revisionBase, article);
+      }
       detail('Configurazione completa da approvare', config, article);
       if(card.progress?.activationProgress) detail('Avanzamento delle verifiche e tentativi disponibili', card.progress.activationProgress, article);
       if (card.onboardingState === 'APPROVED' && !card.progress?.ingestionCompatibilityObserved) element('p', 'Approvazione registrata. “Verifica e attiva” controlla la configurazione con Ingestion e confronta l’identità con gli oggetti esistenti prima di attivare.', article);
