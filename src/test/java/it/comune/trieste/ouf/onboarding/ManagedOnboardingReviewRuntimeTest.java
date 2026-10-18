@@ -89,6 +89,73 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThatThrownBy(()->onboarding.attestIngestionCompatibilityBound("review-test",version,"sha256:"+"0".repeat(64),true,"drift",workload,"c")).hasMessageContaining("Frozen configuration identity changed");
     assertThat(db.sql("select count(*) from ouf_onboarding.consumer_compatibility_attestation").query(Long.class).single()).isOne();
   }
+
+  private PrincipalContext workload(String tenant,PrincipalContext.ActorType type,Set<String> scopes){
+    return new PrincipalContext("test-workload",tenant,type,"test-ingestion","test-acr","https://issuer.example","test-audience",scopes,
+        new PrincipalContext.IdentityClaims(Set.of(),"test-acr",Set.of(),null));
+  }
+  @Test void workloadReadsOnlyAnExactlyApprovedManagedVersionWithinItsTenantAndPolicy(){
+    UUID version=draft();var p=principal("test-tenant","test-human");
+    var prepared=reviews.prepare(p,new ManagedOnboardingReviewService.Prepare("review-test",version,1,"prepare:one",null),"c");
+    UUID challenge=(UUID)prepared.get("challengeId");String hash=prepared.get("configurationHash").toString();
+    String read="ouf.onboarding.configuration.read";var service=workload("test-tenant",PrincipalContext.ActorType.SERVICE,Set.of(read));
+    assertThatThrownBy(()->reviews.ingestionConfiguration(service,"review-test",version,hash)).hasMessage("ONB_INGESTION_CONFIGURATION_DRIFT");
+    reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,2),"test-auth");
+    assertThat(reviews.ingestionConfiguration(service,"review-test",version,hash)).containsEntry("state","APPROVED").containsEntry("configuration_hash",hash);
+    assertThatThrownBy(()->reviews.ingestionConfiguration(workload("other-tenant",PrincipalContext.ActorType.SERVICE,Set.of(read)),"review-test",version,hash)).hasMessage("ONB_INGESTION_CONFIGURATION_DENIED");
+    for(var type:List.of(PrincipalContext.ActorType.HUMAN,PrincipalContext.ActorType.AI_AGENT))
+      assertThatThrownBy(()->reviews.ingestionConfiguration(workload("test-tenant",type,Set.of(read)),"review-test",version,hash)).hasMessage("ONB_INGESTION_CONFIGURATION_AUTHORITY_REQUIRED");
+    assertThatThrownBy(()->reviews.ingestionConfiguration(workload("test-tenant",PrincipalContext.ActorType.SERVICE,Set.of()),"review-test",version,hash)).hasMessage("ONB_INGESTION_CONFIGURATION_AUTHORITY_REQUIRED");
+    assertThatThrownBy(()->reviews.ingestionConfiguration(service,"review-test",version,"sha256:"+"0".repeat(64))).hasMessage("ONB_INGESTION_CONFIGURATION_DRIFT");
+    when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(false);
+    assertThatThrownBy(()->reviews.ingestionConfiguration(service,"review-test",version,hash)).hasMessage("ONB_INGESTION_CONFIGURATION_DENIED");
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_decision").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_onboarding.consumer_compatibility_attestation").query(Long.class).single()).isZero();
+  }
+  @Test void explicitHumanResumeRetainsApprovalBudgetAndFencesTheBlockedGeneration(){
+    UUID version=draft();var p=principal("test-tenant","test-human");
+    var prepared=reviews.prepare(p,new ManagedOnboardingReviewService.Prepare("review-test",version,1,"prepare:one",null),"c");
+    UUID challenge=(UUID)prepared.get("challengeId");String hash=prepared.get("configurationHash").toString();
+    var decision=new ManagedOnboardingReviewService.Decision(hash,3);
+    reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,2),"test-auth");
+    var first=reviews.claimActivation(p,challenge,decision);
+    reviews.activationFailure(first,"ONB_READINESS_DEPENDENCY_403",false);
+    var before=db.sql("select readiness_started_at,readiness_attempts from ouf_onboarding.managed_onboarding_review where challenge_id=:c").param("c",challenge).query().singleRow();
+    assertThatThrownBy(()->reviews.claimActivation(p,challenge,decision)).hasMessage("ONB_READINESS_BLOCKED");
+    var resume=new ManagedOnboardingReviewService.Resume(hash,3,first.generation(),"ONB_READINESS_DEPENDENCY_403");
+    assertThatThrownBy(()->reviews.resumeActivation(principal("other-tenant","test-human"),challenge,resume,"test-auth")).hasMessage("ONB_REVIEW_NOT_FOUND");
+    assertThat(reviews.resumeActivation(p,challenge,resume,"test-auth")).containsEntry("state","APPROVED").containsEntry("challengeStatus","CONFIRMED");
+    assertThat(db.sql("select readiness_started_at,readiness_attempts from ouf_onboarding.managed_onboarding_review where challenge_id=:c").param("c",challenge).query().singleRow()).isEqualTo(before);
+    assertThatThrownBy(()->reviews.resumeActivation(p,challenge,resume,"test-auth")).hasMessage("ONB_REVIEW_STALE_CARD");
+    reviews.activationFailure(first,"LATE_DENIAL",false);
+    assertThatThrownBy(()->reviews.finishActivation(p,first,"test-auth")).hasMessage("ONB_READINESS_LEASE_LOST");
+    var second=reviews.claimActivation(p,challenge,decision);
+    assertThat(second.generation()).isGreaterThan(first.generation());
+    assertThat(db.sql("select readiness_attempts from ouf_onboarding.managed_onboarding_review where challenge_id=:c").param("c",challenge).query(Integer.class).single()).isEqualTo(2);
+    assertThat(db.sql("select count(*) from ouf_onboarding.audit_event where event_type='READINESS_RESUME_REQUESTED'").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_decision").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
+  }
+  @Test void humanResumeCannotResetExhaustionOrUnknownAmbiguousFailures(){
+    UUID version=draft();var p=principal("test-tenant","test-human");
+    var prepared=reviews.prepare(p,new ManagedOnboardingReviewService.Prepare("review-test",version,1,"prepare:one",null),"c");
+    UUID challenge=(UUID)prepared.get("challengeId");String hash=prepared.get("configurationHash").toString();
+    reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,2),"test-auth");
+    var claim=reviews.claimActivation(p,challenge,new ManagedOnboardingReviewService.Decision(hash,3));
+    reviews.activationFailure(claim,"ONB_READINESS_OUTCOME_UNCONFIRMED",false);
+    assertThatThrownBy(()->reviews.resumeActivation(p,challenge,new ManagedOnboardingReviewService.Resume(hash,3,claim.generation(),"ONB_READINESS_OUTCOME_UNCONFIRMED"),"test-auth")).hasMessage("ONB_READINESS_RESUME_NOT_ALLOWED");
+    reviews.activationFailure(claim,"ONB_READINESS_DEPENDENCY_403",false);
+    var resume=new ManagedOnboardingReviewService.Resume(hash,3,claim.generation(),"ONB_READINESS_DEPENDENCY_403");
+    when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(false);
+    assertThatThrownBy(()->reviews.resumeActivation(p,challenge,resume,"test-auth")).hasMessage("ONB_REVIEW_AUTHORIZATION_DENIED");
+    when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(true);
+    db.sql("update ouf_onboarding.managed_onboarding_review set readiness_attempts=128 where challenge_id=:c").param("c",challenge).update();
+    assertThatThrownBy(()->reviews.resumeActivation(p,challenge,resume,"test-auth")).hasMessage("ONB_READINESS_BUDGET_EXHAUSTED");
+    db.sql("update ouf_onboarding.managed_onboarding_review set readiness_attempts=1,readiness_started_at=clock_timestamp()-interval '25 hours' where challenge_id=:c").param("c",challenge).update();
+    assertThatThrownBy(()->reviews.resumeActivation(p,challenge,resume,"test-auth")).hasMessage("ONB_READINESS_BUDGET_EXHAUSTED");
+    assertThat(db.sql("select readiness_phase from ouf_onboarding.managed_onboarding_review where challenge_id=:c").param("c",challenge).query(String.class).single()).isEqualTo("BLOCKED");
+  }
+
   @SuppressWarnings("unchecked") private UUID draft(){
     byte[] csv="id,name\n1,Test\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     UUID asset=(UUID)files.register(null,"object://fixture/review.csv",hashes.ofBytes(csv),"text/csv",csv.length,"test-human","retention://test").get("asset_id");

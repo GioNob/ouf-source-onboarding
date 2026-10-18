@@ -61,10 +61,14 @@ public class WorkflowThsApi {
     JsonNode proposed=json.readTree(body);
     if(proposed==null||!proposed.isObject())throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
     if("onboarding".equals(flow)){
-      if(!Set.of("confirm","reject","activate").contains(action)||proposed.size()!=2
+      if(!Set.of("confirm","reject","activate","resume").contains(action)||proposed.size()!=("resume".equals(action)?4:2)
           ||!proposed.hasNonNull("configurationHash")||!proposed.has("expectedVersion")
           ||!proposed.get("configurationHash").isTextual()||!proposed.get("configurationHash").asText().matches("sha256:[a-f0-9]{64}")
           ||!proposed.get("expectedVersion").isIntegralNumber()||!proposed.get("expectedVersion").canConvertToLong()||proposed.get("expectedVersion").asLong()<0)
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+      if("resume".equals(action)&&(!proposed.has("expectedGeneration")||!proposed.get("expectedGeneration").isIntegralNumber()
+          ||!proposed.get("expectedGeneration").canConvertToLong()||proposed.get("expectedGeneration").asLong()<1
+          ||!proposed.path("blockedCode").isTextual()||!"ONB_READINESS_DEPENDENCY_403".equals(proposed.get("blockedCode").asText())))
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
     }else{
       if(!"semantic".equals(flow)||!Set.of("decision","publish").contains(action))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");

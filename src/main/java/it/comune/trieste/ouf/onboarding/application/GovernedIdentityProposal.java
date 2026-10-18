@@ -17,7 +17,9 @@ final class GovernedIdentityProposal {
     if (!resolution.keySet().equals(Set.of("strategyId","strategyVersion","policyRef","governedIdentity"))
         || !"GOVERNED_IDENTITY".equals(resolution.get("strategyId"))
         || blank(resolution.get("strategyVersion"))) throw invalid();
-    Map<?,?> policy=map(raw, POLICY);
+    Set<String> fields=new HashSet<>(POLICY);
+    if(raw instanceof Map<?,?> candidate&&candidate.containsKey("distinctRules"))fields.add("distinctRules");
+    Map<?,?> policy=map(raw, fields);
     if (blank(policy.get("ref")) || blank(policy.get("version")) || blank(policy.get("tenantId"))
         || !Objects.equals(policy.get("ref"),resolution.get("policyRef"))
         || !Objects.equals(policy.get("version"),resolution.get("strategyVersion"))
@@ -47,6 +49,13 @@ final class GovernedIdentityProposal {
       if(!ids.add(id) || blank(rule.get("assertionRef")))throw invalid();
       List<?> members=list(rule.get("signalIds"),1,32);
       if(new HashSet<>(members).size()!=members.size() || !compared.containsAll(members))throw invalid();
+    }
+    if(policy.containsKey("distinctRules"))for(Object item:list(policy.get("distinctRules"),0,32)){
+      Map<?,?> rule=map(item,RULE);
+      String id=string(rule.get("id"));
+      if(!ids.add(id)||blank(rule.get("assertionRef")))throw invalid();
+      List<?> members=list(rule.get("signalIds"),2,32);
+      if(new HashSet<>(members).size()!=members.size()||!compared.containsAll(members))throw invalid();
     }
   }
   private static Map<?,?> map(Object value,Set<String> fields){
