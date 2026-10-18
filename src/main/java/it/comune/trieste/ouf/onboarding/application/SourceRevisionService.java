@@ -56,7 +56,7 @@ public class SourceRevisionService {
     out.put("propertyRules",properties(configuration(current)));
     out.put("publicationEffects",effects());return out;
   }
-  @Transactional public Map<String,Object> prepare(PrincipalContext p,Prepare r,String correlation){
+  @Transactional(timeout=8) public Map<String,Object> prepare(PrincipalContext p,Prepare r,String correlation){
     if(r==null)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
     authorize(p,PREPARE,"COMMAND",r.sourceId(),r.parentVersionId());
     if(r.commandKey()==null||!r.commandKey().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")

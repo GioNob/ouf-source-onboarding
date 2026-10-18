@@ -47,7 +47,7 @@
       const rows = mapping.propertyMappings || [];
       element('h3', 'Campi inclusi e corrispondenze', article);
       const table = document.createElement('table'), head = document.createElement('tr');
-      for (const name of ['Campo del file', 'Proprietà', 'Trasformazione']) element('th', name, head);
+      for (const name of ['Campo della fonte', 'Proprietà', 'Trasformazione']) element('th', name, head);
       table.append(head);
       for (const row of rows) { const tr = document.createElement('tr'); for (const value of [row.sourceField, row.targetPropertyIri, row.transform]) element('td', value, tr); table.append(tr); }
       article.append(table);
