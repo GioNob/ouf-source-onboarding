@@ -35,6 +35,8 @@ class SourceRevisionRuntimeTest {
     assertThat(first.get("publicationEffects")).isEqualTo(SourceRevisionService.effects());
     assertThat(revisions.prepare(p,command,"lost-response")).isEqualTo(first);
     assertThat(revisions.read(p,"s",next)).isEqualTo(first);
+    assertThat(revisions.readCommand(p,"s",parent,"revision-one")).isEqualTo(first);
+    assertThat(revisions.readCommand(p,"s",parent,"unknown-key")).containsEntry("commandState","ABSENT").containsEntry("newCommandAuthorized",false);
     assertThat(onboarding.version("s",parent)).isEqualTo(before);
     var config=configuration(next);assertThat(config.get("syncProfile")).isEqualTo(configuration(parent).get("syncProfile"));
     assertThat(config.get("semanticMapping")).isEqualTo(configuration(parent).get("semanticMapping"));

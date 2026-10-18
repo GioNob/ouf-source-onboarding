@@ -98,6 +98,15 @@ public class SourceRevisionService {
         .param("v",version).param("effect",r.publicationEffect()).update();
     return receipt(frozen,Map.of("parent_version_id",r.parentVersionId(),"parent_configuration_hash",r.configurationHash(),"onboarding_version_id",version));
   }
+  /** Lost-response reconciliation is keyed by the original command, never by an unknown new version ID. */
+  @Transactional public Map<String,Object> readCommand(PrincipalContext p,String source,UUID parent,String key){
+    authorize(p,READ,"READ",source,parent);
+    if(key==null||!key.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
+    var rows=db.sql("select * from ouf_onboarding.source_property_revision where tenant_id=:t and subject_id=:u and command_key=:k and source_id=:s and parent_version_id=:p")
+        .param("t",p.tenantId()).param("u",p.subjectId()).param("k",key).param("s",source).param("p",parent).query().listOfRows();
+    if(rows.isEmpty())return Map.of("sourceId",source,"parentVersionId",parent,"commandKey",key,"commandState","ABSENT","newCommandAuthorized",false);
+    var row=rows.getFirst();return receipt(onboarding.version(source,(UUID)row.get("onboarding_version_id")),row);
+  }
   private void lock(String value){db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:s,0))) locked").param("s",value).query(Integer.class).single();}
   private Map<String,Object> receipt(Map<String,Object> version,Map<String,Object> revision){
     var row=db.sql("select * from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:v")
