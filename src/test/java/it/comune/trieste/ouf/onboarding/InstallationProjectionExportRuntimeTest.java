@@ -69,7 +69,7 @@ class InstallationProjectionExportRuntimeTest {
 
     configurations.validateEnvironment(r1.installationId(), r1.revision(), lifecycleActor());
     configurations.validateEnvironment(r2.installationId(), r2.revision(), lifecycleActor());
-    configurations.activate(r1.installationId(), r1.revision(), lifecycleActor());
+    configurations.activate(r1.installationId(), r1.revision(), lifecycleActor(), InstallationConfigurationService.ExpectedActive.absent());
 
     var projection = exports.exportActive(
         r1.installationId(), OptionalLong.of(r1.revision()), exportActor("corr-export-1"));
