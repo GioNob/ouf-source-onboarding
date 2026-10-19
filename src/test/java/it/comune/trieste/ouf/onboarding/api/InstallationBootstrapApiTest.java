@@ -241,7 +241,7 @@ class InstallationBootstrapApiTest {
     var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new InstallationBootstrapApi(service))
         .addInterceptors(new org.springframework.web.servlet.HandlerInterceptor() {
           @Override public boolean preHandle(jakarta.servlet.http.HttpServletRequest req, jakarta.servlet.http.HttpServletResponse res, Object handler) {
-            TestAuthorization.bind(req, "human:installer", "HUMAN", Set.of("installation.configuration.read", "installation.configuration.activate"));
+            TestAuthorization.bind((MockHttpServletRequest) req, "human:installer", "HUMAN", Set.of("installation.configuration.read", "installation.configuration.activate"));
             TrustedWriteProof.markStatelessBearer(req); return true;
           }
         }).build();
