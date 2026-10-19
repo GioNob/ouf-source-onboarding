@@ -28,7 +28,7 @@ public class InstallationBootstrapApi {
     var active = configurations.active(id)
         .orElseThrow(() -> new ResponseStatusException(
             HttpStatus.NOT_FOUND, "INSTALLATION_ACTIVE_NOT_FOUND"));
-    return ResponseEntity.ok(active);
+    return ResponseEntity.ok().eTag(active.etag()).body(active);
   }
 
   @GetMapping("/{installationId}/revisions/{revision}")
@@ -61,6 +61,8 @@ public class InstallationBootstrapApi {
       return configurations.create(payload, actor);
     } catch (IllegalArgumentException e) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+    } catch (IllegalStateException e) {
+      throw lifecycleFailure(e);
     }
   }
 
@@ -86,10 +88,13 @@ public class InstallationBootstrapApi {
       @PathVariable String installationId,
       @PathVariable long revision,
       @RequestHeader(value = "X-Correlation-ID", required = false) String correlationId,
+      @RequestHeader(value = "If-Match", required = false) String ifMatch,
+      @RequestHeader(value = "If-None-Match", required = false) String ifNoneMatch,
       HttpServletRequest request) {
     var actor = actor(request, "installation.configuration.activate", correlationId);
+    var expected = expectedActive(ifMatch, ifNoneMatch);
     try {
-      return configurations.activate(safeInstallationId(installationId), revision, actor);
+      return configurations.activate(safeInstallationId(installationId), revision, actor, expected);
     } catch (NoSuchElementException e) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
     } catch (IllegalStateException e) {
@@ -102,17 +107,17 @@ public class InstallationBootstrapApi {
       @PathVariable String installationId,
       @PathVariable long revision,
       @RequestHeader(value = "X-Correlation-ID", required = false) String correlationId,
+      @RequestHeader(value = "If-Match", required = false) String ifMatch,
+      @RequestHeader(value = "If-None-Match", required = false) String ifNoneMatch,
       HttpServletRequest request) {
     var actor = actor(request, "installation.configuration.activate", correlationId);
     String id = safeInstallationId(installationId);
-    var current = configurations.active(id)
-        .orElseThrow(() -> new ResponseStatusException(
-            HttpStatus.CONFLICT, "INSTALLATION_ROLLBACK_REQUIRES_ACTIVE"));
-    if (revision >= current.revision())
+    var expected = expectedActive(ifMatch, ifNoneMatch);
+    if (expected.revision() == 0 || revision >= expected.revision())
       throw new ResponseStatusException(
           HttpStatus.CONFLICT, "INSTALLATION_ROLLBACK_TARGET_NOT_OLDER");
     try {
-      return configurations.activate(id, revision, actor);
+      return configurations.activate(id, revision, actor, expected);
     } catch (NoSuchElementException e) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
     } catch (IllegalStateException e) {
@@ -126,12 +131,17 @@ public class InstallationBootstrapApi {
       @PathVariable String installationId,
       @PathVariable long revision,
       @RequestHeader(value = "X-Correlation-ID", required = false) String correlationId,
+      @RequestHeader(value = "If-Match", required = false) String ifMatch,
+      @RequestHeader(value = "If-None-Match", required = false) String ifNoneMatch,
       HttpServletRequest request) {
     var actor = actor(request, "installation.configuration.activate", correlationId);
+    var expected = expectedActive(ifMatch, ifNoneMatch);
     try {
-      configurations.revoke(safeInstallationId(installationId), revision, actor);
+      configurations.revoke(safeInstallationId(installationId), revision, actor, expected);
     } catch (NoSuchElementException e) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+    } catch (IllegalStateException e) {
+      throw lifecycleFailure(e);
     }
   }
 
@@ -163,6 +173,21 @@ public class InstallationBootstrapApi {
     }
   }
 
+  private InstallationConfigurationService.ExpectedActive expectedActive(String ifMatch, String ifNoneMatch) {
+    if (ifMatch == null && ifNoneMatch == null)
+      throw new ResponseStatusException(HttpStatus.PRECONDITION_REQUIRED, "INSTALLATION_ACTIVE_PRECONDITION_REQUIRED");
+    if (ifMatch == null && "*".equals(ifNoneMatch))
+      return InstallationConfigurationService.ExpectedActive.absent();
+    if (ifNoneMatch != null || ifMatch == null || !ifMatch.matches("\"[1-9][0-9]{0,18}:[0-9a-f]{64}:[1-9][0-9]{0,18}\""))
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INSTALLATION_ACTIVE_PRECONDITION_INVALID");
+    try {
+      String[] parts = ifMatch.substring(1, ifMatch.length() - 1).split(":", -1);
+      return new InstallationConfigurationService.ExpectedActive(Long.parseLong(parts[0]), parts[1], Long.parseLong(parts[2]));
+    } catch (IllegalArgumentException error) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INSTALLATION_ACTIVE_PRECONDITION_INVALID");
+    }
+  }
+
   private String safeInstallationId(String value) {
     if (value == null || !value.matches("[A-Za-z0-9._-]{1,128}"))
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INSTALLATION_ID_INVALID");
@@ -171,7 +196,11 @@ public class InstallationBootstrapApi {
 
   private ResponseStatusException lifecycleFailure(IllegalStateException e) {
     HttpStatus status = switch (e.getMessage()) {
-      case "INSTALLATION_REVISION_NOT_VALIDATED",
+      case "INSTALLATION_ACTIVE_PRECONDITION_FAILED" -> HttpStatus.PRECONDITION_FAILED;
+      case "INSTALLATION_ACTIVE_PRECONDITION_REQUIRED" -> HttpStatus.PRECONDITION_REQUIRED;
+      case "INSTALLATION_CREATE_CORRELATION_CONFLICT", "INSTALLATION_CREATE_CORRELATION_AMBIGUOUS",
+           "INSTALLATION_REVISION_CHANGED_DURING_VALIDATION",
+           "INSTALLATION_REVISION_NOT_VALIDATED",
            "INSTALLATION_REVISION_REVOKED",
            "INSTALLATION_ENVIRONMENT_VALIDATION_REQUIRED" -> HttpStatus.CONFLICT;
       default -> HttpStatus.BAD_REQUEST;
