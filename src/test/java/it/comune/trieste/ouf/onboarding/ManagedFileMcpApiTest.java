@@ -73,9 +73,38 @@ class ManagedFileMcpApiTest {
     var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class));api.create(raw,request);
     var actor=org.mockito.ArgumentCaptor.forClass(it.comune.trieste.ouf.onboarding.application.OnboardingService.Actor.class);
     verify(files).onboardIdempotent(eq(asset),eq(profile),eq("cinema"),eq("Cinema"),eq("Comune"),eq("https://example.org/Cinema"),
-        eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"));
+        eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"),eq("tenant-a"));
     assertThat(actor.getValue().subject()).isEqualTo("human:alice");
     assertThat(actor.getValue().type()).isEqualTo("HUMAN_USER");
     assertThat(actor.getValue().capabilities()).containsExactly("ouf.managed-source.onboarding.create");
   }
+
+  @Test void ownedAssetListingUsesSignedTenantAndSubjectWithoutOpeningAnyAsset()throws Exception{
+    var files=mock(ManagedFileService.class);var receipts=mock(PermissionDelegationVerifier.class);
+    var json=new ObjectMapper();var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/preview");
+    var p=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.HUMAN,"mcp","1","issuer","aud",
+      Set.of("ouf.managed-source.preview"),new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
+    UUID cursor=UUID.randomUUID();byte[] raw=json.writeValueAsBytes(Map.of("Arguments",Map.of("view","ASSETS","limit",2,"afterAssetId",cursor.toString())));
+    when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.preview",raw)).thenReturn(new PermissionDelegationVerifier.Delegated(p,"read-only"));
+    when(files.ownedAssets("tenant-a","alice",2,cursor)).thenReturn(Map.of("items",java.util.List.of(),"hasMore",false));
+    var api=new ManagedFileMcpApi(receipts,files,json,mock(ManagedFileChatHandoff.class));
+    assertThat(api.preview(raw,request)).containsEntry("hasMore",false);
+    verify(files).ownedAssets("tenant-a","alice",2,cursor);verifyNoMoreInteractions(files);
+  }
+  @Test void ownerAssetQueryRejectsUnknownKeysCoercionAndUnboundedSelection()throws Exception{
+    var files=mock(ManagedFileService.class);var receipts=mock(PermissionDelegationVerifier.class);
+    var json=new ObjectMapper();var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/preview");
+    var p=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.HUMAN,"mcp","1","issuer","aud",
+      Set.of("ouf.managed-source.preview"),new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
+    when(receipts.verifyManagedFile(isNull(),eq(request.getRequestURI()),eq("ouf.managed-source.preview"),any()))
+      .thenReturn(new PermissionDelegationVerifier.Delegated(p,"read-only"));
+    var api=new ManagedFileMcpApi(receipts,files,json,mock(ManagedFileChatHandoff.class));
+    for(var args:java.util.List.of(Map.of("view","ASSETS","limit",0),Map.of("view","ASSETS","limit",51),Map.of("view","ASSETS","limit","2"),
+        Map.of("view","ASSETS","limit",1.5),Map.of("view","ASSETS","tenant","other"),Map.of("view","ASSETS","afterAssetId","not-a-uuid"))){
+      byte[] raw=json.writeValueAsBytes(Map.of("Arguments",args));
+      assertThatThrownBy(()->api.preview(raw,request)).isInstanceOf(IllegalArgumentException.class);
+    }
+    verifyNoInteractions(files);
+  }
+
 }
