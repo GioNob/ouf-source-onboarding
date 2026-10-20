@@ -13,6 +13,55 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class ManagedFileService {
+
+  private static Map<String,Object> managedMetadata(UUID asset,UUID profile,Object hash,String tenant){
+    var result=new LinkedHashMap<String,Object>();result.put("managedFileAssetId",asset.toString());
+    result.put("fileProfileId",profile.toString());result.put("contentHash",hash);
+    if(tenant!=null){if(tenant.isBlank()||tenant.length()>256)throw invalid("ONB_FILE_TENANT_INVALID","Explicit authenticated tenant required");result.put("managedTenantId",tenant);}
+    return result;
+  }
+  private static final String TENANT_OWNER_PREDICATE="""
+      a.uploaded_by=:subject and (
+        exists(select 1 from ouf_onboarding.managed_file_upload_attempt u where u.asset_id=a.asset_id and u.tenant_id=:tenant and u.subject_id=:subject)
+        or exists(select 1 from ouf_onboarding.source s join ouf_onboarding.managed_onboarding_review r on r.source_id=s.source_id
+          where s.metadata->>'managedFileAssetId'=a.asset_id::text and r.tenant_id=:tenant and r.subject_id=:subject
+          and (not(jsonb_exists(s.metadata,'managedTenantId')) or s.metadata->>'managedTenantId'=:tenant)))
+      """;
+  public void requireTenantOwner(UUID asset,String tenant,String subject){
+    if(tenant==null||tenant.isBlank()||subject==null||subject.isBlank())throw invalid("ONB_FILE_TENANT_INVALID","Explicit authenticated owner required");
+    if(db.sql("select 1 from ouf_onboarding.managed_file_asset a where a.asset_id=:asset and "+TENANT_OWNER_PREDICATE)
+        .param("asset",asset).param("tenant",tenant).param("subject",subject).query(Integer.class).optional().isEmpty())
+      throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_FILE_OWNER_SCOPE_UNPROVEN","Managed file owner scope is not proven");
+  }
+  /** Only durable tenant+subject proofs; legacy unbound assets are not inferred. */
+  public Map<String,Object> ownedAssets(String tenant,String subject,int limit,UUID after){
+    if(tenant==null||tenant.isBlank()||subject==null||subject.isBlank()||limit<1||limit>50)throw invalid("ONB_FILE_ASSET_QUERY_INVALID","Bounded authenticated owner query required");
+    if(after!=null)requireTenantOwner(after,tenant,subject);
+    var rows=db.sql("""
+        select a.asset_id,a.created_at,a.status,a.media_type,a.size_bytes,f.profile_id,
+          case when s.metadata->>'managedTenantId'=:tenant or
+            (not(jsonb_exists(s.metadata,'managedTenantId')) and exists(select 1 from ouf_onboarding.managed_onboarding_review r
+              where r.source_id=s.source_id and r.tenant_id=:tenant and r.subject_id=:subject))
+            then a.source_id else null end source_id
+        from ouf_onboarding.managed_file_asset a
+        left join ouf_onboarding.source s on s.source_id=a.source_id
+        left join lateral(select profile_id from ouf_onboarding.file_profile p where p.asset_id=a.asset_id order by version desc,profile_id desc limit 1) f on true
+        where
+        """+TENANT_OWNER_PREDICATE+" and (cast(:after as uuid) is null or a.asset_id>cast(:after as uuid)) order by a.asset_id limit :limit")
+      .param("tenant",tenant).param("subject",subject).param("after",new SqlParameterValue(Types.OTHER,after)).param("limit",limit+1).query().listOfRows();
+    boolean more=rows.size()>limit;var items=new ArrayList<Map<String,Object>>();
+    for(var row:rows.subList(0,Math.min(rows.size(),limit))){
+      var item=new LinkedHashMap<String,Object>();item.put("assetId",row.get("asset_id"));item.put("status",row.get("status"));
+      item.put("uploadedAt",row.get("created_at").toString());item.put("mediaType",row.get("media_type"));item.put("sizeBytes",row.get("size_bytes"));
+      if(row.get("profile_id")!=null)item.put("profileId",row.get("profile_id"));
+      if(row.get("source_id")!=null)item.put("sourceId",row.get("source_id"));items.add(item);
+    }
+    var result=new LinkedHashMap<String,Object>();result.put("items",items);result.put("hasMore",more);
+    if(more)result.put("nextAfterAssetId",items.getLast().get("assetId"));
+    result.put("scope","VERIFIED_TENANT_OWNER");result.put("historicalCoverage","UPLOAD_OR_REVIEW_RECEIPTS");
+    return result;
+  }
+
   public record FieldDecision(String fieldName,String extractionDecision,String dataAccessLabel,String targetPropertyIri,String transform,String vocabularyId,String vocabularyVersion,String valueMapRef){}
   private static final long MAX_PROFILE_BYTES=10L*1024*1024;
   private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ManagedFileProfiler profiler; private final TransactionTemplate tx; private final OnboardingService onboarding;
@@ -86,17 +135,21 @@ public class ManagedFileService {
   }
   /** A retry returns the original version identity; changed arguments cannot reuse the key. */
   public Map<String,Object> onboardIdempotent(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,List<String> semanticRefs,List<String> sourceObjectKeyFields,List<FieldDecision> decisions,String layer,OnboardingService.Actor actor,String correlation,String key){
+    return onboardIdempotent(assetId,profileId,sourceId,name,owner,targetClassIri,semanticRefs,sourceObjectKeyFields,decisions,layer,actor,correlation,key,null);
+  }
+  public Map<String,Object> onboardIdempotent(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,List<String> semanticRefs,List<String> sourceObjectKeyFields,List<FieldDecision> decisions,String layer,OnboardingService.Actor actor,String correlation,String key,String tenant){
     if(key==null||!key.matches("[A-Za-z0-9_.:-]{1,128}"))throw invalid("ONB_IDEMPOTENCY_KEY_INVALID","Invalid onboarding idempotency key");
-    String fingerprint=hashes.of(Arrays.asList(assetId,profileId,sourceId,name,owner,targetClassIri,semanticRefs,sourceObjectKeyFields,decisions,layer));
+    String fingerprint=hashes.of(tenant==null?Arrays.asList(assetId,profileId,sourceId,name,owner,targetClassIri,semanticRefs,sourceObjectKeyFields,decisions,layer):Arrays.asList(assetId,profileId,sourceId,name,owner,targetClassIri,semanticRefs,sourceObjectKeyFields,decisions,layer,tenant));
     return tx.execute(status->{
       requireOwner(assetId,actor.subject());
+      if(tenant!=null)requireTenantOwner(assetId,tenant,actor.subject());
       db.sql("insert into ouf_onboarding.managed_file_onboarding_attempt(asset_id,subject_id,idempotency_key,request_hash) values(:a,:s,:k,:h) on conflict do nothing")
           .param("a",assetId).param("s",actor.subject()).param("k",key).param("h",fingerprint).update();
       Map<String,Object> attempt=db.sql("select request_hash,source_id,onboarding_version_id from ouf_onboarding.managed_file_onboarding_attempt where asset_id=:a and subject_id=:s and idempotency_key=:k for update")
           .param("a",assetId).param("s",actor.subject()).param("k",key).query().singleRow();
       if(!fingerprint.equals(attempt.get("request_hash")))throw conflict("ONB_FILE_IDEMPOTENCY_CONFLICT","Idempotency key used for different onboarding arguments");
       if(attempt.get("onboarding_version_id")!=null)return draftIdentity(assetId,profileId,String.valueOf(attempt.get("source_id")),(UUID)attempt.get("onboarding_version_id"));
-      Map<String,Object> draft=onboard(assetId,profileId,sourceId,name,owner,targetClassIri,semanticRefs,sourceObjectKeyFields,decisions,layer,actor,correlation);
+      Map<String,Object> draft=onboard(assetId,profileId,sourceId,name,owner,targetClassIri,semanticRefs,sourceObjectKeyFields,decisions,layer,actor,correlation,tenant);
       UUID version=(UUID)draft.get("onboarding_version_id");
       db.sql("update ouf_onboarding.managed_file_onboarding_attempt set source_id=:s,onboarding_version_id=:v where asset_id=:a and subject_id=:u and idempotency_key=:k")
           .param("s",sourceId).param("v",version).param("a",assetId).param("u",actor.subject()).param("k",key).update();
@@ -108,7 +161,10 @@ public class ManagedFileService {
     return Map.of("assetId",asset,"profileId",profile,"sourceId",source,"onboardingVersionId",version,"state",current.get("state"));
   }
   public Map<String,Object> onboard(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,List<String> semanticRefs,List<String> sourceObjectKeyFields,List<FieldDecision> fieldDecisions,String selectedLayer,OnboardingService.Actor actor,String correlation){
-    return tx.execute(status->{Map<String,Object> asset=asset(assetId),profile=selectedProfile(fileProfile(assetId,profileId),selectedLayer);onboarding.createSource(sourceId,name,"INTERNAL_MANAGED","MANAGED",owner,Map.of("managedFileAssetId",assetId.toString(),"fileProfileId",profileId.toString(),"contentHash",asset.get("content_hash")),actor,correlation);db.sql("update ouf_onboarding.managed_file_asset set source_id=:s where asset_id=:a and source_id is null").param("s",sourceId).param("a",assetId).update();
+    return onboard(assetId,profileId,sourceId,name,owner,targetClassIri,semanticRefs,sourceObjectKeyFields,fieldDecisions,selectedLayer,actor,correlation,null);
+  }
+  public Map<String,Object> onboard(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,List<String> semanticRefs,List<String> sourceObjectKeyFields,List<FieldDecision> fieldDecisions,String selectedLayer,OnboardingService.Actor actor,String correlation,String tenant){
+    return tx.execute(status->{Map<String,Object> asset=asset(assetId),profile=selectedProfile(fileProfile(assetId,profileId),selectedLayer);onboarding.createSource(sourceId,name,"INTERNAL_MANAGED","MANAGED",owner,managedMetadata(assetId,profileId,asset.get("content_hash"),tenant),actor,correlation);db.sql("update ouf_onboarding.managed_file_asset set source_id=:s where asset_id=:a and source_id is null").param("s",sourceId).param("a",assetId).update();
       @SuppressWarnings("unchecked") List<Map<String,Object>> columns=(List<Map<String,Object>>)profile.get("inferred_schema");List<String> allNames=columns.stream().map(c->String.valueOf(c.get("name"))).toList();Map<String,FieldDecision> decisions=new LinkedHashMap<>();if(fieldDecisions!=null)for(FieldDecision d:fieldDecisions){if(!allNames.contains(d.fieldName())||decisions.put(d.fieldName(),d)!=null||!Set.of("INCLUDE","EXCLUDE").contains(d.extractionDecision())||!Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED").contains(d.dataAccessLabel()))throw invalid("ONB_FILE_FIELD_DECISION_INVALID","Field decisions must be unique, complete and use supported extraction/access values");}if(!decisions.isEmpty()&&!decisions.keySet().containsAll(allNames))throw invalid("ONB_FILE_FIELD_DECISION_INCOMPLETE","Every discovered field must be classified");List<String> names=decisions.isEmpty()?allNames:allNames.stream().filter(n->"INCLUDE".equals(decisions.get(n).extractionDecision())).toList();if(names.isEmpty())throw invalid("ONB_FILE_PROJECTION_EMPTY","At least one file field must be included");List<String> keys=sourceObjectKeyFields==null?List.of():List.copyOf(sourceObjectKeyFields);if(!names.containsAll(keys))throw invalid("ONB_FILE_IDENTITY_FIELD_INVALID","Every source-object key field must be included in the selected file profile");if(Set.of("GEOPACKAGE","ACCESS","SHAPEFILE").contains(profile.get("format"))&&(keys.isEmpty()||(profile.get("geometryColumn")!=null&&keys.contains(profile.get("geometryColumn")))||decisions.isEmpty()))throw invalid("ONB_GPKG_APPROVAL_REQUIRED","GeoPackage requires approved stable keys and field classifications");List<String> identityFields=keys.isEmpty()?List.of("$managedRowOrdinal"):keys;String identityStrategy=keys.isEmpty()?"MANAGED_DETERMINISTIC":keys.size()==1?"NATIVE_KEY":"COMPOSITE_NATIVE_KEY";Map<String,Object> identity=new LinkedHashMap<>();identity.put("strategy",identityStrategy);identity.put("sourceFields",identityFields);identity.put("normalizationRuleRef",keys.isEmpty()?"normalization://managed-file/asset-row-ordinal-v1":"normalization://managed-file/native-key-v1");identity.put("stabilityLimit",keys.isEmpty()?"Identity is unique per row inside the immutable asset and changes if rows are reordered":"Identity remains stable while the approved key fields remain stable");Map<String,Object> sync=Map.of("bootstrap","FULL_SNAPSHOT","incremental","NONE","pageSize",500);Map<String,Object> runtime=new LinkedHashMap<>();runtime.put("mode","MANAGED");runtime.put("recordModel","ONE_ROW_ONE_SOURCE_OBJECT");runtime.put("rowIdentityBasis",keys.isEmpty()?"ASSET_AND_ROW_ORDINAL":"APPROVED_SOURCE_FIELDS");runtime.put("stagingRef",asset.get("staging_ref"));runtime.put("contentHash",asset.get("content_hash"));runtime.put("assetId",assetId.toString());runtime.put("fileProfileId",profileId.toString());addCsvDialect(runtime,profile);if(Set.of("GEOPACKAGE","SHAPEFILE").contains(profile.get("format"))){runtime.put("recordModel","ONE_FEATURE_ONE_SOURCE_OBJECT");runtime.put("identityNormalization","GPKG_LENGTH_PREFIXED_V1");identity.put("normalizationRuleRef","normalization://managed-file/source-layer-key-v1");for(String key:List.of("layer","geometryColumn","sourceCrs","srsId"))runtime.put(key,profile.get(key));}if("ACCESS".equals(profile.get("format"))){runtime.put("layer",profile.get("layer"));runtime.put("format","ACCESS");runtime.put("identityNormalization","ACCESS_LENGTH_PREFIXED_V1");identity.put("normalizationRuleRef","normalization://managed-file/source-table-key-v1");}if("SHAPEFILE".equals(profile.get("format"))){runtime.put("format","SHAPEFILE");runtime.put("encoding",profile.get("encoding"));runtime.put("identityNormalization","SHP_LENGTH_PREFIXED_V1");}Map<String,Object> semanticTarget=semanticTarget(targetClassIri,semanticRefs);List<Map<String,Object>> propertyMappings=decisions.values().stream().filter(d->"INCLUDE".equals(d.extractionDecision())).map(d->Map.<String,Object>of("sourceField",d.fieldName(),"targetPropertyIri",required(d.targetPropertyIri(),"ONB_FILE_TARGET_PROPERTY_REQUIRED"),"transform",d.transform()==null?"IDENTITY":d.transform())).toList();List<Map<String,Object>> vocabularies=decisions.values().stream().filter(d->"INCLUDE".equals(d.extractionDecision())&&d.vocabularyId()!=null).map(d->Map.<String,Object>of("sourceField",d.fieldName(),"vocabularyId",required(d.vocabularyId(),"ONB_FILE_VOCABULARY_INVALID"),"vocabularyVersion",required(d.vocabularyVersion(),"ONB_FILE_VOCABULARY_INVALID"),"valueMapRef",required(d.valueMapRef(),"ONB_FILE_VOCABULARY_INVALID"))).toList();List<Map<String,Object>> access=decisions.isEmpty()?allNames.stream().map(n->Map.<String,Object>of("target",n,"label","OPEN","scope","PROPERTY")).toList():decisions.values().stream().filter(d->"INCLUDE".equals(d.extractionDecision())).map(d->Map.<String,Object>of("target",d.targetPropertyIri(),"label",d.dataAccessLabel(),"scope","PROPERTY")).toList();Map<String,Object> semantic=new LinkedHashMap<>();semantic.put("mappingId","sm-"+sourceId);semantic.put("sourceType",Map.of("sourceId",sourceId,"typeCode","FILE"));semantic.put("targetClasses",List.of(semanticTarget));semantic.put("propertyMappings",propertyMappings);semantic.put("vocabularyMappings",vocabularies);semantic.put("semanticRefs",semanticRefs);Map<String,Object> config=new LinkedHashMap<>();config.put("syncProfile",sync);config.put("sourceObjectIdentityPolicy",identity);config.put("changeRepresentationProfile",Map.of("mode","FULL_SNAPSHOT"));config.put("extractionProfile",Map.of("profileId","file-"+profileId,"version",String.valueOf(profile.get("version")),"sourceId",sourceId,"selection",Map.of("assetId",assetId.toString(),"fileProfileId",profileId.toString()),"projection",Map.of("FILE",names),"sync",sync,"runtime",runtime));config.put("semanticMapping",semantic);if("ACCESS".equals(profile.get("format")))config.put("sourceSchemaEvidence",Map.of("fileProfileRef","profile://managed-files/"+assetId+"/profiles/"+profileId,"contentHash",asset.get("content_hash"),"selectedTable",profile.get("layer"),"metadata",profile.get("metadata"),"status","EVIDENCE_ONLY"));config.put("dataAccessPolicies",access);config.put("bundle",Map.of("bundleId","bundle-"+sourceId,"bundleVersion","1.0.0","environment","managed","source",Map.of("sourceId",sourceId,"sourceKind","INTERNAL_MANAGED","acquisitionMode","MANAGED"),"schemaRef","profile://managed-files/"+assetId+"/profiles/"+profileId,"createdFromOnboardingVersion","pending","effectiveFrom","1970-01-01T00:00:00Z","checksum","sha256:pending","status","APPROVED","changeRepresentationProfile",Map.of("mode","FULL_SNAPSHOT")));Map<String,Object> draft=onboarding.createVersion(sourceId,config,actor,correlation);Map<String,Object> out=new LinkedHashMap<>(draft);out.put("managedFileAssetId",assetId);out.put("fileProfileId",profileId);out.put("runtimeTrigger","ACTIVE_BUNDLE");return out;});
   }
   @SuppressWarnings("unchecked") private Map<String,Object> selectedProfile(Map<String,Object> profile,String layer){
@@ -135,4 +191,3 @@ public class ManagedFileService {
   private static String required(String value,String code){if(value==null||value.isBlank())throw invalid(code,"Required field configuration is missing");return value;}
   private static Map<String,Object> jobView(Map<String,Object> row){Map<String,Object> out=new LinkedHashMap<>(row);out.put("jobId",row.get("job_id"));out.put("status","READY".equals(row.get("state"))?"QUEUED":row.get("state"));out.put("createdAt",row.get("created_at"));out.put("updatedAt",row.get("updated_at"));out.put("nextRetryAt",row.get("next_attempt_at"));out.put("resultRef",row.get("profile_id"));out.put("errorCode",row.get("error_code"));return out;}
 }
-

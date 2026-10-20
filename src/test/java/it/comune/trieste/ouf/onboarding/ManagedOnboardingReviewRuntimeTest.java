@@ -156,6 +156,29 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(db.sql("select readiness_phase from ouf_onboarding.managed_onboarding_review where challenge_id=:c").param("c",challenge).query(String.class).single()).isEqualTo("BLOCKED");
   }
 
+
+  @SuppressWarnings("unchecked") @Test void latestReadRecoversTheOwnerVersionWithoutNewChallengeOrApproval(){
+    UUID first=draft();
+    db.sql("update ouf_onboarding.source set metadata=metadata||cast(:m as jsonb) where source_id='review-test'").param("m","{\"managedTenantId\":\"test-tenant\"}").update();
+    var config=(Map<String,Object>)onboarding.version("review-test",first).get("configuration");
+    var next=onboarding.createVersion("review-test",config,human,"new-explicit-draft");UUID second=(UUID)next.get("onboarding_version_id");
+    var recovered=reviews.readLatest(principal("test-tenant","test-human"),"review-test");
+    assertThat(recovered).containsEntry("onboardingVersionId",second).containsEntry("state","DRAFT");
+    assertThat(recovered).doesNotContainKeys("configuration","stagingRef","credentialRef");
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_challenge").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_decision").query(Long.class).single()).isZero();
+    assertThatThrownBy(()->reviews.readLatest(principal("other-tenant","test-human"),"review-test")).hasMessage("ONB_REVIEW_OWNER_SCOPE_UNPROVEN");
+  }
+  @Test void latestReadCannotInferLegacyTenantOrBypassCurrentAuthorization(){
+    draft();var p=principal("test-tenant","test-human");
+    assertThatThrownBy(()->reviews.readLatest(p,"review-test")).hasMessage("ONB_REVIEW_OWNER_SCOPE_UNPROVEN");
+    assertThatThrownBy(()->reviews.readLatest(p,"unknown-source")).hasMessage("ONB_REVIEW_AUTHORIZATION_DENIED");
+    db.sql("update ouf_onboarding.source set metadata=metadata||cast(:m as jsonb) where source_id='review-test'").param("m","{\"managedTenantId\":\"test-tenant\"}").update();
+    when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(false);
+    assertThatThrownBy(()->reviews.readLatest(p,"review-test")).hasMessage("ONB_REVIEW_AUTHORIZATION_DENIED");
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_onboarding_review").query(Long.class).single()).isZero();
+  }
+
   @SuppressWarnings("unchecked") private UUID draft(){
     byte[] csv="id,name\n1,Test\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     UUID asset=(UUID)files.register(null,"object://fixture/review.csv",hashes.ofBytes(csv),"text/csv",csv.length,"test-human","retention://test").get("asset_id");

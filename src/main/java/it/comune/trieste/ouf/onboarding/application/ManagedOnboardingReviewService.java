@@ -117,6 +117,25 @@ public class ManagedOnboardingReviewService {
     return receipt(frozen,Map.of("challenge_id",challenge.get("challenge_id"),"configuration_hash",frozen.get("configuration_hash")));
   }
 
+
+  /** Resolve a current reference from owner state, not chatbot memory. */
+  @Transactional(readOnly=true) @SuppressWarnings("unchecked")
+  public Map<String,Object> readLatest(PrincipalContext p,String source){
+    if(source==null||!source.matches("[A-Za-z0-9_.:-]{1,160}"))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_ARGUMENTS_INVALID");
+    var rows=db.sql("select onboarding_version_id from ouf_onboarding.onboarding_version where source_id=:s order by version desc limit 1")
+      .param("s",source).query(UUID.class).list();
+    // No distinct not-found response before owner authorization.
+    if(rows.isEmpty())throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
+    UUID version=rows.getFirst();authorize(p,READ,"READ",source,version);
+    var metadata=(Map<String,Object>)onboarding.source(source).get("metadata");
+    boolean proven=metadata.containsKey("managedTenantId")
+      ?Objects.equals(metadata.get("managedTenantId"),p.tenantId())
+      :db.sql("select 1 from ouf_onboarding.managed_onboarding_review where source_id=:source and tenant_id=:tenant and subject_id=:subject limit 1")
+        .param("source",source).param("tenant",p.tenantId()).param("subject",p.subjectId()).query(Integer.class).optional().isPresent();
+    if(!proven)throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_OWNER_SCOPE_UNPROVEN");
+    return read(p,source,version);
+  }
+
   @Transactional public Map<String,Object> read(PrincipalContext p,String source,UUID version){
     authorize(p,READ,"READ",source,version);
     var current=ownedVersion(p,source,version);

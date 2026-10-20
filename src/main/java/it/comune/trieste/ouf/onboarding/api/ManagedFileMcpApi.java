@@ -56,7 +56,25 @@ public class ManagedFileMcpApi {
     return ResponseEntity.accepted().body(Map.of("jobId",job.get("jobId"),"status",job.get("status")));
   }
   @PostMapping("/preview") public Map<String,Object> preview(@RequestBody byte[] raw,HttpServletRequest request){
-    String owner=subject(raw,request,"ouf.managed-source.preview");
+    var caller=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),"ouf.managed-source.preview",raw);
+    String owner=caller.principal().subjectId();
+    try{
+      JsonNode selection=json.readTree(raw).required("Arguments");
+      if(selection.has("view")){
+        if(!selection.path("view").isTextual()||!"ASSETS".equals(selection.path("view").asText())||selection.size()>3)throw new IllegalArgumentException("invalid owner asset query");
+        for(var keys=selection.fieldNames();keys.hasNext();)if(!Set.of("view","limit","afterAssetId").contains(keys.next()))throw new IllegalArgumentException("invalid owner asset query");
+        int limit=20;
+        if(selection.has("limit")){if(!selection.get("limit").isIntegralNumber()||!selection.get("limit").canConvertToInt())throw new IllegalArgumentException("invalid owner asset limit");limit=selection.get("limit").intValue();}
+        if(limit<1||limit>50)throw new IllegalArgumentException("invalid owner asset limit");
+        UUID after=null;
+        if(selection.has("afterAssetId")){
+          if(!selection.get("afterAssetId").isTextual())throw new IllegalArgumentException("invalid owner asset cursor");
+          after=UUID.fromString(selection.get("afterAssetId").asText());
+          if(!after.toString().equals(selection.get("afterAssetId").asText()))throw new IllegalArgumentException("invalid owner asset cursor");
+        }
+        return files.ownedAssets(caller.principal().tenantId(),owner,limit,after);
+      }
+    }catch(IOException e){throw new IllegalArgumentException("invalid owner asset query",e);}
     JsonNode args;
     try {args=arguments(raw,"assetId","profileId");}
     catch(IllegalArgumentException ex){args=arguments(raw,"assetId","jobId");}
@@ -89,7 +107,7 @@ public class ManagedFileMcpApi {
       List<ManagedFileService.FieldDecision> fields=draft.fields().stream()
           .map(f->new ManagedFileService.FieldDecision(f.fieldName(),f.extractionDecision(),f.dataAccessLabel(),f.targetPropertyIri(),f.transform(),f.vocabularyId(),f.vocabularyVersion(),f.valueMapRef())).toList();
       return files.onboardIdempotent(draft.assetId(),draft.profileId(),draft.sourceId(),draft.name(),draft.owner(),draft.targetClassIri(),
-          draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey());
+          draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey(),delegated.principal().tenantId());
     }catch(IOException e){throw new IllegalArgumentException("invalid draft arguments",e);}
   }
   @ExceptionHandler(SecurityException.class) ResponseEntity<?> denied(){
