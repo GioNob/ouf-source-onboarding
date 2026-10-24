@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: GioNob/ouf-deploy
-          ref: 025f9518f38db2c0242bdfb5881c8c9bc03cccc8
+          ref: 7a496e65b7d55085ebae04dedec099eea59c60eb
           path: deployment
           persist-credentials: false
       - name: Actual deployed B0 source for disposable old application
