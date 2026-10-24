@@ -222,7 +222,10 @@ class ManagedOnboardingReviewRuntimeTest {
     var config=(Map<String,Object>)onboarding.version("review-test",version).get("configuration");
     var runtime=(Map<String,Object>)((Map<String,Object>)config.get("extractionProfile")).get("runtime");
     runtime.put("execution",Map.of("acquisitionMode","INTERNAL_MANAGED_CSV","adapterId","managed-csv","adapterRuntimeVersion","1","sourceSchemaRef","test-schema","sourceSchemaId","test-schema","sourceSchemaVersion","1","semanticPublicationSetRef","test-set","adapterProfileRef","test-profile","observationPolicy","CONTENT_HASH"));
-    runtime.put("udp",Map.of("resolution",Map.of("strategyId","EXACT_SOURCE_KEY"),"materialization",Map.of("policyRef","test-policy")));
+    // Declared legacy fixture contract, not the target GOVERNED_IDENTITY profile.
+    runtime.put("udp",Map.of("resolution",Map.of("strategyId","EXACT_SOURCE_KEY","strategyVersion","1",
+        "policyRef","test-resolution-policy","canonicalType","urn:test:Object",
+        "canonicalKeyProperty","urn:test:id","matchProperty","urn:test:id"),"materialization",Map.of("policyRef","test-policy")));
     config.put("semanticReferenceBindings",List.of(Map.of("semanticId","test","semanticVersion","1","revisionId","test-revision","publicationSetId","test-set")));
     onboarding.patchVersion("review-test",version,0,config,human,"test-complete-configuration");return version;
   }
