@@ -3,6 +3,9 @@ ALTER TABLE ouf_onboarding.managed_onboarding_review
   DROP CONSTRAINT managed_onboarding_review_readiness_attempts_check,
   ADD CONSTRAINT managed_review_cumulative_attempts_nonnegative CHECK (readiness_attempts >= 0),
   ADD COLUMN readiness_session_id uuid;
+ALTER TABLE ouf_onboarding.managed_onboarding_review
+  ADD CONSTRAINT managed_review_legacy_attempt_limit
+  CHECK (readiness_session_id IS NOT NULL OR readiness_attempts <= 128);
 
 CREATE TABLE ouf_onboarding.managed_readiness_budget_session (
   session_id uuid PRIMARY KEY,

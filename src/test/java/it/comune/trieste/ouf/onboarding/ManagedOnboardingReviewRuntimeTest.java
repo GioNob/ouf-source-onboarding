@@ -116,6 +116,21 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(progress(next.progress())).containsEntry("cumulativeAttempts",4).containsEntry("sessionAttempts",1L);
     assertThat(next.generation()).isEqualTo(6);
   }
+  @Test void explicitActivationAfterNewSessionPublishesOnceAndReconcilesARepeatedCompletion(){
+    var e=exhausted();reviews.grantReadinessBudget(e.principal(),e.challenge(),budget(e,"grant:activate",4));
+    var workload=new OnboardingService.Actor("test-ingestion","SERVICE",Set.of("ouf.ingestion.configuration.attest","ouf.onboarding.configuration.read"));
+    onboarding.attestIngestionCompatibilityBound("review-test",e.version(),e.hash(),true,"Exact fixture compatibility",workload,"session-compatibility");
+    var decision=new ManagedOnboardingReviewService.Decision(e.hash(),3);
+    var claim=reviews.claimActivation(e.principal(),e.challenge(),decision);
+    reviews.activationPhase(claim,"CHECKING_IDENTITY");reviews.activationPhase(claim,"ACTIVATING");
+    var completed=reviews.finishActivation(e.principal(),claim,"test-auth");
+    assertThat(completed).containsEntry("state","ACTIVE").containsKey("publication");
+    assertThat(db.sql("select state from ouf_onboarding.managed_readiness_budget_session").query(String.class).single()).isEqualTo("COMPLETED");
+    assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration where onboarding_version_id=:v").param("v",e.version()).query(Long.class).single()).isOne();
+    assertThat(reviews.claimActivation(e.principal(),e.challenge(),decision).reconciled()).isTrue();
+    assertThat(progress(reviews.read(e.principal(),"review-test",e.version()))).containsEntry("cumulativeAttempts",4);
+    assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isOne();
+  }
   @Test void lostGrantResponseAndConcurrentHumanCommandsCreateOneSession()throws Exception{
     var e=exhausted();var command=budget(e,"grant:concurrent",4);
     try(var pool=java.util.concurrent.Executors.newFixedThreadPool(2)){

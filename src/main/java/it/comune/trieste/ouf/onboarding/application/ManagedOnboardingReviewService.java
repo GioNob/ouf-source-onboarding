@@ -180,7 +180,7 @@ public class ManagedOnboardingReviewService {
           b.base_attempts session_base_attempts,b.maximum_attempts session_maximum_attempts,
           b.maximum_elapsed_seconds session_maximum_seconds,b.issued_at session_issued_at,
           b.expires_at session_expires_at,b.state session_state,b.decision_ref,
-          (r.readiness_session_id is null or (b.session_id is not null
+          ((r.readiness_session_id is null and r.readiness_attempts between 0 and 128) or (b.session_id is not null
             and r.readiness_attempts>=b.base_attempts and b.configuration_hash=r.configuration_hash)) budget_lineage_valid,
           case when r.readiness_session_id is null
             then r.readiness_started_at+interval '24 hours'
