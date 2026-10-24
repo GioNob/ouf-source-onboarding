@@ -132,7 +132,7 @@ class ManagedOnboardingReviewRuntimeTest {
     var second=reviews.claimActivation(p,challenge,decision);
     assertThat(second.generation()).isGreaterThan(first.generation());
     assertThat(db.sql("select readiness_attempts from ouf_onboarding.managed_onboarding_review where challenge_id=:c").param("c",challenge).query(Integer.class).single()).isEqualTo(2);
-    assertThat(db.sql("select count(*) from ouf_onboarding.audit_event where event_type='READINESS_RESUME_REQUESTED'").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_onboarding.audit_event where event_type='READINESS_RESUME_REQUESTED' and onboarding_version_id=:v").param("v",version).query(Long.class).single()).isOne();
     assertThat(db.sql("select count(*) from ouf_onboarding.approval_decision").query(Long.class).single()).isOne();
     assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
   }

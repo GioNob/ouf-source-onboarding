@@ -99,7 +99,7 @@ class SourceRevisionRuntimeTest {
     assertThat(revisions.prepare(p,command(parent,"key",rule()),"reconcile")).containsEntry("onboardingVersionId",next);
   }
 
-  @Test void finiteReadinessBudgetKeepsTheSourceRevisionParentJournalAndPublicationEffect(){
+  @Test void finiteReadinessBudgetCannotBroadenNonManagedSourceRevisionAuthority(){
     UUID parent=active();var p=principal("test-tenant","test-human");
     var first=revisions.prepare(p,command(parent,"finite-revision",rule()),"c");
     UUID next=(UUID)first.get("onboardingVersionId"),challenge=(UUID)first.get("challengeId");
@@ -108,12 +108,14 @@ class SourceRevisionRuntimeTest {
     db.sql("update ouf_onboarding.managed_onboarding_review set readiness_started_at=clock_timestamp()-interval '25 hours',readiness_attempts=3,readiness_generation=4,readiness_phase='PAUSED',readiness_last_code='ONB_READINESS_DEPENDENCY_503' where challenge_id=:c").param("c",challenge).update();
     var journal=db.sql("select to_jsonb(r)::text from ouf_onboarding.source_property_revision r").query(String.class).single();
     var parentBefore=onboarding.version("s",parent);
-    reviews.grantReadinessBudget(p,challenge,new ManagedOnboardingReviewService.BudgetDecision(hash,3,4,"finite-revision-budget","Exact dependency recovery verified",3,900));
+    assertThatThrownBy(()->reviews.grantReadinessBudget(p,challenge,new ManagedOnboardingReviewService.BudgetDecision(hash,3,4,"finite-revision-budget","Exact dependency recovery verified",3,900)))
+        .hasMessage("ONB_REVIEW_MANAGED_SOURCE_REQUIRED");
     assertThat(db.sql("select to_jsonb(r)::text from ouf_onboarding.source_property_revision r").query(String.class).single()).isEqualTo(journal);
     assertThat(onboarding.version("s",parent)).isEqualTo(parentBefore);
     assertThat(revisions.read(p,"s",next)).containsEntry("parentVersionId",parent).containsEntry("publicationEffects",SourceRevisionService.effects());
     assertThat(db.sql("select count(*) from ouf_onboarding.onboarding_version").query(Long.class).single()).isEqualTo(2);
     assertThat(db.sql("select count(*) from ouf_onboarding.approval_decision").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_readiness_budget_session").query(Long.class).single()).isZero();
     assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
     db.sql("update ouf_onboarding.onboarding_version set state='SUPERSEDED',lock_version=lock_version+1 where onboarding_version_id=:v").param("v",parent).update();
     assertThatThrownBy(()->onboarding.activate("s",next,human,"c")).hasMessage("ONB_REVISION_PARENT_DRIFT");
