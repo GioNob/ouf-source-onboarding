@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: GioNob/ouf-deploy
-          ref: 4cc62e49539a8e52a823ac5cba95bf92d64613fd
+          ref: d009793036dcea0f24ac10087818d8c0cd14f32e
           path: deployment
           persist-credentials: false
       - name: Actual deployed B0 source for disposable old application
@@ -55,10 +55,11 @@ jobs:
           sudo chown -R root:root /root/ouf-v35-native-ci
           sudo find /root/ouf-v35-native-ci/package -type d -exec chmod 0700 {} +
           sudo find /root/ouf-v35-native-ci/package -type f -exec chmod 0400 {} +
-      - name: Signed PTY actual image import backup Flyway source preservation and SIGKILL quarantine
+      - name: Reproduce failed Hostname create and recover same candidate with one SQL session
         run: |
           sudo env OUF_NATIVE_V35_APPLY=1 OUF_V35_OLD_IMAGE=ouf-v35-old-fixture:ci OUF_V35_HOLD_IMAGE=ouf-v35-peer-fixture:ci \
             OUF_V35_TEST_PACKAGE=/root/ouf-v35-native-ci/package \
             /usr/bin/python3 -I -B -S -m unittest discover \
             -s /root/ouf-v35-native-ci/repository/tools/ingestion_readiness_patch_execution/tests \
-            -p test_onboarding_v35_native_apply.py -v
+            -p test_onboarding_v35_existing_create_recovery.py -v
+          sudo /usr/bin/python3 -I -B -S -m unittest discover -s /root/ouf-v35-native-ci/repository/tests -p test_onboarding_v35_main_failure.py -v
