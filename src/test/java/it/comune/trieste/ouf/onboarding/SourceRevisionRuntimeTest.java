@@ -98,6 +98,30 @@ class SourceRevisionRuntimeTest {
     // A read/exact replay reconciles the existing command; it does not clone or renew the expired review.
     assertThat(revisions.prepare(p,command(parent,"key",rule()),"reconcile")).containsEntry("onboardingVersionId",next);
   }
+
+  @Test void finiteReadinessBudgetCannotBroadenNonManagedSourceRevisionAuthority(){
+    UUID parent=active();var p=principal("test-tenant","test-human");
+    var first=revisions.prepare(p,command(parent,"finite-revision",rule()),"c");
+    UUID next=(UUID)first.get("onboardingVersionId"),challenge=(UUID)first.get("challengeId");
+    String hash=first.get("configurationHash").toString();
+    reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,2),"test-auth");
+    db.sql("update ouf_onboarding.managed_onboarding_review set readiness_started_at=clock_timestamp()-interval '25 hours',readiness_attempts=3,readiness_generation=4,readiness_phase='PAUSED',readiness_last_code='ONB_READINESS_DEPENDENCY_503' where challenge_id=:c").param("c",challenge).update();
+    var journal=db.sql("select to_jsonb(r)::text from ouf_onboarding.source_property_revision r").query(String.class).single();
+    var parentBefore=onboarding.version("s",parent);
+    assertThatThrownBy(()->reviews.grantReadinessBudget(p,challenge,new ManagedOnboardingReviewService.BudgetDecision(hash,3,4,"finite-revision-budget","Exact dependency recovery verified",3,900)))
+        .hasMessage("ONB_REVIEW_MANAGED_SOURCE_REQUIRED");
+    assertThat(db.sql("select to_jsonb(r)::text from ouf_onboarding.source_property_revision r").query(String.class).single()).isEqualTo(journal);
+    assertThat(onboarding.version("s",parent)).isEqualTo(parentBefore);
+    assertThat(revisions.read(p,"s",next)).containsEntry("parentVersionId",parent).containsEntry("publicationEffects",SourceRevisionService.effects());
+    assertThat(db.sql("select count(*) from ouf_onboarding.onboarding_version").query(Long.class).single()).isEqualTo(2);
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_decision").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_readiness_budget_session").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
+    db.sql("update ouf_onboarding.onboarding_version set state='SUPERSEDED',lock_version=lock_version+1 where onboarding_version_id=:v").param("v",parent).update();
+    assertThatThrownBy(()->onboarding.activate("s",next,human,"c")).hasMessage("ONB_REVISION_PARENT_DRIFT");
+    assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
+  }
+
   private SourceRevisionService.Prepare command(UUID parent,String key,Map<String,Object> rule){return new SourceRevisionService.Prepare("s",parent,0,String.valueOf(onboarding.version("s",parent).get("configuration_hash")),key,SourceRevisionService.EFFECT,List.of(new SourceRevisionService.Change("urn:name","urn:name",rule)));}
   static Map<String,Object> rule(){return Map.of("policyRef","urn:ouf:policy:linked-object-property-reconciliation:v1","cardinality","SINGLE","normalizerRef","EXACT_TYPED","normalizerVersion",1,"validity","SOURCE_INTERVAL");}
   @SuppressWarnings("unchecked") private Map<String,Object> configuration(UUID version){return (Map<String,Object>)onboarding.version("s",version).get("configuration");}
@@ -116,3 +140,4 @@ class SourceRevisionRuntimeTest {
   }
   private static String required(String name){return Objects.requireNonNull(System.getenv(name),name+" required");}
 }
+

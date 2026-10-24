@@ -1,0 +1,65 @@
+name: Qualify pinned V35 native deployment core
+on:
+  push:
+    branches: [fix/managed-readiness-finite-budget-20261024]
+    paths: [.github/workflows/qualify-v35-native-deploy.yml]
+  pull_request:
+    paths: [.github/workflows/qualify-v35-native-deploy.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: v35-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  exact-image-native-effects:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Pinned deployment implementation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-deploy
+          ref: 45842a2dd38a1fde1b25052d5118b9fd9621cb62
+          path: deployment
+          persist-credentials: false
+      - name: Actual deployed B0 source for disposable old application
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-source-onboarding
+          ref: b0f5e3dacbe59ebf87e22dd6af2575e41249f51d
+          path: old-source
+          persist-credentials: false
+      - name: Download original qualified artifact only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir package
+          gh api repos/GioNob/ouf-source-onboarding/actions/artifacts/12559990549/zip > package/package.zip
+          python3 -I -B -S deployment/scripts/verify-onboarding-v35-artifact-20261024.py "$PWD/package"
+          cp deployment/releases/onboarding-v35-image-source-contract-20261024.json package/source-contract.json
+      - name: Disposable B0 and independent peer images
+        run: |
+          docker build --label org.opencontainers.image.revision=b0f5e3dacbe59ebf87e22dd6af2575e41249f51d -t ouf-v35-old-fixture:ci old-source
+          mkdir hold
+          printf '#include <unistd.h>\nint main(void){for(;;)sleep(60);}\n' > hold/hold.c
+          gcc -static -Os -o hold/hold hold/hold.c
+          printf 'FROM scratch\nCOPY hold /hold\nUSER 10003:10003\nENTRYPOINT ["/hold"]\n' > hold/Dockerfile
+          docker build -q -t ouf-v35-peer-fixture:ci hold
+          docker pull postgres:17
+      - name: Root custody and exact original package bytes
+        run: |
+          sudo install -d -m 0700 /root/ouf-v35-native-ci
+          sudo cp -a deployment /root/ouf-v35-native-ci/repository
+          sudo cp -a package /root/ouf-v35-native-ci/package
+          sudo chown -R root:root /root/ouf-v35-native-ci
+          sudo find /root/ouf-v35-native-ci/package -type d -exec chmod 0700 {} +
+          sudo find /root/ouf-v35-native-ci/package -type f -exec chmod 0400 {} +
+      - name: Reproduce failed Hostname create and recover same candidate with one SQL session
+        run: |
+          sudo env OUF_NATIVE_V35_APPLY=1 OUF_V35_OLD_IMAGE=ouf-v35-old-fixture:ci OUF_V35_HOLD_IMAGE=ouf-v35-peer-fixture:ci \
+            OUF_V35_TEST_PACKAGE=/root/ouf-v35-native-ci/package \
+            /usr/bin/python3 -I -B -S -m unittest discover \
+            -s /root/ouf-v35-native-ci/repository/tools/ingestion_readiness_patch_execution/tests \
+            -p test_onboarding_v35_existing_create_recovery.py -v
+          sudo /usr/bin/python3 -I -B -S -m unittest discover -s /root/ouf-v35-native-ci/repository/tests -p test_onboarding_v35_main_failure.py -v
