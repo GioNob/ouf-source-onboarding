@@ -146,6 +146,7 @@ public class ManagedOnboardingReviewService {
       value.put("sessionId",budget.get("readiness_session_id"));value.put("decisionRef",budget.get("decision_ref"));
       value.put("budgetExpiresAt",budget.get("budget_deadline"));
       value.put("budgetExhausted",Boolean.TRUE.equals(budget.get("budget_exhausted")));
+      value.put("counterLineageVerified",Boolean.TRUE.equals(budget.get("budget_lineage_valid")));
       value.put("humanBudgetGrantAvailable","APPROVED".equals(current.get("state"))&&renewalAvailable(budget));
       value.put("newBudgetProfile",Map.of("profile","managed-review-recovery.v1","maximumAttempts",3,"maximumElapsedSeconds",900));
       value.put("requiresAuthenticatedHumanResume",true);result.put("activationProgress",value);
@@ -179,6 +180,8 @@ public class ManagedOnboardingReviewService {
           b.base_attempts session_base_attempts,b.maximum_attempts session_maximum_attempts,
           b.maximum_elapsed_seconds session_maximum_seconds,b.issued_at session_issued_at,
           b.expires_at session_expires_at,b.state session_state,b.decision_ref,
+          (r.readiness_session_id is null or (b.session_id is not null
+            and r.readiness_attempts>=b.base_attempts and b.configuration_hash=r.configuration_hash)) budget_lineage_valid,
           case when r.readiness_session_id is null
             then r.readiness_started_at+interval '24 hours'
             else b.expires_at end budget_deadline,
@@ -193,7 +196,7 @@ public class ManagedOnboardingReviewService {
         """).param("c",challenge).query().singleRow();
   }
   private static boolean renewalAvailable(Map<String,Object> state){
-    return Boolean.TRUE.equals(state.get("budget_exhausted"))
+    return Boolean.TRUE.equals(state.get("budget_lineage_valid")) && Boolean.TRUE.equals(state.get("budget_exhausted"))
         && !Boolean.TRUE.equals(state.get("leased")) && !Boolean.TRUE.equals(state.get("delayed"))
         && Set.of("PAUSED","EXHAUSTED").contains(state.get("readiness_phase"))
         && transientReadinessCode(state.get("readiness_last_code"));
@@ -270,6 +273,7 @@ public class ManagedOnboardingReviewService {
     if(!"APPROVED".equals(current.get("state"))||!"CONFIRMED".equals(onboarding.approvalCard(challenge).get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_APPROVAL_REQUIRED");
     if(((Number)current.get("lock_version")).longValue()!=decision.expectedVersion())throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
     var state=budgetState(challenge);
+    if(!Boolean.TRUE.equals(state.get("budget_lineage_valid")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_COUNTER_LINEAGE_UNPROVEN");
     if(Boolean.TRUE.equals(state.get("leased")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_IN_PROGRESS");
     if("BLOCKED".equals(state.get("readiness_phase")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_BLOCKED");
     if(Boolean.TRUE.equals(state.get("budget_exhausted"))){

@@ -157,6 +157,20 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_onboarding.managed_readiness_budget_session where state='ACTIVE'").query(Long.class).single()).isOne();
     assertThat(progress(reviews.claimActivation(e.principal(),e.challenge(),activation).progress())).containsEntry("cumulativeAttempts",7);
   }
+  @Test void cumulativeCountCanPassLegacy128ButCanNeverRegressBelowSessionFloor(){
+    var e=exhausted();
+    db.sql("update ouf_onboarding.managed_onboarding_review set readiness_attempts=128 where challenge_id=:c").param("c",e.challenge()).update();
+    var command=budget(e,"grant:past128",4);reviews.grantReadinessBudget(e.principal(),e.challenge(),command);
+    var claim=reviews.claimActivation(e.principal(),e.challenge(),new ManagedOnboardingReviewService.Decision(e.hash(),3));
+    assertThat(progress(claim.progress())).containsEntry("cumulativeAttempts",129).containsEntry("sessionAttempts",1L);
+    reviews.activationFailure(claim,"ONB_READINESS_DEPENDENCY_503",true);
+    db.sql("update ouf_onboarding.managed_onboarding_review set readiness_attempts=127,readiness_next_at=null where challenge_id=:c").param("c",e.challenge()).update();
+    assertThatThrownBy(()->reviews.claimActivation(e.principal(),e.challenge(),new ManagedOnboardingReviewService.Decision(e.hash(),3))).hasMessage("ONB_READINESS_COUNTER_LINEAGE_UNPROVEN");
+    db.sql("update ouf_onboarding.managed_readiness_budget_session set issued_at=issued_at-interval '1 hour',expires_at=expires_at-interval '1 hour'").update();
+    long generation=((Number)progress(reviews.read(e.principal(),"review-test",e.version())).get("readiness_generation")).longValue();
+    assertThatThrownBy(()->reviews.grantReadinessBudget(e.principal(),e.challenge(),budget(e,"grant:regressed",generation))).hasMessage("ONB_READINESS_BUDGET_RECONCILIATION_REQUIRED");
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_readiness_budget_session").query(Long.class).single()).isOne();
+  }
   @Test void expiredSessionCannotBeExtendedBySameKeyOrRestartedController(){
     var e=exhausted();var key=budget(e,"grant:expired",4);reviews.grantReadinessBudget(e.principal(),e.challenge(),key);
     db.sql("update ouf_onboarding.managed_readiness_budget_session set issued_at=issued_at-interval '1 hour',expires_at=expires_at-interval '1 hour'").update();
