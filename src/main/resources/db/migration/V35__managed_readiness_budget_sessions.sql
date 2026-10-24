@@ -39,3 +39,4 @@ ALTER TABLE ouf_onboarding.managed_onboarding_review
   ADD CONSTRAINT managed_readiness_same_challenge_session
   FOREIGN KEY (readiness_session_id, challenge_id)
   REFERENCES ouf_onboarding.managed_readiness_budget_session(session_id, challenge_id);
+

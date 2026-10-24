@@ -48,12 +48,43 @@ public class ConfigurationValidator {
       if("DELTA_PATCH".equals(mode)){Optional<Map<String,Object>> delta=object(configuration,"deltaPatchContract");if(delta.isEmpty())delta=object(configuration,"bundle").flatMap(b->object(b,"deltaPatchContract"));if(delta.isEmpty())error(out,"ONB_DELTA_CONTRACT_REQUIRED","/deltaPatchContract","DELTA_PATCH requires a compiled logical contract");else validateDelta(delta.get(),out);}
     });
     validateWeightedIdentity(configuration,out);
+    validateLinkedProperties(configuration,out);
     validateManagedPublication(configuration,out);
     validateGovernedIdentity(configuration,sourceId,out);
     validateGeoPackageAndRelationships(configuration,out);
     spatial(configuration).ifPresent(profile->validateSpatial(profile,out));
     if(out.isEmpty()) out.add(new Finding("INFO","ONB_CONFIGURATION_VALID","/","Configuration satisfies the executable onboarding validation profile"));
     return new Result(List.copyOf(out));
+  }
+
+  private static void validateLinkedProperties(Map<String,Object> configuration,List<Finding> out){
+    var udp=object(configuration,"extractionProfile").flatMap(e->object(e,"runtime")).flatMap(r->object(r,"udp")).orElse(Map.of());
+    var profile=object(udp,"materialization").orElse(Map.of());
+    if(!(profile.get("properties") instanceof List<?> properties))return;
+    var geometry=object(udp,"spatial").flatMap(s->object(s,"geometry")).orElse(Map.of());
+    int index=0;
+    for(Object entry:properties){String path="/extractionProfile/runtime/udp/materialization/properties/"+(index++);
+      if(!(entry instanceof Map<?,?> property)||property.get("reconciliation")==null)continue;
+      try{
+        if(!(property.get("reconciliation") instanceof Map<?,?> rule))throw new IllegalArgumentException();
+        if(!Set.of("policyRef","cardinality","normalizerRef","normalizerVersion","validity","revisionField","deletionField").containsAll(rule.keySet()))throw new IllegalArgumentException();
+        for(String field:List.of("propertyIri","sourceField","datatype","accessLabel"))if(!(property.get(field) instanceof String s)||s.isBlank())throw new IllegalArgumentException();
+        String datatype=Objects.toString(property.get("datatype"),"");
+        if("http://www.w3.org/2001/XMLSchema#string".equals(datatype))datatype="string";
+        if(!"urn:ouf:policy:linked-object-property-reconciliation:v1".equals(rule.get("policyRef"))
+            ||!Set.of("SINGLE","MULTI").contains(Objects.toString(rule.get("cardinality"),""))
+            ||!Set.of("EXACT_TYPED","NFC_TRIM").contains(Objects.toString(rule.get("normalizerRef"),""))
+            ||!(rule.get("normalizerVersion") instanceof Number n)||new java.math.BigDecimal(n.toString()).compareTo(java.math.BigDecimal.ONE)!=0
+            ||!Set.of("UNBOUNDED","SOURCE_INTERVAL").contains(Objects.toString(rule.get("validity"),""))
+            ||!Set.of("string","number","integer","boolean","object").contains(datatype))throw new IllegalArgumentException();
+        for(String field:List.of("revisionField","deletionField"))if(rule.get(field)!=null&&(!(rule.get(field) instanceof String s)||s.isBlank()))throw new IllegalArgumentException();
+        if("NFC_TRIM".equals(rule.get("normalizerRef"))&&!"string".equals(datatype))throw new IllegalArgumentException();
+        if(!(property.get("authorityOrder") instanceof List<?> order)||new HashSet<>(order).size()!=order.size()||order.stream().anyMatch(v->!(v instanceof String s)||s.isBlank()))throw new IllegalArgumentException();
+        if(rule.get("deletionField")!=null&&(!"SINGLE".equals(rule.get("cardinality"))||rule.get("revisionField")==null||order.isEmpty()))throw new IllegalArgumentException();
+        if(profile.get("bitemporalProperties") instanceof List<?> temporal&&temporal.contains(property.get("propertyIri"))&&("MULTI".equals(rule.get("cardinality"))||rule.get("deletionField")!=null))throw new IllegalArgumentException();
+        if(Objects.equals(property.get("sourceField"),geometry.get("sourceField")))throw new IllegalArgumentException();
+      }catch(IllegalArgumentException failure){error(out,"ONB_PROPERTY_RECONCILIATION_UNSUPPORTED",path,"Require the versioned native property rule, typed normalization, explicit cardinality, validity and source authority. Geometry uses its dedicated spatial policy; multivalue or deletion bitemporal rules are not supported.");}
+    }
   }
 
   private static void validateManagedPublication(Map<String,Object> configuration,List<Finding> out){
@@ -210,4 +241,5 @@ public class ConfigurationValidator {
   private static void error(List<Finding> out,String code,String path,String message){out.add(new Finding("ERROR",code,path,message));}
   private static void validateDelta(Map<String,Object> delta,List<Finding> out){requireEnum(delta,"mode",Set.of("DELTA_PATCH"),"/deltaPatchContract/mode",out);requireText(delta,"baseReference","/deltaPatchContract/baseReference",out);Object operations=delta.get("operations");if(!(operations instanceof List<?> ops)||ops.isEmpty()||ops.stream().anyMatch(v->!Set.of("SET","REMOVE").contains(String.valueOf(v))))error(out,"ONB_DELTA_OPERATIONS_INVALID","/deltaPatchContract/operations","Operations must be a non-empty subset of SET and REMOVE");Object bindings=delta.get("propertyBindings");if(!(bindings instanceof List<?> items)||items.isEmpty())error(out,"ONB_DELTA_BINDINGS_REQUIRED","/deltaPatchContract/propertyBindings","At least one direct property binding is required");else for(int i=0;i<items.size();i++){if(!(items.get(i) instanceof Map<?,?> raw)){error(out,"ONB_DELTA_BINDING_INVALID","/deltaPatchContract/propertyBindings/"+i,"Binding must be an object");continue;}Map<String,Object> item=new LinkedHashMap<>();raw.forEach((k,v)->item.put(String.valueOf(k),v));for(String key:List.of("sourcePath","targetProperty","changeSection"))requireText(item,key,"/deltaPatchContract/propertyBindings/"+i+"/"+key,out);}}
 }
+
 

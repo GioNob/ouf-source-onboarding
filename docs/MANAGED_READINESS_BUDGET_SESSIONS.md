@@ -14,7 +14,7 @@ issues a decision reference. The HUMAN then separately chooses whether to
 verify and activate. This retains the existing configuration approval, source,
 asset and identical-operation publication/acquisition identity.
 
-V34 adds an owner-local session journal and a session pointer to the existing
+V35 adds an owner-local session journal and a session pointer to the existing
 managed review. Legacy start, cumulative attempts, prior generation, last
 failure and previous sessions are retained. A grant advances the fencing
 generation without reserving an attempt. Each activation claim increments the
@@ -44,7 +44,7 @@ commands, idempotent lost-response reconciliation, stale worker fencing,
 attempt/time exhaustion and refused overrides. Browser coverage must show no
 automatic grant or activation, including a grant committed by the owner whose
 HTTP response is lost. CI qualification is separate from deployment and a
-real HUMAN budget decision. V34 is a new schema migration and must use the
+real HUMAN budget decision. V35 is a new schema migration and must use the
 existing governed migration/deployment process; do not enable automatic
 production migrations to install it.
 
@@ -53,3 +53,13 @@ v3 sections14–16 and the repository AGENTS.md. It does not change domain
 publication/approval contracts or declare CSV E2E acceptance. Issue50 records
 the retained target context; no target-specific IDs or addresses are product
 defaults.
+
+The deployment baseline is source-property-revision commit
+`be388e1462778438a208c2e00e166370fee32189`. Its existing
+`V34__source_property_revision.sql`, revision API/journal, exact workload read
+and explicit HUMAN 403 resume contract are retained. Resume uses the current
+session's remaining budget while preserving cumulative attempts and history.
+The earlier V34 budget candidate based on main is incompatible with this
+documented deployment and must not be imported or applied. Keep that staged
+artifact for evidence; a new tested image and fresh target admission are required.
+

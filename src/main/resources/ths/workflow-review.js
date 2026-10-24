@@ -16,11 +16,20 @@
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
   const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : item.card.onboardingState === 'APPROVED' && !item.card.progress?.activationProgress?.budgetExhausted && item.card.progress?.activationProgress?.counterLineageVerified !== false && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
   const canBudget = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED' && item.card.progress?.activationProgress?.humanBudgetGrantAvailable === true && (item.reason?.value.trim().length || 0) >= 10;
+  const canResume = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED'
+    && item.card.progress?.activationProgress?.readiness_phase === 'BLOCKED'
+    && item.card.progress.activationProgress.readiness_last_code === 'ONB_READINESS_DEPENDENCY_403'
+    && (typeof item.card.progress.activationProgress.budgetExhausted === 'boolean'
+      ? !item.card.progress.activationProgress.budgetExhausted && item.card.progress.activationProgress.counterLineageVerified !== false
+      : item.card.progress.activationProgress.readiness_attempts < 128 && Date.parse(item.card.progress.activationProgress.readiness_started_at) + 86400000 > Date.now() + 50000)
+    && !(Date.parse(item.card.progress.activationProgress.readiness_lease_until) > Date.now())
+    && !(Date.parse(item.card.progress.activationProgress.readiness_next_at) > Date.now());
   function controls() {
     const items = selected(); $('actions').disabled = busy || items.length === 0;
     $('approve').disabled = !items.length || !items.every(canApprove);
     $('reject').disabled = !items.length || !items.every(canApprove);
     $('complete').disabled = !items.length || !items.every(canComplete);
+    $('resume').disabled = !items.length || !items.every(canResume);
     $('budget').disabled = !items.length || !items.every(canBudget);
   }
   function render(id, response) {
@@ -44,12 +53,17 @@
       const rows = mapping.propertyMappings || [];
       element('h3', 'Campi inclusi e corrispondenze', article);
       const table = document.createElement('table'), head = document.createElement('tr');
-      for (const name of ['Campo del file', 'Proprietà', 'Trasformazione']) element('th', name, head);
+      for (const name of ['Campo della fonte', 'Proprietà', 'Trasformazione']) element('th', name, head);
       table.append(head);
       for (const row of rows) { const tr = document.createElement('tr'); for (const value of [row.sourceField, row.targetPropertyIri, row.transform]) element('td', value, tr); table.append(tr); }
       article.append(table);
       detail('Identità delle righe e classificazione di accesso', { sourceObjectIdentityPolicy: config.sourceObjectIdentityPolicy, dataAccessPolicies: config.dataAccessPolicies }, article);
       detail('Confronto con gli oggetti esistenti e materializzazione', config.extractionProfile?.runtime?.udp, article);
+      if (card.publicationEffects) {
+        element('h3', 'Effetto della nuova pubblicazione', article);
+        element('p', card.publicationEffects.description, article);
+        detail('Versione di partenza della revisione', card.revisionBase, article);
+      }
       detail('Configurazione completa da approvare', config, article);
       if(card.progress?.activationProgress) detail('Avanzamento delle verifiche e tentativi disponibili', card.progress.activationProgress, article);
       if(card.progress?.activationProgress?.budgetExhausted && card.onboardingState === 'APPROVED') {
@@ -81,12 +95,12 @@
   }
   async function decide(action) {
     const items = selected(); if (busy || !items.length) return;
-    if (action === 'budget' ? !items.every(canBudget) : action === 'complete' ? !items.every(canComplete) : !items.every(canApprove)) return;
+    if (action === 'resume' ? !items.every(canResume) : action === 'budget' ? !items.every(canBudget) : action === 'complete' ? !items.every(canComplete) : !items.every(canApprove)) return;
     busy = true; controls(); let completed = 0;
     try {
       for (const item of items) {
         const card = item.card, id = card.challenge_id;
-        const operation = semantic ? (action === 'complete' ? 'publish' : 'decision') : (action === 'budget' ? 'budget' : action === 'complete' ? 'activate' : action === 'approve' ? 'confirm' : 'reject');
+        const operation = semantic ? (action === 'complete' ? 'publish' : 'decision') : (action === 'resume' ? 'resume' : action === 'budget' ? 'budget' : action === 'complete' ? 'activate' : action === 'approve' ? 'confirm' : 'reject');
         let body = semantic ? (operation === 'publish' ? { approvalDecisionId: card.approvalDecisionId, contentHash: card.target_content_hash } : { decision: action === 'approve' ? 'APPROVED' : 'REJECTED', expectedContentHash: card.target_content_hash }) : { configurationHash: card.configuration_hash, expectedVersion: card.lockVersion };
         if (action === 'budget') {
           const progress = card.progress.activationProgress;
@@ -97,11 +111,12 @@
             expectedGeneration: progress.readiness_generation, commandKey: key, reason: item.reason.value.trim(),
             maximumAttempts: 3, maximumElapsedSeconds: 900 };
         }
+        if (operation === 'resume') Object.assign(body, { expectedGeneration: card.progress.activationProgress.readiness_generation, blockedCode: card.progress.activationProgress.readiness_last_code });
         const response = await fetch(`api/${encodeURIComponent(id)}/${operation}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', [item.csrfHeader]: item.csrfToken }, body: JSON.stringify(body) });
         if (!response.ok) { let reason = ''; try { const failure = await response.json(); reason = failure.code || failure.detail || ''; } catch {} throw new Error(`Operazione non completata (${response.status})${reason ? ': ' + reason : ''}.`); }
         await load(id); completed++;
       }
-      status(`${completed} decisioni registrate. Puoi tornare alla chat per proseguire.`);
+      status(action === 'resume' ? 'Ripresa registrata. Approvazione e tentativi precedenti conservati. Seleziona di nuovo la fonte e scegli “Verifica e attiva”.' : `${completed} decisioni registrate. Puoi tornare alla chat per proseguire.`);
     } catch (error) {
       status(`${error.message} Decisioni già confermate in questa operazione: ${completed}. Aggiorna lo stato; nessun invio viene ripetuto automaticamente.`, true);
     } finally { busy = false; controls(); }
@@ -109,9 +124,11 @@
   $('title').textContent = semantic ? 'Rivedi e pubblica la semantica' : 'Rivedi e attiva la fonte';
   $('approve').textContent = semantic ? 'Approva le proposte selezionate' : 'Approva la configurazione';
   $('complete').textContent = semantic ? 'Pubblica le proposte approvate' : 'Verifica e attiva la fonte approvata';
+  $('resume').hidden = semantic; $('resume').onclick = () => decide('resume');
   $('budget').hidden = semantic;
   $('budget').onclick = () => decide('budget');
   $('approve').onclick = () => decide('approve'); $('complete').onclick = () => decide('complete'); $('reject').onclick = () => decide('reject'); $('refresh').onclick = refresh;
   if (!['onboarding', 'semantic'].includes(flow) || ids.length > (semantic ? 21 : 1) || new Set(ids).size !== ids.length || !ids.every(id => uuid.test(id))) status('Apri il collegamento di revisione fornito dalla chat.', true);
   else refresh();
 })();
+

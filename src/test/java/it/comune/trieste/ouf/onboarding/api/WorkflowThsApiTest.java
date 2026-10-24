@@ -51,15 +51,20 @@ class WorkflowThsApiTest {
       assertThat(path.get()).endsWith("/approval-challenges/"+id+"/review/confirm");assertThat(posts).hasValue(3);
       assertThatThrownBy(()->api.action("onboarding",id,"confirm",json.writeValueAsBytes(Map.of("configurationHash","sha256:"+hash,"expectedVersion",2,"actor","HUMAN")),request)).hasMessageContaining("THS_REVIEW_INVALID");
       assertThat(posts).hasValue(3);
+      api.action("onboarding",id,"resume",json.writeValueAsBytes(Map.of("configurationHash","sha256:"+hash,"expectedVersion",3,"expectedGeneration",1,"blockedCode","ONB_READINESS_DEPENDENCY_403")),request);
+      assertThat(posts).hasValue(4);assertThat(path.get()).endsWith("/approval-challenges/"+id+"/review/resume");
+      assertThat(json.readTree(body.get()).path("expectedGeneration").asLong()).isEqualTo(1);
+      assertThatThrownBy(()->api.action("onboarding",id,"resume",json.writeValueAsBytes(Map.of("configurationHash","sha256:"+hash,"expectedVersion",3,"expectedGeneration",1,"blockedCode","ONB_READINESS_OUTCOME_UNCONFIRMED")),request)).hasMessageContaining("THS_REVIEW_INVALID");
+
       var budget=new LinkedHashMap<String,Object>();budget.put("configurationHash","sha256:"+hash);budget.put("expectedVersion",3);
       budget.put("expectedGeneration",4);budget.put("commandKey","fixture-budget-one");budget.put("reason","Dependency recovery verified");
       budget.put("maximumAttempts",3);budget.put("maximumElapsedSeconds",900);
       api.action("onboarding",id,"budget",json.writeValueAsBytes(budget),request);
-      assertThat(path.get()).endsWith("/approval-challenges/"+id+"/review/budget");assertThat(posts).hasValue(4);
+      assertThat(path.get()).endsWith("/approval-challenges/"+id+"/review/budget");assertThat(posts).hasValue(5);
       assertThat(json.readTree(body.get())).isEqualTo(json.valueToTree(budget));
       budget.put("maximumAttempts",4);
       assertThatThrownBy(()->api.action("onboarding",id,"budget",json.writeValueAsBytes(budget),request)).hasMessageContaining("THS_REVIEW_INVALID");
-      assertThat(posts).hasValue(4);
+      assertThat(posts).hasValue(5);
       request.removeAttribute("ouf.permissionThsSession");
       assertThatThrownBy(()->api.card("semantic",id,request)).hasMessageContaining("THS_SESSION_REQUIRED");
     }finally{SecurityContextHolder.clearContext();server.stop(0);}
@@ -78,3 +83,4 @@ class WorkflowThsApiTest {
     request.setAttribute(CsrfToken.class.getName(),new DefaultCsrfToken("X-CSRF-TOKEN","_csrf","csrf-test"));return request;
   }
 }
+

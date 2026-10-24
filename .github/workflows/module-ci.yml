@@ -73,8 +73,9 @@ jobs:
           if grep -q 'authorization-sdk-1.2.0-tests.jar' target/sdk-packaging.txt; then exit 1; fi
       - name: Build non-root container
         run: |
-          docker build -t ouf-source-onboarding:${{ github.sha }} .
+          docker build --label org.opencontainers.image.revision=${{ github.sha }} --label org.opencontainers.image.source=https://github.com/GioNob/ouf-source-onboarding -t ouf-source-onboarding:${{ github.sha }} .
           test "$(docker image inspect ouf-source-onboarding:${{ github.sha }} --format '{{.Config.User}}')" = "10003:10003"
+          test "$(docker image inspect ouf-source-onboarding:${{ github.sha }} --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${{ github.sha }}"
       - name: Scan exact production image including unfixed HIGH CRITICAL UNKNOWN
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
@@ -113,7 +114,12 @@ jobs:
               'workflowRunId':os.environ['GITHUB_RUN_ID'],'workflowRunAttempt':os.environ['GITHUB_RUN_ATTEMPT'],
               'imageTag':image,'imageId':command('docker','image','inspect',image,'--format','{{.Id}}'),
               'archiveName':archive.name,'archiveSha256':checksum.hexdigest(),'archiveBytes':archive.stat().st_size,
-              'sourceSchemaMigration':'V34__managed_readiness_budget_sessions.sql','qualifiedInCiOnly':True,
+              'sourceSchemaMigration':'V35__managed_readiness_budget_sessions.sql',
+              'preservedDeploymentSourceCommit':'be388e1462778438a208c2e00e166370fee32189',
+              'preservedMigration':'V34__source_property_revision.sql',
+              'preservedMigrationGitBlob':'a6ee2ca93ae6b271e770e133e08da557bb379a09',
+              'imageRevisionLabel':command('docker','image','inspect',image,'--format','{{index .Config.Labels "org.opencontainers.image.revision"}}'),
+              'qualifiedInCiOnly':True,
               'targetApplyAuthorized':False,'humanBudgetGranted':False,'releaseAcceptance':False}
           (root/'manifest.json').write_text(json.dumps(value,sort_keys=True,separators=(',',':'))+'\n')
           (root/'SHA256SUMS').write_text(value['archiveSha256']+'  image.tar.gz\n')
@@ -140,3 +146,4 @@ jobs:
             target/sdk-packaging.txt
             target/trivy-image.json
           if-no-files-found: warn
+

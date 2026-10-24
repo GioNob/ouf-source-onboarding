@@ -62,10 +62,14 @@ public class WorkflowThsApi {
     if(proposed==null||!proposed.isObject())throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
     if("onboarding".equals(flow)){
       boolean budget="budget".equals(action);
-      if(!Set.of("confirm","reject","activate","budget").contains(action)||proposed.size()!=(budget?7:2)
+      if(!Set.of("confirm","reject","activate","resume","budget").contains(action)||proposed.size()!=(budget?7:"resume".equals(action)?4:2)
           ||!proposed.hasNonNull("configurationHash")||!proposed.has("expectedVersion")
           ||!proposed.get("configurationHash").isTextual()||!proposed.get("configurationHash").asText().matches("sha256:[a-f0-9]{64}")
           ||!proposed.get("expectedVersion").isIntegralNumber()||!proposed.get("expectedVersion").canConvertToLong()||proposed.get("expectedVersion").asLong()<0)
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+      if("resume".equals(action)&&(!proposed.has("expectedGeneration")||!proposed.get("expectedGeneration").isIntegralNumber()
+          ||!proposed.get("expectedGeneration").canConvertToLong()||proposed.get("expectedGeneration").asLong()<1
+          ||!proposed.path("blockedCode").isTextual()||!"ONB_READINESS_DEPENDENCY_403".equals(proposed.get("blockedCode").asText())))
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
       if(budget&&(!proposed.path("expectedGeneration").isIntegralNumber()||!proposed.path("expectedGeneration").canConvertToLong()
           ||proposed.path("expectedGeneration").asLong()<0||!proposed.path("commandKey").isTextual()
@@ -121,3 +125,4 @@ public class WorkflowThsApi {
         .body(new ClassPathResource("ths/"+name).getContentAsByteArray());
   }
 }
+

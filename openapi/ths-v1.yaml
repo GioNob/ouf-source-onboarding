@@ -258,3 +258,4 @@ components:
     Problem: {description: Problem Details, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
   securitySchemes:
     bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+
