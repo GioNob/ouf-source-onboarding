@@ -182,6 +182,36 @@ paths:
       responses:
         '200': {description: Governed expiring JSON export, content: {application/json: {schema: {type: string, contentMediaType: application/json}}}}
         default: {$ref: '#/components/responses/Problem'}
+  /api/trusted-human/v1/approval-challenges/{challengeId}/review/budget:
+    post:
+      operationId: grantManagedReadinessBudget
+      x-ouf-mcp-exposed: false
+      summary: Concede una nuova sessione finita di verifiche senza attivare la fonte
+      description: Decisione HUMAN autenticata sullo stesso scope. Conserva storia, contatore cumulativo e approvazione della configurazione; nessuna attivazione implicita.
+      parameters:
+        - {$ref: '#/components/parameters/ChallengeId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [configurationHash, expectedVersion, expectedGeneration, commandKey, reason, maximumAttempts, maximumElapsedSeconds]
+              properties:
+                configurationHash: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+                expectedVersion: {type: integer, minimum: 0}
+                expectedGeneration: {type: integer, minimum: 0}
+                commandKey: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+                reason: {type: string, minLength: 10, maxLength: 500}
+                maximumAttempts: {type: integer, enum: [3]}
+                maximumElapsedSeconds: {type: integer, enum: [900]}
+      responses:
+        '200': {$ref: '#/components/responses/JsonResponse'}
+        '403': {$ref: '#/components/responses/Problem'}
+        '409': {$ref: '#/components/responses/Problem'}
+        '412': {$ref: '#/components/responses/Problem'}
+
 components:
   parameters:
     ChallengeId: {name: challengeId, in: path, required: true, schema: {type: string, format: uuid}}

@@ -25,4 +25,9 @@ public class ManagedOnboardingHumanApi {
     if("activate".equals(action))return activation.activate(ServletAuthorization.principal(request).context(),id,body,actors.authenticationContextRef(request),request.getHeader("Authorization"));
     return service.humanAction(ServletAuthorization.principal(request).context(),id,action,body,actors.authenticationContextRef(request));
   }
+  @PostMapping("/{id}/review/budget") public Map<String,Object> budget(@PathVariable UUID id,
+      @RequestBody ManagedOnboardingReviewService.BudgetDecision body,HttpServletRequest request){
+    actors.requireHuman(request,"ouf.onboarding.configuration.write");
+    return service.grantReadinessBudget(ServletAuthorization.principal(request).context(),id,body);
+  }
 }

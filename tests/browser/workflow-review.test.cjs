@@ -38,9 +38,23 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     await page.getByText('Stato: ACTIVE',{exact:true}).waitFor();assert.equal(posts.length,2);
     assert.deepEqual(posts[1].body,{approvalDecisionId:id,contentHash:hash});
     await page.reload();await page.locator('article.card').waitFor();assert.equal(posts.length,2);
-    let sourcePosts=0;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
+    let sourcePosts=0,budgetPosts=0,budgetCommand;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
     await page.route('**/trusted-human/onboarding/api/**',async route=>{
-      if(route.request().method()==='POST'){sourcePosts++;assert.deepEqual(route.request().postDataJSON(),{configurationHash:'sha256:'+hash,expectedVersion:source.lockVersion});await route.fulfill(route.request().url().endsWith('/activate')?{json:{state:'ACTIVE'}}:{status:412,json:{code:'ONB_REVIEW_STALE_CARD'}});}
+      if(route.request().method()==='POST'){
+        sourcePosts++;
+        if(route.request().url().endsWith('/budget')) {
+          budgetPosts++;budgetCommand=route.request().postDataJSON();
+          assert.equal(budgetCommand.configurationHash,'sha256:'+hash);assert.equal(budgetCommand.expectedVersion,3);
+          assert.equal(budgetCommand.expectedGeneration,4);assert.equal(budgetCommand.maximumAttempts,3);
+          assert.equal(budgetCommand.maximumElapsedSeconds,900);assert.equal(typeof budgetCommand.commandKey,'string');
+          source.progress.activationProgress={readiness_phase:'PAUSED',readiness_generation:5,cumulativeAttempts:3,sessionAttempts:0,budgetExhausted:false,humanBudgetGrantAvailable:false};
+          // The owner stored the decision, but the browser lost the response.
+          await route.abort('failed');
+        } else {
+          assert.deepEqual(route.request().postDataJSON(),{configurationHash:'sha256:'+hash,expectedVersion:source.lockVersion});
+          await route.fulfill(route.request().url().endsWith('/activate')?{json:{state:'ACTIVE'}}:{status:412,json:{code:'ONB_REVIEW_STALE_CARD'}});
+        }
+      }
       else await route.fulfill({json:{card:source,csrfHeader:'X-CSRF-TOKEN',csrfToken:'test-csrf'}});
     });
     await page.goto(`${base}/trusted-human/onboarding/?challenge=${id}`);await page.locator('article.card').waitFor();assert.equal(sourcePosts,0);
@@ -62,6 +76,24 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     await page.reload();await page.locator('article.card').waitFor();await page.locator('article input[type=checkbox]').check();
     assert.equal(await page.locator('#complete').isDisabled(),true);
     assert.equal(sourcePosts,priorSourcePosts+1);
+    source.progress.activationProgress={readiness_phase:'PAUSED',readiness_generation:4,cumulativeAttempts:3,budgetExhausted:true,humanBudgetGrantAvailable:true};
+    source.expires_at='2020-01-01T00:00:00Z'; // Already CONFIRMED approval is retained.
+    await page.reload();await page.locator('article.card').waitFor();
+    await page.locator('article input[type=checkbox]').check();
+    assert.equal(await page.locator('#complete').isDisabled(),true);
+    assert.equal(await page.locator('#budget').isDisabled(),true);
+    await page.locator('textarea').fill('Dependency recovered; exact resource verified');
+    assert.equal(await page.locator('#budget').isEnabled(),true);
+    const beforeBudget=sourcePosts;
+    await page.locator('#budget').click();
+    await page.getByRole('status').filter({hasText:'nessun invio viene ripetuto automaticamente'}).waitFor();
+    assert.equal(budgetPosts,1);assert.equal(sourcePosts,beforeBudget+1);
+    await page.locator('#refresh').click();await page.getByRole('status').filter({hasText:'Esamina le proposte'}).waitFor();
+    await page.locator('article input[type=checkbox]').check();
+    assert.equal(await page.locator('#budget').isDisabled(),true);
+    assert.equal(await page.locator('#complete').isEnabled(),true);
+    assert.equal(sourcePosts,beforeBudget+1); // No hidden activation after budget grant or refresh.
+    assert.equal(source.progress.activationProgress.cumulativeAttempts,3);
     fs.mkdirSync('target/browser-evidence',{recursive:true});await page.screenshot({path:'target/browser-evidence/workflow-source-review.png',fullPage:true});
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 });
