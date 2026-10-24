@@ -88,6 +88,46 @@ jobs:
           exit-code: 1
       - name: Boot image with managed-file staging enabled
         run: timeout --signal=TERM --kill-after=10s 3m bash scripts/ci_r4a_staging_container_smoke.sh ouf-source-onboarding:${{ github.sha }}
+      - name: Preserve tested image for governed delivery
+        if: github.event_name == 'pull_request'
+        env:
+          OUF_REVIEWED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p target/governed-image
+          docker save "ouf-source-onboarding:${{ github.sha }}" | gzip -n > target/governed-image/image.tar.gz
+          python3 - <<'PYIMAGE'
+          import hashlib,json,os,re,subprocess
+          from pathlib import Path
+          root=Path('target/governed-image');archive=root/'image.tar.gz'
+          def command(*args):return subprocess.check_output(args,text=True).strip()
+          tested=command('git','rev-parse','HEAD');reviewed=os.environ['OUF_REVIEWED_SOURCE_COMMIT']
+          if not re.fullmatch('[a-f0-9]{40}',reviewed) or not re.fullmatch('[a-f0-9]{40}',tested):raise SystemExit(2)
+          checksum=hashlib.sha256()
+          with archive.open('rb') as stream:
+              for block in iter(lambda:stream.read(1048576),b''):checksum.update(block)
+          image='ouf-source-onboarding:'+os.environ['GITHUB_SHA']
+          value={'schema':'ouf.onboarding-tested-image.v1','repository':os.environ['GITHUB_REPOSITORY'],
+              'reviewedSourceCommit':reviewed,'testedCommit':tested,'testedTree':command('git','rev-parse','HEAD^{tree}'),
+              'workflowRunId':os.environ['GITHUB_RUN_ID'],'workflowRunAttempt':os.environ['GITHUB_RUN_ATTEMPT'],
+              'imageTag':image,'imageId':command('docker','image','inspect',image,'--format','{{.Id}}'),
+              'archiveName':archive.name,'archiveSha256':checksum.hexdigest(),'archiveBytes':archive.stat().st_size,
+              'sourceSchemaMigration':'V34__managed_readiness_budget_sessions.sql','qualifiedInCiOnly':True,
+              'targetApplyAuthorized':False,'humanBudgetGranted':False,'releaseAcceptance':False}
+          (root/'manifest.json').write_text(json.dumps(value,sort_keys=True,separators=(',',':'))+'\n')
+          (root/'SHA256SUMS').write_text(value['archiveSha256']+'  image.tar.gz\n')
+          print('Tested image preserved; target authorization remains false.')
+          PYIMAGE
+      - name: Upload tested image without publishing a release
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-onboarding-governed-image-${{ github.run_id }}
+          path: target/governed-image/
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
