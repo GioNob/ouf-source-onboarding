@@ -1,0 +1,88 @@
+{
+  "schema": "ouf.onboarding-diagnostic-public-image-custody.v1",
+  "artifactId": 12668879487,
+  "workflowRun": 40363741161,
+  "zipBytes": 210887971,
+  "zipSha256": "318a6370e4bedb6d17d5d5d8a9bbdf959ee7051196a51a425d334a324afc71a6",
+  "reviewedSourceCommit": "a5ed8b05c264a8221783a6e323ba00117aed891d",
+  "testedCommit": "692277b1bf5def4a2b5b1ba4fb6770c16b136fb5",
+  "testedTree": "7c1142043abece26250a1f8c48aea57e9c2e8948",
+  "applicationSourceEquivalent": true,
+  "onlySourceDifference": ".github/workflows/qualify-v35-native-deploy.yml",
+  "imageManifest": {
+    "archiveBytes": 210886343,
+    "archiveName": "image.tar.gz",
+    "archiveSha256": "54e78b838eee2626c6dad615bd18cea726886174c24758bbd7db92d91653ef18",
+    "humanBudgetGranted": false,
+    "imageId": "sha256:83c33ec95ac827edc389f7411b30d1ed85aef8bcec30986f5e19605ab7960a94",
+    "imageRevisionLabel": "692277b1bf5def4a2b5b1ba4fb6770c16b136fb5",
+    "imageTag": "ouf-source-onboarding:692277b1bf5def4a2b5b1ba4fb6770c16b136fb5",
+    "preservedAtomicInstallationOwner": true,
+    "preservedDeploymentSourceCommit": "b0f5e3dacbe59ebf87e22dd6af2575e41249f51d",
+    "preservedMigration": "V34__source_property_revision.sql",
+    "preservedMigrationGitBlob": "a6ee2ca93ae6b271e770e133e08da557bb379a09",
+    "preservedSourceRevisionParent": "be388e1462778438a208c2e00e166370fee32189",
+    "qualifiedInCiOnly": true,
+    "releaseAcceptance": false,
+    "repository": "GioNob/ouf-source-onboarding",
+    "reviewedSourceCommit": "a5ed8b05c264a8221783a6e323ba00117aed891d",
+    "schema": "ouf.onboarding-tested-image.v1",
+    "sourceSchemaMigration": "V35__managed_readiness_budget_sessions.sql",
+    "targetApplyAuthorized": false,
+    "testedCommit": "692277b1bf5def4a2b5b1ba4fb6770c16b136fb5",
+    "testedTree": "7c1142043abece26250a1f8c48aea57e9c2e8948",
+    "workflowRunAttempt": "1",
+    "workflowRunId": "40363741161"
+  },
+  "parts": [
+    {
+      "path": "image/candidate.zip.part00",
+      "bytes": 25165824,
+      "sha256": "0c2fd3670db88a72efa3d716625c5b1de948b1abe565ef72d8a137651d643987"
+    },
+    {
+      "path": "image/candidate.zip.part01",
+      "bytes": 25165824,
+      "sha256": "abca21c46237bb535a901ebcdf605c4f0876886ed72ce400c1b4091e63268dd8"
+    },
+    {
+      "path": "image/candidate.zip.part02",
+      "bytes": 25165824,
+      "sha256": "21fdfdd14a12c4ff8c11b531ff6f6759d2f4a49a717bb63104edaba4bf6eb3de"
+    },
+    {
+      "path": "image/candidate.zip.part03",
+      "bytes": 25165824,
+      "sha256": "968488caddd2c25e6b4a3d5c5a78ddc4862bd7e8d5088597f3c87e9b1e274168"
+    },
+    {
+      "path": "image/candidate.zip.part04",
+      "bytes": 25165824,
+      "sha256": "07b0594409b4ca456294eb6673a57404ca7bcd961b33383cdb4aad6af75cb52d"
+    },
+    {
+      "path": "image/candidate.zip.part05",
+      "bytes": 25165824,
+      "sha256": "d7219deb955a033c5db973dffe4f3e197970b875b32c3ba7eecd9b24986becba"
+    },
+    {
+      "path": "image/candidate.zip.part06",
+      "bytes": 25165824,
+      "sha256": "f07dec0cd5444cb9d854a074b99482ae5faf19c0842f1d46edd91dce5d15891e"
+    },
+    {
+      "path": "image/candidate.zip.part07",
+      "bytes": 25165824,
+      "sha256": "a11b87e025e90b889f1897aba0ec8209154c24fb57cbeece2a2ba4b571a8b00d"
+    },
+    {
+      "path": "image/candidate.zip.part08",
+      "bytes": 9561379,
+      "sha256": "d1279d2f1b3481f2cb71677996a019ef216ba4f5c555ca37c9c7316c77ed86f0"
+    }
+  ],
+  "runtimeAuthorityIssued": false,
+  "targetApplyAuthorized": false,
+  "imageRebuilt": false,
+  "imageRelabeled": false
+}
