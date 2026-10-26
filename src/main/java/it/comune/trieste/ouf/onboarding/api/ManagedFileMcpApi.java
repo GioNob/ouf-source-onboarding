@@ -66,6 +66,7 @@ public class ManagedFileMcpApi {
       var job=files.profileJob(asset,UUID.fromString(args.get("jobId").asText()));
       Map<String,Object> safe=new LinkedHashMap<>();
       for(String key:new String[]{"jobId","status","resultRef","errorCode"})safe.put(key,job.get(key));
+      if(job.get("errorCode")!=null)safe.put("diagnosticCategory",profileFailureCategory(job.get("last_error")));
       return safe;
     }
     return files.preview(asset,UUID.fromString(args.get("profileId").asText()));
@@ -91,6 +92,27 @@ public class ManagedFileMcpApi {
       return files.onboardIdempotent(draft.assetId(),draft.profileId(),draft.sourceId(),draft.name(),draft.owner(),draft.targetClassIri(),
           draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey());
     }catch(IOException e){throw new IllegalArgumentException("invalid draft arguments",e);}
+  }
+
+  /** Fixed categories over retained owner evidence; never release exception text or guess unknowns. */
+  static String profileFailureCategory(Object retained) {
+    if(!(retained instanceof String detail)||detail.length()>512)return "UNCLASSIFIED";
+    return switch(detail) {
+      case "CSV must be valid UTF-8 text","CSV must be UTF-8 text" -> "CSV_ENCODING_INVALID";
+      case "headers must be non-empty and unique" -> "CSV_HEADERS_INVALID";
+      case "invalid CSV" -> "CSV_SYNTAX_INVALID";
+      case "row limit exceeded","column limit exceeded","file size outside profiling limits" -> "PROFILE_LIMIT_EXCEEDED";
+      case "unsupported media type" -> "MEDIA_TYPE_UNSUPPORTED";
+      case "Staged size does not match downloaded content","Gateway object exceeds the registered size","expected object size is outside intake limits" -> "FILE_SIZE_MISMATCH";
+      case "Staged content hash does not match downloaded content" -> "FILE_HASH_MISMATCH";
+      case "stagingRef must use object://" -> "OBJECT_REFERENCE_INVALID";
+      case "Onboarding workload token is invalid","Onboarding workload token is unavailable" -> "WORKLOAD_CREDENTIAL_UNAVAILABLE";
+      case "Gateway object read failed with status 401" -> "OBJECT_READ_AUTHENTICATION_REQUIRED";
+      case "Gateway object read failed with status 403" -> "OBJECT_READ_FORBIDDEN";
+      case "Gateway object read failed with status 404" -> "OBJECT_READ_NOT_FOUND";
+      case "Gateway object read failed with status 429","Gateway object read failed with status 502","Gateway object read failed with status 503","Gateway object read failed with status 504" -> "OBJECT_READ_UNAVAILABLE";
+      default -> "UNCLASSIFIED";
+    };
   }
   @ExceptionHandler(SecurityException.class) ResponseEntity<?> denied(){
     return ResponseEntity.status(403).body(Map.of("code","ONB_MANAGED_FILE_RECEIPT_INVALID"));
