@@ -44,5 +44,30 @@ class ManagedFileRecoveryRuntimeTest {
     var b=(List<Map<String,Object>>)files.ownedAssets("tenant-b","alice",20,null).get("items");assertThat(b.getFirst()).doesNotContainKey("sourceId");
     assertThat(db.sql("select count(*) from ouf_onboarding.onboarding_version where source_id=:s").param("s",source).query(Long.class).single()).isOne();
   }
+  @SuppressWarnings("unchecked") @Test void failedAndRunningJobsAreDiscoverableWithoutNewJobOrPrivateDetails(){
+    UUID a=asset("alice");proof(a,"tenant-a","alice");
+    var first=files.requestProfile(a,"retained-job");UUID job=UUID.fromString(first.get("jobId").toString());
+    db.sql("update ouf_onboarding.file_profile_job set state='FAILED',attempts=5,error_code='ONB_FILE_PROFILE_FAILED',last_error='PRIVATE_CREDENTIAL_AND_OBJECT_PATH' where job_id=:j").param("j",job).update();
+    for(int chat=0;chat<2;chat++){
+      var page=files.ownedAssets("tenant-a","alice",10,null);
+      var item=((List<Map<String,Object>>)page.get("items")).getFirst();
+      assertThat((String)item.get("workLabel")).startsWith("CSV · ");
+      assertThat((Map<String,Object>)item.get("profileJob")).containsEntry("jobId",job).containsEntry("status","FAILED").containsEntry("errorCode","ONB_FILE_PROFILE_FAILED").doesNotContainKeys("last_error","lastError","idempotencyKey","claimedBy");
+      assertThat(page.toString()).doesNotContain("PRIVATE_CREDENTIAL_AND_OBJECT_PATH","object://");
+    }
+    assertThat(db.sql("select count(*) from ouf_onboarding.file_profile_job where asset_id=:a").param("a",a).query(Long.class).single()).isOne();
+    assertThat(((List<?>)files.ownedAssets("tenant-b","alice",10,null).get("items"))).isEmpty();
+    db.sql("update ouf_onboarding.file_profile_job set state='RUNNING',error_code='PRIVATE_UNKNOWN_CODE' where job_id=:j").param("j",job).update();
+    var item=((List<Map<String,Object>>)files.ownedAssets("tenant-a","alice",10,null).get("items")).getFirst();
+    assertThat((Map<String,Object>)item.get("profileJob")).containsEntry("status","RUNNING").doesNotContainKey("errorCode");
+  }
+  @SuppressWarnings("unchecked") @Test void latestJobSelectionIsDeterministicAndNoJobRemainsAbsent(){
+    UUID a=asset("alice");proof(a,"tenant-a","alice");
+    var empty=((List<Map<String,Object>>)files.ownedAssets("tenant-a","alice",10,null).get("items")).getFirst();assertThat(empty).doesNotContainKey("profileJob");
+    files.requestProfile(a,"older");var latest=files.requestProfile(a,"newer");
+    UUID id=UUID.fromString(latest.get("jobId").toString());
+    db.sql("update ouf_onboarding.file_profile_job set created_at=created_at+interval '1 hour' where job_id=:j").param("j",id).update();
+    var item=((List<Map<String,Object>>)files.ownedAssets("tenant-a","alice",10,null).get("items")).getFirst();assertThat((Map<String,Object>)item.get("profileJob")).containsEntry("jobId",id).containsEntry("status","QUEUED");
+  }
   private static String required(String name){return Objects.requireNonNull(System.getenv(name),name);}
 }

@@ -39,6 +39,7 @@ public class ManagedFileService {
     if(after!=null)requireTenantOwner(after,tenant,subject);
     var rows=db.sql("""
         select a.asset_id,a.created_at,a.status,a.media_type,a.size_bytes,f.profile_id,
+          j.job_id,j.state profile_job_state,j.error_code profile_job_error_code,
           case when s.metadata->>'managedTenantId'=:tenant or
             (not(jsonb_exists(s.metadata,'managedTenantId')) and exists(select 1 from ouf_onboarding.managed_onboarding_review r
               where r.source_id=s.source_id and r.tenant_id=:tenant and r.subject_id=:subject))
@@ -46,6 +47,7 @@ public class ManagedFileService {
         from ouf_onboarding.managed_file_asset a
         left join ouf_onboarding.source s on s.source_id=a.source_id
         left join lateral(select profile_id from ouf_onboarding.file_profile p where p.asset_id=a.asset_id order by version desc,profile_id desc limit 1) f on true
+        left join lateral(select job_id,state,error_code from ouf_onboarding.file_profile_job p where p.asset_id=a.asset_id order by created_at desc,job_id desc limit 1) j on true
         where
         """+TENANT_OWNER_PREDICATE+" and (cast(:after as uuid) is null or a.asset_id>cast(:after as uuid)) order by a.asset_id limit :limit")
       .param("tenant",tenant).param("subject",subject).param("after",new SqlParameterValue(Types.OTHER,after)).param("limit",limit+1).query().listOfRows();
@@ -53,6 +55,14 @@ public class ManagedFileService {
     for(var row:rows.subList(0,Math.min(rows.size(),limit))){
       var item=new LinkedHashMap<String,Object>();item.put("assetId",row.get("asset_id"));item.put("status",row.get("status"));
       item.put("uploadedAt",row.get("created_at").toString());item.put("mediaType",row.get("media_type"));item.put("sizeBytes",row.get("size_bytes"));
+      // Derived only from metadata already authorized for this asset. No filename is inferred.
+      item.put("workLabel","CSV · "+item.get("uploadedAt")+" · "+item.get("sizeBytes")+" B");
+      if(row.get("job_id")!=null){
+        var job=new LinkedHashMap<String,Object>();job.put("jobId",row.get("job_id"));job.put("status","READY".equals(row.get("profile_job_state"))?"QUEUED":row.get("profile_job_state"));
+        // Details remain in exact-job preview; do not expose last_error or arbitrary error strings here.
+        if(Set.of("ONB_FILE_PROFILE_FAILED","ONB_PROFILE_LEASE_EXHAUSTED").contains(String.valueOf(row.get("profile_job_error_code"))))job.put("errorCode",row.get("profile_job_error_code"));
+        item.put("profileJob",job);
+      }
       if(row.get("profile_id")!=null)item.put("profileId",row.get("profile_id"));
       if(row.get("source_id")!=null)item.put("sourceId",row.get("source_id"));items.add(item);
     }
