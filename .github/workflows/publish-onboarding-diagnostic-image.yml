@@ -1,0 +1,18 @@
+name: Publish exact diagnostic image custody chunks
+on:
+  push:
+    branches: [delivery/profile-diagnostic-image-20261026]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  retain-exact-public-ci-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - name: Verify original archive before publishing unchanged chunks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -B -S scripts/publish_onboarding_diagnostic_image.py
