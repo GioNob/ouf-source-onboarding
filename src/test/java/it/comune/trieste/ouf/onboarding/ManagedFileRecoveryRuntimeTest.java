@@ -57,7 +57,13 @@ class ManagedFileRecoveryRuntimeTest {
     }
     assertThat(db.sql("select count(*) from ouf_onboarding.file_profile_job where asset_id=:a").param("a",a).query(Long.class).single()).isOne();
     assertThat(((List<?>)files.ownedAssets("tenant-b","alice",10,null).get("items"))).isEmpty();
-    db.sql("update ouf_onboarding.file_profile_job set state='RUNNING',error_code='PRIVATE_UNKNOWN_CODE' where job_id=:j").param("j",job).update();
+  }
+  @SuppressWarnings("unchecked") @Test void runningJobUsesARealOwnerLeaseAndHidesUnknownErrorCodes(){
+    UUID a=asset("alice");proof(a,"tenant-a","alice");
+    var retained=files.requestProfile(a,"active-job");UUID job=UUID.fromString(retained.get("jobId").toString());
+    var claimed=files.claimProfile("fixture-worker",java.time.Duration.ofMinutes(2),java.time.Instant.now()).orElseThrow();
+    assertThat(claimed.get("job_id")).isEqualTo(job);
+    db.sql("update ouf_onboarding.file_profile_job set error_code='PRIVATE_UNKNOWN_CODE' where job_id=:j").param("j",job).update();
     var item=((List<Map<String,Object>>)files.ownedAssets("tenant-a","alice",10,null).get("items")).getFirst();
     assertThat((Map<String,Object>)item.get("profileJob")).containsEntry("status","RUNNING").doesNotContainKey("errorCode");
   }
