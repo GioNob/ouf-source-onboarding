@@ -26,6 +26,23 @@ class ConfigurationValidatorContractTest {
     profile.remove("bitemporalProperties");rule.put("normalizerVersion",1.5);assertThat(validator.validate("s",c).valid()).isFalse();
     rule.put("normalizerVersion",1);rule.put("unexpectedSwitch",true);assertThat(validator.validate("s",c).valid()).isFalse();
   }
+
+  @Test @SuppressWarnings("unchecked") void linkedDecimalAndDateUseTheSameExactDatatypeContractAsUdp(){
+    for(String datatype:List.of("http://www.w3.org/2001/XMLSchema#decimal","http://www.w3.org/2001/XMLSchema#date")){
+      var rule=new LinkedHashMap<String,Object>(Map.of("policyRef","urn:ouf:policy:linked-object-property-reconciliation:v1",
+        "cardinality","SINGLE","normalizerRef","EXACT_TYPED","normalizerVersion",1,"validity","UNBOUNDED"));
+      var property=new LinkedHashMap<String,Object>(Map.of("propertyIri","urn:value","sourceField","urn:value","datatype",datatype,
+        "accessLabel","RESTRICTED","authorityOrder",List.of(),"reconciliation",rule));
+      var c=base();var extraction=new LinkedHashMap<>((Map<String,Object>)c.get("extractionProfile"));
+      extraction.put("runtime",Map.of("udp",Map.of("materialization",Map.of("properties",List.of(property)))));c.put("extractionProfile",extraction);
+      assertThat(validator.validate("s",c).valid()).as(datatype).isTrue();
+      rule.put("normalizerRef","NFC_TRIM");
+      assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code).contains("ONB_PROPERTY_RECONCILIATION_UNSUPPORTED");
+      rule.put("normalizerRef","EXACT_TYPED");property.put("datatype",datatype.replace("http:","https:"));
+      assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code).contains("ONB_PROPERTY_RECONCILIATION_UNSUPPORTED");
+    }
+  }
+
   private final ConfigurationValidator validator=new ConfigurationValidator();
   @Test void managedDraftCannotPassWithoutExecutableProfilesAndSemanticPublication(){
     var draft=base();var bundle=new LinkedHashMap<String,Object>((Map<String,Object>)draft.get("bundle"));

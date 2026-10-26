@@ -3,9 +3,9 @@ package it.comune.trieste.ouf.onboarding.application;
 import java.net.URI;
 import java.util.*;
 
-/** Pure preparation of a lexical CSV execution profile. It issues no approval or runtime authority. */
+/** Pure preparation of an explicitly typed CSV execution profile. It issues no approval or runtime authority. */
 public final class ManagedFileExecutionProposal {
-  private static final String STRING="http://www.w3.org/2001/XMLSchema#string";
+  private static final Map<String,String> DATATYPES=Map.of("IDENTITY","string","DECIMAL_DOT_V1","decimal","DECIMAL_COMMA_V1","decimal","DATE_ISO_V1","date","DATE_DMY_V1","date");
   public record SemanticBinding(String semanticId,String semanticVersion,String revisionId,String publicationSetId) {}
   public record Limits(int maxRows,int maxColumns,int maxCellChars) {}
   public record Proposal(List<SemanticBinding> semanticBindings,String semanticPublicationSetRef,
@@ -38,11 +38,13 @@ public final class ManagedFileExecutionProposal {
     List<?> fields=list(object(extraction,"projection").get("FILE"),1,32);
     require(fields.size()<=limits.maxColumns() && new HashSet<>(fields).size()==fields.size());
     Set<String> mapped=new LinkedHashSet<>(),mappedFields=new LinkedHashSet<>(),classes=new LinkedHashSet<>();
+    Map<String,String> declaredDatatypes=new HashMap<>();
     for(Object raw:list(semantic.get("targetClasses"),1,32))classes.add(iri(text(map(raw),"classIri")));
     for(Object raw:list(semantic.get("propertyMappings"),1,32)){
       Map<String,Object> mapping=map(raw);String field=text(mapping,"sourceField");
-      require(fields.contains(field) && mappedFields.add(field) && "IDENTITY".equals(mapping.get("transform"))
+      require(fields.contains(field) && mappedFields.add(field) && DATATYPES.containsKey(text(mapping,"transform"))
           && mapped.add(iri(text(mapping,"targetPropertyIri"))));
+      declaredDatatypes.put(text(mapping,"targetPropertyIri"),"http://www.w3.org/2001/XMLSchema#"+DATATYPES.get(mapping.get("transform")));
     }
     require(mappedFields.equals(new HashSet<>(fields)));
     require(!semantic.containsKey("vocabularyMappings") || list(semantic.get("vocabularyMappings"),0,0).isEmpty());
@@ -81,7 +83,7 @@ public final class ManagedFileExecutionProposal {
       Map<String,Object> property=map(raw);keys(property,"sourceField","propertyIri","datatype","accessLabel","authorityOrder");
       String iri=text(property,"propertyIri");
       require(mapped.contains(iri) && properties.add(iri) && iri.equals(property.get("sourceField"))
-          && STRING.equals(property.get("datatype")) && labels.get(iri).equals(property.get("accessLabel")));
+          && declaredDatatypes.get(iri).equals(property.get("datatype")) && labels.get(iri).equals(property.get("accessLabel")));
       Set<String> authorities=new HashSet<>();
       for(Object authority:list(property.get("authorityOrder"),0,32))require(authorities.add(string(authority)));
     }
