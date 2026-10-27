@@ -81,6 +81,7 @@ public class ManagedFileMcpApi {
     UUID asset=UUID.fromString(args.get("assetId").asText());
     files.requireOwner(asset,owner);
     if(args.has("jobId")){
+      files.requireTenantOwner(asset,caller.principal().tenantId(),owner);
       var job=files.profileJob(asset,UUID.fromString(args.get("jobId").asText()));
       Map<String,Object> safe=new LinkedHashMap<>();
       for(String key:new String[]{"jobId","status","resultRef","errorCode"})safe.put(key,job.get(key));
