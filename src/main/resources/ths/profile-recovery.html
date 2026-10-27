@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Recupero analisi file · OUF</title><link rel="stylesheet" href="recovery.css"><script src="recovery.js" defer></script></head>
+<body><main><p class="eyebrow">OUF · controllo umano</p><h1>Riprendi l’analisi del file</h1>
+<p>Riprendi il lavoro conservato. Nessun nuovo caricamento e nessuna acquisizione dati vengono creati da questa pagina.</p>
+<p id="message" role="status" aria-live="polite">Verifico lo stato conservato…</p>
+<article id="review" hidden><h2>Revisione del recupero</h2><dl id="facts"></dl>
+<p>La nuova sessione permette al massimo <strong>3 tentativi aggiuntivi entro 15 minuti</strong> dalla concessione. I tentativi precedenti restano nella storia. Un403 o un errore permanente ferma subito il recupero.</p>
+<p>Prima concedi il budget; poi scegli separatamente se avviare l’analisi. La concessione da sola non avvia il job.</p>
+<label for="reason">Motivo del recupero o dell’annullamento</label><textarea id="reason" maxlength="500" rows="3" placeholder="Descrivi la condizione corretta; non inserire credenziali"></textarea>
+<label class="confirm"><input id="confirmed" type="checkbox">Ho verificato il file, lo stato e i limiti indicati.</label>
+<div class="actions"><button id="budget" disabled>Concedi 3 tentativi</button><button id="resume" disabled>Avvia il recupero</button><button id="cancel" class="secondary" disabled>Annulla il recupero</button></div>
+<details><summary>Identità e storia del lavoro</summary><pre id="identity"></pre><ol id="history"></ol><p id="truncated"></p></details></article>
+<div class="actions"><button id="refresh" class="secondary">Aggiorna stato</button><button id="reconcile" class="secondary" hidden>Riconcilia la richiesta precedente</button></div>
+<p class="footnote">La decisione usa la tua sessione OUF. Gli identificativi di revisione vengono verificati dal server; non devi copiarli nel terminale.</p>
+</main></body></html>

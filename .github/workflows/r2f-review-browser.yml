@@ -12,11 +12,12 @@ jobs:
         with: {node-version: '22'}
       - run: npm install --no-save --package-lock=false playwright@1.62.1
       - run: python3 -m unittest discover -s tests -p test_mcp_latency.py
-      - run: node --test tests/browser/r2f-review.test.cjs tests/browser/permissions.test.cjs tests/browser/workflow-review.test.cjs tests/browser/resolution-comparison.test.cjs
+      - run: node --test tests/browser/r2f-review.test.cjs tests/browser/permissions.test.cjs tests/browser/workflow-review.test.cjs tests/browser/resolution-comparison.test.cjs tests/browser/profile-recovery.test.cjs
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: r2f-browser-evidence
           path: target/browser-evidence/
+
 
 

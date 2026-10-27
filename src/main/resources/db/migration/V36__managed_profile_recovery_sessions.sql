@@ -4,6 +4,7 @@ ALTER TABLE ouf_onboarding.file_profile_job
   ADD COLUMN lock_version bigint NOT NULL DEFAULT 0 CHECK (lock_version >= 0),
   ADD COLUMN input_binding_hash char(71),
   ADD COLUMN recovery_session_id uuid,
+  ADD COLUMN budget_profile text CHECK (budget_profile='managed-profile-initial.v1'),
   ADD COLUMN failure_class text CHECK (failure_class IN ('PERMANENT','UNKNOWN','TRANSIENT','EXHAUSTED','CANCELLED','CUSTODY_CHANGED'));
 
 CREATE TABLE ouf_onboarding.managed_profile_budget_session (
@@ -84,7 +85,7 @@ CREATE TRIGGER managed_profile_budget_immutable BEFORE UPDATE OR DELETE ON ouf_o
 CREATE FUNCTION ouf_onboarding.guard_profile_progress() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.job_id<>OLD.job_id OR NEW.asset_id<>OLD.asset_id OR NEW.idempotency_key<>OLD.idempotency_key
-      OR NEW.created_at<>OLD.created_at OR NEW.attempts<OLD.attempts OR NEW.generation<OLD.generation
+      OR NEW.created_at<>OLD.created_at OR NEW.budget_profile IS DISTINCT FROM OLD.budget_profile OR NEW.attempts<OLD.attempts OR NEW.generation<OLD.generation
       OR NEW.lock_version<OLD.lock_version OR
       (NEW.attempts<>OLD.attempts AND (NEW.attempts<>OLD.attempts+1 OR NEW.generation<=OLD.generation OR NEW.lock_version<=OLD.lock_version)) THEN
     RAISE EXCEPTION 'managed profile identity and cumulative progress cannot be reset';

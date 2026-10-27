@@ -7,8 +7,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-@Component
-@ConditionalOnBean(ManagedFileObjectStore.class)
 public class ManagedFileProfileWorker {
   private final ManagedFileService files;private final ManagedFileObjectStore objects;private final String workerId;private final Duration lease;private final Duration retryDelay;
   public ManagedFileProfileWorker(ManagedFileService files,ManagedFileObjectStore objects,@Value("${ouf.onboarding.profile-worker.id:onboarding-profiler}") String workerId,@Value("${ouf.onboarding.profile-worker.lease:PT2M}") Duration lease,@Value("${ouf.onboarding.profile-worker.retry-delay:PT30S}") Duration retryDelay){if(retryDelay==null||retryDelay.isNegative())throw new IllegalArgumentException("ONB_RETRY_DELAY_INVALID");this.files=files;this.objects=objects;this.workerId=workerId;this.lease=lease;this.retryDelay=retryDelay;}

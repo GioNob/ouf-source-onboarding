@@ -23,6 +23,12 @@ public class ManagedFileReadTransport {
           .setConnectionRequestTimeout(Timeout.ofSeconds(5)).setResponseTimeout(Timeout.ofSeconds(30)).build()).build();
     return new HttpComponentsClientHttpRequestFactory(client);
   }
+  @Bean ManagedFileProfileWorker managedFileProfileWorker(ManagedFileService files,GatewayManagedFileObjectStore objects,
+      @Value("${ouf.onboarding.profile-worker.id:onboarding-profiler}") String id,
+      @Value("${ouf.onboarding.profile-worker.lease:PT2M}") java.time.Duration lease,
+      @Value("${ouf.onboarding.profile-worker.retry-delay:PT30S}") java.time.Duration legacyDelay){
+    return new ManagedFileProfileWorker(files,objects,id,lease,legacyDelay);
+  }
   @Bean GatewayManagedFileObjectStore gatewayManagedFileObjectStore(RestClient.Builder builder,
       @Qualifier("managedProfileReadFactory") HttpComponentsClientHttpRequestFactory factory,
       @Value("${ouf.onboarding.object-store.gateway-base-url}") String base,

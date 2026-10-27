@@ -19,7 +19,7 @@ Status is evidence-based: **IMPLEMENTED** requires executable code plus tests or
 | Gateway token validation, rate limiting and governed routing | DELEGATED — Urban API Gateway | opaque route/object references | integration/E2E suite |
 | Managed CSV/XLSX staging, profiling and one-row/one-object configuration | IMPLEMENTED | V5/V7–V9, managed-file services | managed-file tests |
 | Managed-file intake quarantine and remediation | IMPLEMENTED | V13, `ManagedFileService`, human-only quarantine API | runtime and THS contract tests |
-| One-time file ingestion and recurring PULL execution | DELEGATED — Ingestion Runtime | immutable ACTIVE bundle and compatibility attestation | cross-module E2E |
+| Finite HUMAN profiling recovery, same job and persistent generation fencing | CANDIDATE — qualification pending | V36, `ManagedProfileJobs`, native owner API and session/CSRF THS adapter | `ManagedProfileBudgetRuntimeTest`, `ProfileBudgetMigrationUpgradeTest`, `ManagedProfileRecoveryApiTest`, `ManagedProfileRecoveryThsTest`, browser profile-recovery suite; deployment, native network and final cohort remain unproven |\n| One-time file ingestion and recurring PULL execution | DELEGATED — Ingestion Runtime | immutable ACTIVE bundle and compatibility attestation | cross-module E2E |
 | Runtime projections for Gateway | IMPLEMENTED | V10, `RuntimeProjectionService` | workflow projection test |
 | Schema surveillance and activation gate | IMPLEMENTED | V10, `SchemaSurveillanceService` | blocking/resolution test |
 | Semantic gap and candidate selection | IMPLEMENTED | V12, `SemanticGapService` | `SemanticGapRuntimeTest` |
@@ -35,3 +35,4 @@ Status is evidence-based: **IMPLEMENTED** requires executable code plus tests or
 ## Release boundary
 
 The repository can verify module-local behavior and contracts. It cannot truthfully mark environment-bound integrations complete without Authorization, Gateway, Semantic Registry, Ingestion Runtime, shared log/object storage and a deployed browser client. Those items are not silently omitted: they are explicit release gates owned by the named systems.
+

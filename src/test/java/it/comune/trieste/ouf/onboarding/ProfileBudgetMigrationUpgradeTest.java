@@ -25,7 +25,7 @@ class ProfileBudgetMigrationUpgradeTest {
           String beforeJob=one(sql,"select to_jsonb(j)::text from ouf_onboarding.file_profile_job j"),beforeAsset=one(sql,"select to_jsonb(a)::text from ouf_onboarding.managed_file_asset a"),beforeQuarantine=one(sql,"select to_jsonb(q)::text from ouf_onboarding.managed_file_quarantine q");
           var upgraded=Flyway.configure().dataSource(isolated,user,password).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").load();assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();assertThat(upgraded.migrate().migrationsExecuted).isZero();
           assertThat(one(sql,"select jsonb_agg(to_jsonb(h) order by installed_rank)::text from ouf_onboarding.flyway_schema_history h where version is not null and version<>'36'")).isEqualTo(history);
-          assertThat(one(sql,"select (to_jsonb(j)-array['generation','lock_version','input_binding_hash','recovery_session_id','failure_class'])::text from ouf_onboarding.file_profile_job j")).isEqualTo(beforeJob);
+          assertThat(one(sql,"select (to_jsonb(j)-array['generation','lock_version','input_binding_hash','recovery_session_id','failure_class','budget_profile'])::text from ouf_onboarding.file_profile_job j")).isEqualTo(beforeJob);
           assertThat(one(sql,"select to_jsonb(a)::text from ouf_onboarding.managed_file_asset a")).isEqualTo(beforeAsset);
           assertThat(one(sql,"select to_jsonb(q)::text from ouf_onboarding.managed_file_quarantine q")).isEqualTo(beforeQuarantine);
           assertThat(one(sql,"select count(*) from ouf_onboarding.managed_profile_budget_session")).isEqualTo("0");

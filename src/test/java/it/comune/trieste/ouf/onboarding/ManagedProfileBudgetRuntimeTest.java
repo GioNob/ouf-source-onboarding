@@ -106,7 +106,7 @@ class ManagedProfileBudgetRuntimeTest {
     assertThat(files.claimProfile("worker",Duration.ofMinutes(2),Instant.now())).isEmpty();
   }
   @Test void hoursOldQueuedOperationCannotRestartItsElapsedBudget(){
-    UUID a=asset(),j=UUID.randomUUID();db.sql("insert into ouf_onboarding.file_profile_job(job_id,asset_id,idempotency_key,created_at) values(:j,:a,'old',clock_timestamp()-interval '25 hours')").param("j",j).param("a",a).update();
+    UUID a=asset(),j=UUID.randomUUID();db.sql("insert into ouf_onboarding.file_profile_job(job_id,asset_id,idempotency_key,created_at,budget_profile) values(:j,:a,'old',clock_timestamp()-interval '25 hours','managed-profile-initial.v1')").param("j",j).param("a",a).update();
     assertThat(files.claimProfile("worker",Duration.ofMinutes(2),Instant.now())).isEmpty();
     assertThat(files.profileJob(a,j)).containsEntry("attempts",0).containsEntry("state","FAILED").containsEntry("failure_class","EXHAUSTED");
     assertThat(files.requestProfile(a,"fresh-key").get("job_id")).isEqualTo(j);
@@ -141,5 +141,44 @@ class ManagedProfileBudgetRuntimeTest {
     assertThatThrownBy(()->db.sql("delete from ouf_onboarding.managed_profile_event").update()).hasMessageContaining("append only");
     assertThatThrownBy(()->db.sql("update ouf_onboarding.file_profile_job set attempts=0 where job_id=:j").param("j",j).update()).hasMessageContaining("cannot be reset");
     assertThat(card(a,j).toString()).doesNotContain("object://","last_error","prior_job","retained-key","claimed_by");
+  }
+  void expiredSessionFixture(UUID a,UUID j,boolean activated){
+    grant(a,j,"before-outage");UUID expired=UUID.randomUUID();
+    db.sql("update ouf_onboarding.managed_profile_budget_session set state='EXHAUSTED' where state='ACTIVE'").update();
+    db.sql("""
+        insert into ouf_onboarding.managed_profile_budget_session(session_id,job_id,asset_id,tenant_id,subject_id,command_key,
+          request_hash,input_binding_hash,decision_ref,reason,profile,base_attempts,prior_job,prior_session_id,prior_quarantine_id,
+          issued_job_version,issued_generation,maximum_attempts,maximum_elapsed_seconds,issued_at,expires_at,state,activated_at,resume_request_hash)
+        select :id,job_id,asset_id,tenant_id,subject_id,'hours-old',request_hash,input_binding_hash,gen_random_uuid(),reason,profile,
+          base_attempts,prior_job,session_id,prior_quarantine_id,issued_job_version,issued_generation,3,900,issued_at-interval '2 hours',
+          expires_at-interval '2 hours','ACTIVE',case when :active then issued_at-interval '2 hours' else null end,
+          case when :active then request_hash else null end from ouf_onboarding.managed_profile_budget_session where job_id=:j
+        """).param("id",expired).param("active",activated).param("j",j).update();
+    db.sql("update ouf_onboarding.file_profile_job set recovery_session_id=:s,state=:state,completed_at=null,generation=generation+1,lock_version=lock_version+1 where job_id=:j")
+        .param("s",expired).param("state",activated?"READY":"FAILED").param("j",j).update();
+    if(activated)db.sql("update ouf_onboarding.managed_file_asset set status='STAGED' where asset_id=:a").param("a",a).update();
+  }
+  @Test void hoursExpiredSessionStopsBeforeAnotherAttemptAndRetainsCumulativeFive(){
+    UUID a=asset(),j=failed(a);expiredSessionFixture(a,j,true);
+    assertThat(files.claimProfile("worker",Duration.ofMinutes(2),Instant.now())).isEmpty();
+    assertThat(files.profileJob(a,j)).containsEntry("attempts",5).containsEntry("state","FAILED").containsEntry("failure_class","EXHAUSTED");
+    assertThat(card(a,j)).containsEntry("sessionState","EXHAUSTED");
+  }
+  @Test void expiredUnstartedGrantCannotBeResumedAndNextGrantIsAnotherExplicitSession(){
+    UUID a=asset(),j=failed(a);expiredSessionFixture(a,j,false);var before=card(a,j);
+    assertThat(before).containsEntry("canResume",false).containsEntry("budgetAvailableToGrant",true);
+    assertThatThrownBy(()->resume(a,j,before)).hasMessageContaining("RECOVERY_RECONCILIATION_REQUIRED");
+    var next=grant(a,j,"after-outage");assertThat(next).containsEntry("status","FAILED").containsEntry("cumulativeAttempts",5).containsEntry("sessionBaseAttempts",5);
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_profile_budget_session").query(Long.class).single()).isEqualTo(3);
+  }
+  @Test void slowRemoteReadHoldsNoJobTransactionAndHumanCancelFencesItsLateResponse()throws Exception{
+    UUID a=asset(),j=(UUID)files.requestProfile(a,"initial").get("job_id");var entered=new CountDownLatch(1);var release=new CountDownLatch(1);var pool=Executors.newSingleThreadExecutor();
+    ManagedFileObjectStore objects=(ref,size)->{entered.countDown();try{if(!release.await(10,TimeUnit.SECONDS))throw new IllegalStateException("fixture deadline");}catch(InterruptedException e){Thread.currentThread().interrupt();throw new IllegalStateException();}return csv;};
+    try{var worker=new ManagedFileProfileWorker(files,objects,"same-worker",Duration.ofMinutes(2),Duration.ofSeconds(30));var running=pool.submit(worker::runOnce);assertThat(entered.await(5,TimeUnit.SECONDS)).isTrue();
+      var c=card(a,j);var cancel=new ManagedProfileJobs.Cancel(((Number)c.get("expectedVersion")).longValue(),((Number)c.get("expectedGeneration")).longValue(),(String)c.get("inputBindingHash"),"cancel-slow","Cancel while remote read is still waiting");
+      files.cancelProfile(a,j,principal,actor,cancel);release.countDown();running.get(5,TimeUnit.SECONDS);
+      assertThat(files.profileJob(a,j)).containsEntry("state","CANCELLED").containsEntry("attempts",1);
+      assertThat(db.sql("select count(*) from ouf_onboarding.file_profile").query(Long.class).single()).isZero();
+    }finally{release.countDown();pool.shutdownNow();}
   }
 }

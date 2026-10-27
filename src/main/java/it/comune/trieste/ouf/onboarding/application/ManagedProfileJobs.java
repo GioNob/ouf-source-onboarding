@@ -44,7 +44,7 @@ public class ManagedProfileJobs {
   private int maximum(Map<String,Object> s){return s.isEmpty()?5:3;}
   private Instant deadline(Map<String,Object> j,Map<String,Object> s){return s.isEmpty()?instant(j.get("created_at")).plusSeconds(900):instant(s.get("expires_at"));}
   private boolean budgetAvailable(Map<String,Object> j,Map<String,Object> s,Instant n){return number(j,"attempts")-base(s)<maximum(s)
-      &&n.isBefore(deadline(j,s))&&(s.isEmpty()||"ACTIVE".equals(s.get("state"))&&s.get("activated_at")!=null);}
+      &&n.plusSeconds(90).isBefore(deadline(j,s))&&(s.isEmpty()||"ACTIVE".equals(s.get("state"))&&s.get("activated_at")!=null);}
   private void event(UUID job,String type,String code,String subject,String tenant,String key,String requestHash,UUID decision){event(job,type,code,subject,tenant,key,requestHash,decision,null);}
   private void event(UUID job,String type,String code,String subject,String tenant,String key,String requestHash,UUID decision,String reason){
     db.sql("""
@@ -66,7 +66,7 @@ public class ManagedProfileJobs {
   }
   /** Only reserve a claim here. The remote read happens after this transaction releases every lock. */
   public Optional<Map<String,Object>> claim(String worker,Duration lease,Quarantine quarantine){return tx.execute(status->{
-    require(worker!=null&&!worker.isBlank()&&lease!=null&&lease.compareTo(Duration.ofSeconds(10))>=0&&lease.compareTo(Duration.ofMinutes(2))<=0,"ONB_PROFILE_LEASE_INVALID");
+    require(worker!=null&&!worker.isBlank()&&lease!=null&&lease.compareTo(Duration.ofSeconds(90))>=0&&lease.compareTo(Duration.ofMinutes(2))<=0,"ONB_PROFILE_LEASE_INVALID");
     // A deliberately narrow, gradual probe profile: at most one live Gateway read across this owner.
     db.sql("select 1 from pg_advisory_xact_lock(hashtextextended('managed-profile-claim.v1',0))").query(Integer.class).single();
     Instant n=now();if(db.sql("select exists(select 1 from ouf_onboarding.file_profile_job where state='RUNNING' and lease_until>clock_timestamp())").query(Boolean.class).single())return Optional.empty();
@@ -77,19 +77,21 @@ public class ManagedProfileJobs {
         order by j.next_attempt_at,j.created_at,j.job_id for update skip locked limit 32
         """).query().listOfRows();
     for(var j:candidates){
-      UUID a=(UUID)j.get("asset_id"),id=(UUID)j.get("job_id");var input=asset(a);var s=session(j);
+      n=now();UUID a=(UUID)j.get("asset_id"),id=(UUID)j.get("job_id");var input=asset(a);var s=session(j);
       if(db.sql("select count(*) from ouf_onboarding.file_profile_job where asset_id=:a").param("a",a).query(Long.class).single()!=1){terminal(j,"ONB_PROFILE_HISTORY_RECONCILIATION_REQUIRED","Multiple retained profile jobs require reconciliation","UNKNOWN",quarantine);continue;}
       if(!Set.of("STAGED","PROFILED").contains(input.get("status"))){terminal(j,"ONB_PROFILE_CUSTODY_CHANGED","Asset is not admitted for profiling","CUSTODY_CHANGED",quarantine);continue;}
       if(j.get("input_binding_hash")==null&&number(j,"attempts")>0||j.get("input_binding_hash")!=null&&!binding(input).equals(j.get("input_binding_hash"))){
         terminal(j,"ONB_PROFILE_INPUT_RECONCILIATION_REQUIRED","Retained input binding requires reconciliation","CUSTODY_CHANGED",quarantine);continue;}
+      if(s.isEmpty()&&!"managed-profile-initial.v1".equals(j.get("budget_profile"))){terminal(j,"ONB_PROFILE_LEGACY_RECONCILIATION_REQUIRED","Legacy admission profile requires reconciliation","UNKNOWN",quarantine);continue;}
+      if(!s.isEmpty()&&!binding(input).equals(s.get("input_binding_hash"))){terminal(j,"ONB_PROFILE_INPUT_RECONCILIATION_REQUIRED","Recovery input binding requires reconciliation","CUSTODY_CHANGED",quarantine);continue;}
       if(!budgetAvailable(j,s,n)){terminal(j,"ONB_PROFILE_BUDGET_EXHAUSTED","Finite profiling budget exhausted","EXHAUSTED",quarantine);continue;}
       Instant end=n.plus(lease);if(end.isAfter(deadline(j,s)))end=deadline(j,s);
       var claimed=db.sql("""
           update ouf_onboarding.file_profile_job set state='RUNNING',claimed_by=:w,lease_until=:end,
             attempts=attempts+1,generation=generation+1,lock_version=lock_version+1,input_binding_hash=:binding,
             error_code=null,last_error=null,failure_class=null,completed_at=null,updated_at=clock_timestamp()
-          where job_id=:j returning *
-          """).param("w",worker).param("end",OffsetDateTime.ofInstant(end,ZoneOffset.UTC)).param("binding",binding(input)).param("j",id).query().singleRow();
+          where job_id=:j and clock_timestamp()+interval '90 seconds'<:deadline and attempts<:maximum returning *
+          """).param("w",worker).param("end",OffsetDateTime.ofInstant(end,ZoneOffset.UTC)).param("binding",binding(input)).param("j",id).param("deadline",OffsetDateTime.ofInstant(deadline(j,s),ZoneOffset.UTC)).param("maximum",base(s)+maximum(s)).query().singleRow();
       event(id,"CLAIMED","ONB_PROFILE_ATTEMPT_RESERVED");return Optional.of(claimed);
     }
     return Optional.empty();
@@ -128,9 +130,10 @@ public class ManagedProfileJobs {
     var out=new LinkedHashMap<String,Object>();out.put("assetId",assetId);out.put("jobId",job);out.put("status",j.get("state"));out.put("cumulativeAttempts",j.get("attempts"));
     out.put("expectedVersion",j.get("lock_version"));out.put("expectedGeneration",j.get("generation"));out.put("inputBindingHash",binding(a));out.put("reviewHash",reviewHash(j,a,q));
     out.put("contentHash",a.get("content_hash"));out.put("sizeBytes",a.get("size_bytes"));out.put("mediaType",a.get("media_type"));out.put("uploadedAt",a.get("created_at").toString());
+    out.put("lastFailureCategory",Set.of("Gateway object read failed with status 401","Gateway object read failed with status 403").contains(String.valueOf(j.get("last_error")))?"OBJECT_READ_FORBIDDEN":Objects.toString(j.get("failure_class"),"UNCLASSIFIED"));
     out.put("profile","managed-profile-recovery.v1");out.put("maximumAttempts",3);out.put("maximumElapsedSeconds",900);
     out.put("budgetAvailableToGrant",eligible(j,q)&&(s.isEmpty()||!"ACTIVE".equals(s.get("state"))||!n.isBefore(instant(s.get("expires_at")))));
-    out.put("canResume",!s.isEmpty()&&"ACTIVE".equals(s.get("state"))&&s.get("activated_at")==null&&n.isBefore(instant(s.get("expires_at")))&&eligible(j,q));
+    out.put("canResume",!s.isEmpty()&&"ACTIVE".equals(s.get("state"))&&s.get("activated_at")==null&&n.plusSeconds(90).isBefore(instant(s.get("expires_at")))&&eligible(j,q));
     out.put("canCancel",!Set.of("SUCCEEDED","CANCELLED").contains(j.get("state")));
     if(!s.isEmpty()){out.put("sessionId",s.get("session_id"));out.put("sessionState",s.get("state"));out.put("sessionExpiresAt",s.get("expires_at").toString());out.put("sessionBaseAttempts",s.get("base_attempts"));out.put("decisionRef",s.get("decision_ref"));out.put("sessionUsedAttempts",number(j,"attempts")-base(s));}
     out.put("history",db.sql("select job_version,generation,cumulative_attempts,event_type,safe_code,created_at from ouf_onboarding.managed_profile_event where job_id=:j order by job_version desc limit 16").param("j",job).query().listOfRows());
@@ -172,7 +175,7 @@ public class ManagedProfileJobs {
     require(!s.isEmpty()&&d.sessionId().equals(s.get("session_id"))&&subject.equals(s.get("subject_id"))&&tenant.equals(s.get("tenant_id"))&&binding(a).equals(d.inputBindingHash())&&binding(a).equals(s.get("input_binding_hash"))&&binding(a).equals(j.get("input_binding_hash")),"ONB_PROFILE_SESSION_MISMATCH");
     if(s.get("resume_request_hash")!=null){require(fingerprint.equals(s.get("resume_request_hash")),"ONB_PROFILE_COMMAND_CONFLICT");return card(assetId,job);}
     expected(j,a,d.expectedVersion(),d.expectedGeneration(),d.inputBindingHash());
-    require("ACTIVE".equals(s.get("state"))&&now().isBefore(instant(s.get("expires_at")))&&eligible(j,quarantine(assetId,job)),"ONB_PROFILE_RECOVERY_RECONCILIATION_REQUIRED");
+    require("ACTIVE".equals(s.get("state"))&&now().plusSeconds(90).isBefore(instant(s.get("expires_at")))&&eligible(j,quarantine(assetId,job)),"ONB_PROFILE_RECOVERY_RECONCILIATION_REQUIRED");
     release.run();db.sql("update ouf_onboarding.managed_profile_budget_session set activated_at=clock_timestamp(),resume_request_hash=:hash where session_id=:s and state='ACTIVE'")
         .param("hash",fingerprint).param("s",d.sessionId()).update();
     db.sql("update ouf_onboarding.file_profile_job set state='READY',completed_at=null,claimed_by=null,lease_until=null,next_attempt_at=clock_timestamp(),generation=generation+1,lock_version=lock_version+1,updated_at=clock_timestamp() where job_id=:j")

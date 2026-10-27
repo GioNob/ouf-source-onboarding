@@ -124,7 +124,7 @@ public class ManagedFileService {
       if(retained.size()>1)throw conflict("ONB_PROFILE_HISTORY_RECONCILIATION_REQUIRED","Multiple retained profile jobs require explicit owner reconciliation");
       if(retained.size()==1)return jobView(retained.getFirst());
       UUID jobId=UUID.randomUUID();
-      db.sql("insert into ouf_onboarding.file_profile_job(job_id,asset_id,idempotency_key) values(:i,:a,:k)").param("i",jobId).param("a",assetId).param("k",idempotencyKey).update();
+      db.sql("insert into ouf_onboarding.file_profile_job(job_id,asset_id,idempotency_key,budget_profile) values(:i,:a,:k,'managed-profile-initial.v1')").param("i",jobId).param("a",assetId).param("k",idempotencyKey).update();
       return profileJob(assetId,jobId);
     });
   }
