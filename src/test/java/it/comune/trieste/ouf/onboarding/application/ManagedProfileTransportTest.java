@@ -18,7 +18,8 @@ class ManagedProfileTransportTest {
     server.createContext("/content",exchange->{count.incrementAndGet();assertThat(exchange.getRequestHeaders().getFirst("Authorization")).isEqualTo("Bearer fixture-only");exchange.getResponseHeaders().set("Retry-After","0");exchange.getResponseHeaders().set("Location","/unexpected");exchange.sendResponseHeaders(status.get(),-1);exchange.close();});
     server.createContext("/unexpected",exchange->{count.addAndGet(100);exchange.sendResponseHeaders(200,-1);exchange.close();});server.start();
     Path token=root.resolve("token");Files.writeString(token,"fixture-only");
-    try{new ApplicationContextRunner().withUserConfiguration(ManagedFileReadTransport.class).withBean(RestClient.Builder.class,RestClient::builder).withBean(ManagedFileService.class,()->mock(ManagedFileService.class))
+    try{new ApplicationContextRunner().withInitializer(context->context.getBeanFactory().setConversionService(new org.springframework.boot.convert.ApplicationConversionService()))
+        .withUserConfiguration(ManagedFileReadTransport.class).withBean(RestClient.Builder.class,RestClient::builder).withBean(ManagedFileService.class,()->mock(ManagedFileService.class))
         .withPropertyValues("ouf.onboarding.object-store.gateway-base-url=http://127.0.0.1:"+server.getAddress().getPort(),"ouf.onboarding.object-store.read-path=/content","ouf.onboarding.object-store.token-file="+token)
         .run(context->{assertThat(context).hasSingleBean(ManagedFileProfileWorker.class);var store=context.getBean(GatewayManagedFileObjectStore.class);
           assertThatThrownBy(()->store.read("object://fixture",1)).isInstanceOfSatisfying(ManagedFileObjectReadFailure.class,f->assertThat(f.retryable()).isTrue());assertThat(count).hasValue(1);
