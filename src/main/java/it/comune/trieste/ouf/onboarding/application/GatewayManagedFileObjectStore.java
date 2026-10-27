@@ -19,12 +19,15 @@ public class GatewayManagedFileObjectStore implements ManagedFileObjectStore {
 
   @Override public byte[] read(String stagingRef,long expectedSize){
     if(stagingRef==null||!stagingRef.startsWith("object://"))throw new IllegalArgumentException("stagingRef must use object://");if(expectedSize<1||expectedSize>ABSOLUTE_MAX_BYTES)throw new IllegalArgumentException("expected object size is outside intake limits");
-    return client.get().uri(builder->builder.path(readPath).queryParam("ref",stagingRef).build()).headers(headers->headers.setBearerAuth(token())).exchange((request,response)->readBounded(response.getStatusCode(),response.getHeaders().getContentLength(),response.getBody(),expectedSize));
+    return client.get().uri(builder->builder.path(readPath).queryParam("ref",stagingRef).build()).headers(headers->headers.setBearerAuth(token())).exchange((request,response)->{
+      if(!response.getStatusCode().is2xxSuccessful())throw ManagedFileObjectReadFailure.http(response.getStatusCode().value(),response.getHeaders().getFirst("Retry-After"),java.time.Instant.now());
+      return readBounded(response.getStatusCode(),response.getHeaders().getContentLength(),response.getBody(),expectedSize);
+    });
   }
 
   private String token(){try{String value=Files.readString(tokenFile).strip();if(value.isEmpty()||value.contains("\n"))throw new IllegalStateException("Onboarding workload token is invalid");return value;}catch(IOException e){throw new IllegalStateException("Onboarding workload token is unavailable",e);}}
 
   private static byte[] readBounded(HttpStatusCode status,long contentLength,java.io.InputStream body,long expectedSize) throws IOException {
-    if(!status.is2xxSuccessful())throw new IllegalStateException("Gateway object read failed with status "+status.value());if(contentLength>expectedSize)throw new IllegalArgumentException("Gateway object exceeds the registered size");byte[] bytes=body.readNBytes(Math.toIntExact(expectedSize)+1);if(bytes.length>expectedSize)throw new IllegalArgumentException("Gateway object exceeds the registered size");return bytes;
+    if(contentLength>expectedSize)throw new IllegalArgumentException("Gateway object exceeds the registered size");byte[] bytes=body.readNBytes(Math.toIntExact(expectedSize)+1);if(bytes.length>expectedSize)throw new IllegalArgumentException("Gateway object exceeds the registered size");return bytes;
   }
 }

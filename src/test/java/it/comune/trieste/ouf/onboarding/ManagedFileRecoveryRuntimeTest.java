@@ -70,8 +70,9 @@ class ManagedFileRecoveryRuntimeTest {
   @SuppressWarnings("unchecked") @Test void latestJobSelectionIsDeterministicAndNoJobRemainsAbsent(){
     UUID a=asset("alice");proof(a,"tenant-a","alice");
     var empty=((List<Map<String,Object>>)files.ownedAssets("tenant-a","alice",10,null).get("items")).getFirst();assertThat(empty).doesNotContainKey("profileJob");
-    files.requestProfile(a,"older");var latest=files.requestProfile(a,"newer");
-    UUID id=UUID.fromString(latest.get("jobId").toString());
+    files.requestProfile(a,"older");UUID id=UUID.randomUUID();
+    // Retained multi-job history predates the admission guard; discovery still reports it.
+    db.sql("insert into ouf_onboarding.file_profile_job(job_id,asset_id,idempotency_key) values(:j,:a,'retained-newer')").param("j",id).param("a",a).update();
     db.sql("update ouf_onboarding.file_profile_job set created_at=created_at+interval '1 hour' where job_id=:j").param("j",id).update();
     var item=((List<Map<String,Object>>)files.ownedAssets("tenant-a","alice",10,null).get("items")).getFirst();assertThat((Map<String,Object>)item.get("profileJob")).containsEntry("jobId",id).containsEntry("status","QUEUED");
   }
