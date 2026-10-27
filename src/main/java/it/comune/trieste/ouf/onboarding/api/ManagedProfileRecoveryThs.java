@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.io.*;
 import java.net.URI;
 import java.net.http.*;
+import java.net.http.HttpRequest;
 import java.time.Duration;
 import java.util.*;
 import java.nio.ByteBuffer;
