@@ -30,7 +30,7 @@
     }finally{clearTimeout(timer);}
   }
   async function refresh(silent=false){if(busy)return;busy=true;controls();try{const result=await request(endpoint);card=result.card;csrfHeader=result.csrfHeader;csrfToken=result.csrfToken;render();
-      if(!silent)message(pending?'Esito precedente da riconciliare. Nessun invio viene ripetuto automaticamente.':card.status==='SUCCEEDED'?'Analisi completata. Il lavoro conservato è pronto per il passo successivo.':'Stato verificato. Esamina il lavoro e scegli l’azione.');
+      if(!silent)message(card.recoveryPermissionAvailable===false?'Hai accesso allo stato; manca il permesso HUMAN per il recupero. Nessuna azione è disponibile.':pending?'Esito precedente da riconciliare. Nessun invio viene ripetuto automaticamente.':card.status==='SUCCEEDED'?'Analisi completata. Il lavoro conservato è pronto per il passo successivo.':'Stato verificato. Esamina il lavoro e scegli l’azione.');
     }catch(error){monitor=null;card=null;$('review').hidden=true;csrfToken=null;message(error.status===401||error.status===403?'Accesso non autorizzato o sessione scaduta. Accedi di nuovo a OUF.':'Stato non verificato. Aggiorna prima di decidere; nessuna azione è stata inviata.');}
     finally{busy=false;controls();}}
   function storePending(value){pending=value;try{if(value)sessionStorage.setItem(storage,JSON.stringify(value));else sessionStorage.removeItem(storage);}catch(_){}controls();}

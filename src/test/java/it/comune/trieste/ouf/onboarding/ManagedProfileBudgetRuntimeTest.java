@@ -118,6 +118,7 @@ class ManagedProfileBudgetRuntimeTest {
     assertThatThrownBy(()->grant(a,j,"not-a-reconciliation")).hasMessageContaining("RECOVERY_RECONCILIATION_REQUIRED");
     UUID b=asset(),other=failed(b);var c=grant(b,other,"before-drift");db.sql("update ouf_onboarding.managed_file_asset set content_hash=:hash where asset_id=:a").param("hash","sha256:"+"b".repeat(64)).param("a",b).update();
     assertThatThrownBy(()->resume(b,other,c)).hasMessageContaining("SESSION_MISMATCH");
+    assertThat(card(b,other)).containsEntry("canResume",false).containsEntry("budgetAvailableToGrant",false);
     assertThatThrownBy(()->resume(b,other,card(b,other))).hasMessageContaining("SESSION_MISMATCH");
   }
   @Test void anotherTenantServiceOrMissingRecoveryCapabilityCannotGrant(){
@@ -134,6 +135,11 @@ class ManagedProfileBudgetRuntimeTest {
     assertThat(files.claimProfile("other-worker",Duration.ofMinutes(2),Instant.now())).isEmpty();
     files.failProfile(j,"same-worker",generation(first),"ONB_FILE_PROFILE_FAILED","Gateway object read failed with status 403",Duration.ZERO,false);
     assertThat(claim()).containsEntry("asset_id",b);
+  }
+  @Test void reviewDoesNotOfferActionsThatCurrentHumanCapabilitiesDeny(){
+    UUID a=asset(),j=failed(a);var readOnly=new OnboardingService.Actor("alice","HUMAN_USER",Set.of("ouf.managed-source.file.profile"));
+    assertThat(files.profileRecoveryCard(a,j,principal,readOnly)).containsEntry("recoveryPermissionAvailable",false).containsEntry("budgetAvailableToGrant",false).containsEntry("canResume",false).containsEntry("canCancel",false);
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_profile_budget_session").query(Long.class).single()).isZero();
   }
   @Test void immutableSessionEventsAndCumulativeProgressRejectResetAndPrivateDataIsNotProjected(){
     UUID a=asset(),j=failed(a);grant(a,j,"session");

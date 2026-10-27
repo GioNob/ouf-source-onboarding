@@ -127,13 +127,16 @@ public class ManagedProfileJobs {
         &&("EXHAUSTED".equals(j.get("failure_class"))||Set.of("Gateway object read failed with status 401","Gateway object read failed with status 403").contains(String.valueOf(j.get("last_error"))));
   }
   public Map<String,Object> card(UUID assetId,UUID job){var j=row(assetId,job,false);var a=asset(assetId);var q=quarantine(assetId,job);var s=session(j);Instant n=now();
+    boolean inputCurrent=Set.of("STAGED","QUARANTINED","PROFILED").contains(a.get("status"))
+        &&(j.get("input_binding_hash")==null||binding(a).equals(j.get("input_binding_hash")))
+        &&(s.isEmpty()||binding(a).equals(s.get("input_binding_hash")));
     var out=new LinkedHashMap<String,Object>();out.put("assetId",assetId);out.put("jobId",job);out.put("status",j.get("state"));out.put("cumulativeAttempts",j.get("attempts"));
     out.put("expectedVersion",j.get("lock_version"));out.put("expectedGeneration",j.get("generation"));out.put("inputBindingHash",binding(a));out.put("reviewHash",reviewHash(j,a,q));
     out.put("contentHash",a.get("content_hash"));out.put("sizeBytes",a.get("size_bytes"));out.put("mediaType",a.get("media_type"));out.put("uploadedAt",a.get("created_at").toString());
     out.put("lastFailureCategory",Set.of("Gateway object read failed with status 401","Gateway object read failed with status 403").contains(String.valueOf(j.get("last_error")))?"OBJECT_READ_FORBIDDEN":Objects.toString(j.get("failure_class"),"UNCLASSIFIED"));
     out.put("profile","managed-profile-recovery.v1");out.put("maximumAttempts",3);out.put("maximumElapsedSeconds",900);
-    out.put("budgetAvailableToGrant",eligible(j,q)&&(s.isEmpty()||!"ACTIVE".equals(s.get("state"))||!n.isBefore(instant(s.get("expires_at")))));
-    out.put("canResume",!s.isEmpty()&&"ACTIVE".equals(s.get("state"))&&s.get("activated_at")==null&&n.plusSeconds(90).isBefore(instant(s.get("expires_at")))&&eligible(j,q));
+    out.put("budgetAvailableToGrant",inputCurrent&&eligible(j,q)&&(s.isEmpty()||!"ACTIVE".equals(s.get("state"))||!n.isBefore(instant(s.get("expires_at")))));
+    out.put("canResume",inputCurrent&&!s.isEmpty()&&"ACTIVE".equals(s.get("state"))&&s.get("activated_at")==null&&n.plusSeconds(90).isBefore(instant(s.get("expires_at")))&&eligible(j,q));
     out.put("canCancel",!Set.of("SUCCEEDED","CANCELLED").contains(j.get("state")));
     if(!s.isEmpty()){out.put("sessionId",s.get("session_id"));out.put("sessionState",s.get("state"));out.put("sessionExpiresAt",s.get("expires_at").toString());out.put("sessionBaseAttempts",s.get("base_attempts"));out.put("decisionRef",s.get("decision_ref"));out.put("sessionUsedAttempts",number(j,"attempts")-base(s));}
     out.put("history",db.sql("select job_version,generation,cumulative_attempts,event_type,safe_code,created_at from ouf_onboarding.managed_profile_event where job_id=:j order by job_version desc limit 16").param("j",job).query().listOfRows());

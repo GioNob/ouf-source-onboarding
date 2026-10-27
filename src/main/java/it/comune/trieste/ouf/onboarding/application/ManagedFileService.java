@@ -150,7 +150,10 @@ public class ManagedFileService {
       throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED","Explicit HUMAN profiling and quarantine recovery authority required");
     requireTenantOwner(asset,p.tenantId(),p.subjectId());
   }
-  public Map<String,Object> profileRecoveryCard(UUID asset,UUID job,it.comune.trieste.ouf.authorization.PrincipalContext p,OnboardingService.Actor actor){recoveryActor(p,actor,asset,false);return profileJobs.card(asset,job);}
+  public Map<String,Object> profileRecoveryCard(UUID asset,UUID job,it.comune.trieste.ouf.authorization.PrincipalContext p,OnboardingService.Actor actor){
+    recoveryActor(p,actor,asset,false);var card=new LinkedHashMap<>(profileJobs.card(asset,job));boolean write=actor.capabilities().contains("ouf.onboarding.quarantine.release");
+    card.put("recoveryPermissionAvailable",write);if(!write){card.put("budgetAvailableToGrant",false);card.put("canResume",false);card.put("canCancel",false);}return card;
+  }
   public Map<String,Object> grantProfileBudget(UUID asset,UUID job,it.comune.trieste.ouf.authorization.PrincipalContext p,OnboardingService.Actor actor,ManagedProfileJobs.BudgetDecision d){
     recoveryActor(p,actor,asset,true);return profileJobs.grant(asset,job,p.tenantId(),p.subjectId(),d);
   }
