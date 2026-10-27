@@ -34,7 +34,8 @@ class ManagedProfileFailureRuntimeTest {
   }
   @Test void exhaustedFiveAttemptHistoryIsPreservedAcrossNewRequestKeys(){
     UUID asset=asset(),job=(UUID)files.requestProfile(asset,"initial").get("job_id");
-    db.sql("update ouf_onboarding.file_profile_job set state='FAILED',attempts=5,error_code='ONB_FILE_PROFILE_FAILED',last_error='retained evidence',completed_at=clock_timestamp() where job_id=:j").param("j",job).update();
+    db.sql("update ouf_onboarding.file_profile_job set state='FAILED',generation=generation+1,lock_version=lock_version+1,attempts=attempts+1,error_code='ONB_FILE_PROFILE_FAILED',last_error='retained evidence',completed_at=clock_timestamp() where job_id=:j").param("j",job).update();
+    for(int i=0;i<4;i++)db.sql("update ouf_onboarding.file_profile_job set attempts=attempts+1,generation=generation+1,lock_version=lock_version+1 where job_id=:j").param("j",job).update();
     var before=files.profileJob(asset,job);
     for(int n=0;n<5;n++)assertThat(files.requestProfile(asset,"new-chat-"+n).get("job_id")).isEqualTo(job);
     assertThat(files.profileJob(asset,job)).isEqualTo(before);

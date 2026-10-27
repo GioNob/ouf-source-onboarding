@@ -13,6 +13,17 @@ public final class ManagedFileObjectReadFailure extends IllegalStateException {
   }
   public boolean retryable(){return retryable;}
   public Duration retryAfter(){return retryAfter;}
+  /** Only timeouts/connect refusal of this bounded read are transient; TLS/DNS/unknown IO are not. */
+  public static ManagedFileObjectReadFailure network(org.springframework.web.client.ResourceAccessException failure){
+    Throwable cause=failure;var seen=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<Throwable,Boolean>());
+    boolean known=false;
+    for(int depth=0;cause!=null&&depth<8&&seen.add(cause);depth++,cause=cause.getCause()){
+      if(cause instanceof javax.net.ssl.SSLException||cause instanceof java.net.UnknownHostException)
+        return new ManagedFileObjectReadFailure("Gateway object read transport requires reconciliation",false,Duration.ZERO);
+      if(cause instanceof java.net.SocketTimeoutException||cause instanceof java.net.http.HttpTimeoutException||cause instanceof java.net.ConnectException)known=true;
+    }
+    return new ManagedFileObjectReadFailure(known?"Gateway object read temporary transport failure":"Gateway object read transport requires reconciliation",known,Duration.ZERO);
+  }
   public static ManagedFileObjectReadFailure http(int status,String header,Instant now){
     boolean retry=Set.of(429,502,503,504).contains(status);
     Duration after=Duration.ZERO;

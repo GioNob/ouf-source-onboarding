@@ -1,3 +1,5 @@
+Current continuation: see MANAGED_PROFILE_BUDGET_SESSIONS.md. The following describes the earlier failfast-only qualification, not the complete current candidate.
+
 # Profiling: permanent failure and logical-job admission guard
 
 The retained Farmacie job failed before CSV parsing: its Gateway object read returned403. The existing worker retried every exception until five attempts were exhausted. This delta stops typed permanent HTTP failures (including401/403), known invalid input and unknown/ambiguous failures immediately; it retains the safe diagnostic message. Only typed read-only Gateway429/502/503/504 failures request an automatic retry within the existing five-attempt job profile. A valid Retry-After is respected; malformed or over24hour values stop for reconciliation. Arbitrary exception text cannot manufacture transient authority or persist secret-bearing error text.

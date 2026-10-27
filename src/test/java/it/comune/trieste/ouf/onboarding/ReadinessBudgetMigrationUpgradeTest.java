@@ -40,7 +40,7 @@ class ReadinessBudgetMigrationUpgradeTest {
           String history=one(sql,"SELECT jsonb_agg(to_jsonb(h) ORDER BY installed_rank)::text FROM ouf_onboarding.flyway_schema_history h WHERE version IS NOT NULL");
           String revision=one(sql,"SELECT to_jsonb(r)::text FROM ouf_onboarding.source_property_revision r");
           String review=one(sql,"SELECT (to_jsonb(r)-'readiness_session_id')::text FROM ouf_onboarding.managed_onboarding_review r");
-          var flyway=Flyway.configure().dataSource(isolated,user,password).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").load();
+          var flyway=Flyway.configure().dataSource(isolated,user,password).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").target("35").load();
           assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);flyway.validate();
           assertThat(one(sql,"SELECT jsonb_agg(to_jsonb(h) ORDER BY installed_rank)::text FROM ouf_onboarding.flyway_schema_history h WHERE version IS NOT NULL AND version<>'35'")).isEqualTo(history);
           assertThat(one(sql,"SELECT to_jsonb(r)::text FROM ouf_onboarding.source_property_revision r")).isEqualTo(revision);
@@ -60,3 +60,4 @@ class ReadinessBudgetMigrationUpgradeTest {
   }
   private static String required(String name){return Objects.requireNonNull(System.getenv(name),name+" required");}
 }
+

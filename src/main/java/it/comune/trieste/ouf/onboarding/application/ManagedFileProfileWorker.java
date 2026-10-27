@@ -17,9 +17,10 @@ public class ManagedFileProfileWorker {
   public void runOnce(){files.claimProfile(workerId,lease,Instant.now()).ifPresent(this::process);}
 
   private void process(Map<String,Object> job){
-    var jobId=(java.util.UUID)job.get("job_id");try{String stagingRef=String.valueOf(job.get("staging_ref"));long expectedSize=((Number)job.get("size_bytes")).longValue();byte[] bytes=objects.read(stagingRef,expectedSize);String sampleRef="profile://managed-files/"+job.get("asset_id")+"/jobs/"+jobId+"/redacted-sample";files.completeProfile(jobId,workerId,bytes,sampleRef);}catch(Exception failure){
-      var decision=ManagedProfileFailurePolicy.classify(failure,retryDelay);
-      files.failProfile(jobId,workerId,"ONB_FILE_PROFILE_FAILED",decision.retainedDetail(),decision.delay(),decision.retryable());
+    var jobId=(java.util.UUID)job.get("job_id");try{String stagingRef=String.valueOf(job.get("staging_ref"));long expectedSize=((Number)job.get("size_bytes")).longValue();byte[] bytes=objects.read(stagingRef,expectedSize);String sampleRef="profile://managed-files/"+job.get("asset_id")+"/jobs/"+jobId+"/redacted-sample";files.completeProfile(jobId,workerId,((Number)job.get("generation")).longValue(),bytes,sampleRef);}catch(Exception failure){
+      var decision=ManagedProfileFailurePolicy.classify(failure,Duration.ZERO);
+      try{files.failProfile(jobId,workerId,((Number)job.get("generation")).longValue(),"ONB_FILE_PROFILE_FAILED",decision.retainedDetail(),decision.delay(),decision.retryable());}
+      catch(it.comune.trieste.ouf.onboarding.domain.DomainFailure fenced){if(!java.util.Set.of("ONB_PROFILE_CLAIM_FENCED","ONB_PROFILE_BUDGET_EXHAUSTED","ONB_PROFILE_INPUT_RECONCILIATION_REQUIRED").contains(fenced.code()))throw fenced;}
     }
   }
 

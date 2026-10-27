@@ -47,7 +47,8 @@ class ManagedFileRecoveryRuntimeTest {
   @SuppressWarnings("unchecked") @Test void failedAndRunningJobsAreDiscoverableWithoutNewJobOrPrivateDetails(){
     UUID a=asset("alice");proof(a,"tenant-a","alice");
     var first=files.requestProfile(a,"retained-job");UUID job=UUID.fromString(first.get("jobId").toString());
-    db.sql("update ouf_onboarding.file_profile_job set state='FAILED',attempts=5,error_code='ONB_FILE_PROFILE_FAILED',last_error='PRIVATE_CREDENTIAL_AND_OBJECT_PATH' where job_id=:j").param("j",job).update();
+    db.sql("update ouf_onboarding.file_profile_job set state='FAILED',generation=generation+1,lock_version=lock_version+1,attempts=attempts+1,error_code='ONB_FILE_PROFILE_FAILED',last_error='PRIVATE_CREDENTIAL_AND_OBJECT_PATH' where job_id=:j").param("j",job).update();
+    for(int i=0;i<4;i++)db.sql("update ouf_onboarding.file_profile_job set attempts=attempts+1,generation=generation+1,lock_version=lock_version+1 where job_id=:j").param("j",job).update();
     for(int chat=0;chat<2;chat++){
       var page=files.ownedAssets("tenant-a","alice",10,null);
       var item=((List<Map<String,Object>>)page.get("items")).getFirst();
@@ -72,8 +73,7 @@ class ManagedFileRecoveryRuntimeTest {
     var empty=((List<Map<String,Object>>)files.ownedAssets("tenant-a","alice",10,null).get("items")).getFirst();assertThat(empty).doesNotContainKey("profileJob");
     files.requestProfile(a,"older");UUID id=UUID.randomUUID();
     // Retained multi-job history predates the admission guard; discovery still reports it.
-    db.sql("insert into ouf_onboarding.file_profile_job(job_id,asset_id,idempotency_key) values(:j,:a,'retained-newer')").param("j",id).param("a",a).update();
-    db.sql("update ouf_onboarding.file_profile_job set created_at=created_at+interval '1 hour' where job_id=:j").param("j",id).update();
+    db.sql("insert into ouf_onboarding.file_profile_job(job_id,asset_id,idempotency_key,created_at) values(:j,:a,'retained-newer',clock_timestamp()+interval '1 hour')").param("j",id).param("a",a).update();
     var item=((List<Map<String,Object>>)files.ownedAssets("tenant-a","alice",10,null).get("items")).getFirst();assertThat((Map<String,Object>)item.get("profileJob")).containsEntry("jobId",id).containsEntry("status","QUEUED");
   }
   private static String required(String name){return Objects.requireNonNull(System.getenv(name),name);}

@@ -74,8 +74,8 @@ public class ManagedFileService {
 
   public record FieldDecision(String fieldName,String extractionDecision,String dataAccessLabel,String targetPropertyIri,String transform,String vocabularyId,String vocabularyVersion,String valueMapRef){}
   private static final long MAX_PROFILE_BYTES=10L*1024*1024;
-  private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ManagedFileProfiler profiler; private final TransactionTemplate tx; private final OnboardingService onboarding;
-  public ManagedFileService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ManagedFileProfiler profiler,TransactionTemplate tx,OnboardingService onboarding){this.db=db;this.json=json;this.hashes=hashes;this.profiler=profiler;this.tx=tx;this.onboarding=onboarding;}
+  private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ManagedFileProfiler profiler; private final TransactionTemplate tx; private final OnboardingService onboarding; private final ManagedProfileJobs profileJobs;
+  public ManagedFileService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ManagedFileProfiler profiler,TransactionTemplate tx,OnboardingService onboarding,ManagedProfileJobs profileJobs){this.db=db;this.json=json;this.hashes=hashes;this.profiler=profiler;this.tx=tx;this.onboarding=onboarding;this.profileJobs=profileJobs;}
   public Map<String,Object> register(String sourceId,String stagingRef,String contentHash,String mediaType,long size,String uploadedBy,String retentionRef){
     if(!stagingRef.startsWith("object://"))throw invalid("ONB_STAGING_REF_INVALID","stagingRef must use object://");if(size<1||size>MAX_PROFILE_BYTES)throw invalid("ONB_FILE_SIZE_INVALID","File exceeds the 10 MiB deterministic profiling limit");UUID id=UUID.randomUUID();
     return tx.execute(status->{db.sql("insert into ouf_onboarding.managed_file_asset(asset_id,source_id,staging_ref,content_hash,media_type,size_bytes,uploaded_by,retention_ref) values(:i,:s,:r,:h,:m,:z,:u,:x) on conflict(staging_ref,content_hash) do nothing").param("i",id).param("s",new SqlParameterValue(Types.VARCHAR,sourceId)).param("r",stagingRef).param("h",contentHash).param("m",mediaType).param("z",size).param("u",uploadedBy).param("x",retentionRef).update();return db.sql("select asset_id,source_id,staging_ref,content_hash,media_type,size_bytes,uploaded_by,retention_ref,status,created_at from ouf_onboarding.managed_file_asset where staging_ref=:r and content_hash=:h").param("r",stagingRef).param("h",contentHash).query().singleRow();});
@@ -129,19 +129,41 @@ public class ManagedFileService {
     });
   }
   public Map<String,Object> profileJob(UUID assetId,UUID jobId){
-    return jobView(db.sql("select job_id,asset_id,idempotency_key,state,attempts,claimed_by,lease_until,next_attempt_at,profile_id,error_code,last_error,created_at,updated_at,completed_at from ouf_onboarding.file_profile_job where asset_id=:a and job_id=:i").param("a",assetId).param("i",jobId).query().listOfRows().stream().findFirst().orElseThrow(()->new DomainFailure(HttpStatus.NOT_FOUND,"ONB_FILE_PROFILE_JOB_NOT_FOUND","File profile job not found")));
+    return jobView(db.sql("select * from ouf_onboarding.file_profile_job where asset_id=:a and job_id=:i").param("a",assetId).param("i",jobId).query().listOfRows().stream().findFirst().orElseThrow(()->new DomainFailure(HttpStatus.NOT_FOUND,"ONB_FILE_PROFILE_JOB_NOT_FOUND","File profile job not found")));
   }
-  public Optional<Map<String,Object>> claimProfile(String worker,Duration lease,Instant now){
-    return tx.execute(status->{requireLease(lease);OffsetDateTime instant=utc(now);db.sql("update ouf_onboarding.file_profile_job set state='FAILED',claimed_by=null,lease_until=null,error_code='ONB_PROFILE_LEASE_EXHAUSTED',last_error='Lease expired after maximum attempts',completed_at=:n,updated_at=:n where state='RUNNING' and lease_until<=:n and attempts>=5").param("n",instant).update();List<Map<String,Object>> claimed=db.sql("with candidate as (select job_id from ouf_onboarding.file_profile_job where ((state in ('READY','RETRY_WAIT') and next_attempt_at<=:n) or (state='RUNNING' and lease_until<=:n)) and attempts<5 order by next_attempt_at,created_at for update skip locked limit 1) update ouf_onboarding.file_profile_job j set state='RUNNING',claimed_by=:w,lease_until=:u,attempts=j.attempts+1,error_code=null,last_error=null,updated_at=:n where j.job_id=(select job_id from candidate) returning j.*").param("n",instant).param("w",worker).param("u",utc(now.plus(lease))).query().listOfRows();return claimed.stream().findFirst().map(row->{Map<String,Object> out=new LinkedHashMap<>(row);out.putAll(asset((UUID)row.get("asset_id")));return out;});});
+  public Optional<Map<String,Object>> claimProfile(String worker,Duration lease,Instant ignoredOperatorClock){
+    return profileJobs.claim(worker,lease,this::profileQuarantine).map(row->{var out=new LinkedHashMap<>(row);out.putAll(asset((UUID)row.get("asset_id")));return out;});
   }
-  public Map<String,Object> completeProfile(UUID jobId,String worker,byte[] bytes,String sampleRef){
-    return tx.execute(status->{Map<String,Object> job=db.sql("select job_id,asset_id,state,claimed_by,lease_until from ouf_onboarding.file_profile_job where job_id=:i for update").param("i",jobId).query().singleRow();if(!"RUNNING".equals(job.get("state"))||!worker.equals(job.get("claimed_by")))throw conflict("ONB_FILE_PROFILE_JOB_CONFLICT","Profile job is not owned by this worker");Map<String,Object> result=profile((UUID)job.get("asset_id"),bytes,sampleRef);int changed=db.sql("update ouf_onboarding.file_profile_job set state='SUCCEEDED',profile_id=:p,claimed_by=null,lease_until=null,completed_at=transaction_timestamp(),updated_at=transaction_timestamp() where job_id=:i and state='RUNNING' and claimed_by=:w and lease_until>transaction_timestamp()").param("p",result.get("profile_id")).param("i",jobId).param("w",worker).update();if(changed!=1)throw conflict("ONB_FILE_PROFILE_JOB_CONFLICT","Profile job lease was lost");return profileJob((UUID)job.get("asset_id"),jobId);});
+  public Map<String,Object> completeProfile(UUID jobId,String worker,long generation,byte[] bytes,String sampleRef){
+    var row=db.sql("select asset_id from ouf_onboarding.file_profile_job where job_id=:j").param("j",jobId).query().singleRow();UUID asset=(UUID)row.get("asset_id");
+    profileJobs.complete(jobId,worker,generation,()->profile(asset,bytes,sampleRef));return profileJob(asset,jobId);
   }
-  public Map<String,Object> failProfile(UUID jobId,String worker,String errorCode,String detail,Duration retryAfter){
-    return failProfile(jobId,worker,errorCode,detail,retryAfter,true);
+  public Map<String,Object> failProfile(UUID jobId,String worker,long generation,String errorCode,String detail,Duration retryAfter,boolean retryable){
+    // The only runtime caller supplies the typed failure policy; arbitrary raw exception text is not persisted.
+    profileJobs.fail(jobId,worker,generation,safe(detail),retryAfter,retryable,this::profileQuarantine);
+    UUID asset=db.sql("select asset_id from ouf_onboarding.file_profile_job where job_id=:j").param("j",jobId).query(UUID.class).single();return profileJob(asset,jobId);
   }
-  public Map<String,Object> failProfile(UUID jobId,String worker,String errorCode,String detail,Duration retryAfter,boolean retryable){
-    return tx.execute(status->{if(retryAfter==null||retryAfter.isNegative())throw invalid("ONB_RETRY_DELAY_INVALID","retryAfter must not be negative");Map<String,Object> row=db.sql("select asset_id,attempts from ouf_onboarding.file_profile_job where job_id=:i").param("i",jobId).query().singleRow();int changed=db.sql("update ouf_onboarding.file_profile_job set state=case when not :retry or attempts>=5 then 'FAILED' else 'RETRY_WAIT' end,claimed_by=null,lease_until=null,next_attempt_at=case when :retry then transaction_timestamp()+make_interval(secs=>:r) else next_attempt_at end,error_code=:e,last_error=:d,completed_at=case when not :retry or attempts>=5 then transaction_timestamp() else null end,updated_at=transaction_timestamp() where job_id=:i and state='RUNNING' and claimed_by=:w and lease_until>transaction_timestamp()").param("retry",retryable).param("r",retryAfter.toSeconds()).param("e",errorCode).param("d",safe(detail)).param("i",jobId).param("w",worker).update();if(changed!=1)throw conflict("ONB_FILE_PROFILE_JOB_CONFLICT","Profile job is not owned by this worker");if(!retryable||((Number)row.get("attempts")).intValue()>=5)quarantine((UUID)row.get("asset_id"),jobId,errorCode,safe(detail),"profile-job:"+jobId);return profileJob((UUID)row.get("asset_id"),jobId);});
+  private void profileQuarantine(UUID asset,UUID job,String code,String detail){quarantine(asset,job,code,detail,"profile-job:"+job);}
+  private void recoveryActor(it.comune.trieste.ouf.authorization.PrincipalContext p,OnboardingService.Actor actor,UUID asset,boolean write){
+    if(p==null||p.actorType()!=it.comune.trieste.ouf.authorization.PrincipalContext.ActorType.HUMAN||actor==null||!"HUMAN_USER".equals(actor.type())||!p.subjectId().equals(actor.subject())
+        ||!actor.capabilities().contains("ouf.managed-source.file.profile")||write&&!actor.capabilities().contains("ouf.onboarding.quarantine.release"))
+      throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED","Explicit HUMAN profiling and quarantine recovery authority required");
+    requireTenantOwner(asset,p.tenantId(),p.subjectId());
+  }
+  public Map<String,Object> profileRecoveryCard(UUID asset,UUID job,it.comune.trieste.ouf.authorization.PrincipalContext p,OnboardingService.Actor actor){recoveryActor(p,actor,asset,false);return profileJobs.card(asset,job);}
+  public Map<String,Object> grantProfileBudget(UUID asset,UUID job,it.comune.trieste.ouf.authorization.PrincipalContext p,OnboardingService.Actor actor,ManagedProfileJobs.BudgetDecision d){
+    recoveryActor(p,actor,asset,true);return profileJobs.grant(asset,job,p.tenantId(),p.subjectId(),d);
+  }
+  public Map<String,Object> resumeProfile(UUID asset,UUID job,it.comune.trieste.ouf.authorization.PrincipalContext p,OnboardingService.Actor actor,ManagedProfileJobs.Resume d){
+    recoveryActor(p,actor,asset,true);return profileJobs.resume(asset,job,p.subjectId(),p.tenantId(),d,()->{
+      var q=db.sql("select quarantine_id,state from ouf_onboarding.managed_file_quarantine where asset_id=:a and profile_job_id=:j order by created_at desc,quarantine_id desc limit 1 for update")
+          .param("a",asset).param("j",job).query().singleRow();
+      if("OPEN".equals(q.get("state")))resolveQuarantine((UUID)q.get("quarantine_id"),"RELEASED",actor,"profile-budget:"+d.sessionId(),"profile-job:"+job);
+      else if(!"RELEASED".equals(q.get("state")))throw conflict("ONB_PROFILE_QUARANTINE_REJECTED","Rejected quarantine cannot be resumed");
+    });
+  }
+  public Map<String,Object> cancelProfile(UUID asset,UUID job,it.comune.trieste.ouf.authorization.PrincipalContext p,OnboardingService.Actor actor,ManagedProfileJobs.Cancel d){
+    recoveryActor(p,actor,asset,true);return profileJobs.cancel(asset,job,p.tenantId(),p.subjectId(),d);
   }
   public List<Map<String,Object>> quarantines(String state){String selected=state==null?"OPEN":state;if(!Set.of("OPEN","RELEASED","REJECTED").contains(selected))throw invalid("ONB_QUARANTINE_STATE_INVALID","Unsupported quarantine state");return db.sql("select quarantine_id,asset_id,profile_job_id,reason_code,evidence_ref,safe_detail,state,created_at,resolved_at,resolved_by_subject,correlation_id from ouf_onboarding.managed_file_quarantine where state=:s order by created_at desc").param("s",selected).query().listOfRows();}
   public Map<String,Object> quarantine(UUID id){return db.sql("select quarantine_id,asset_id,profile_job_id,reason_code,evidence_ref,safe_detail,state,created_at,resolved_at,resolved_by_subject,correlation_id from ouf_onboarding.managed_file_quarantine where quarantine_id=:i").param("i",id).query().listOfRows().stream().findFirst().orElseThrow(()->new DomainFailure(HttpStatus.NOT_FOUND,"ONB_QUARANTINE_NOT_FOUND","Managed-file quarantine item not found"));}
