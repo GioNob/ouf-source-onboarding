@@ -150,6 +150,16 @@ public class ManagedFileService {
       throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED","Explicit HUMAN profiling and quarantine recovery authority required");
     requireTenantOwner(asset,p.tenantId(),p.subjectId());
   }
+  /** Control metadata for one retained job, resolved before policy evaluation.
+   * No CSV label is invented here: this context describes the operational job only. */
+  public it.comune.trieste.ouf.authorization.ResourceContext profileRecoveryResource(UUID asset,UUID job,it.comune.trieste.ouf.authorization.PrincipalContext p){
+    if(p==null||p.actorType()!=it.comune.trieste.ouf.authorization.PrincipalContext.ActorType.HUMAN)
+      throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED","Explicit HUMAN recovery identity required");
+    requireTenantOwner(asset,p.tenantId(),p.subjectId());
+    profileJobs.requireRetainedJob(asset,job);
+    return new it.comune.trieste.ouf.authorization.ResourceContext("managed-profile-job",job.toString(),p.tenantId(),null,
+        Map.of("module","ONBOARDING","assetRef",asset.toString(),"jobRef",job.toString(),"detailLevel","TENANT_OPERATIONAL"));
+  }
   public Map<String,Object> profileRecoveryCard(UUID asset,UUID job,it.comune.trieste.ouf.authorization.PrincipalContext p,OnboardingService.Actor actor){
     recoveryActor(p,actor,asset,false);var card=new LinkedHashMap<>(profileJobs.card(asset,job));boolean write=actor.capabilities().contains("ouf.onboarding.quarantine.release");
     card.put("recoveryPermissionAvailable",write);if(!write){card.put("budgetAvailableToGrant",false);card.put("canResume",false);card.put("canCancel",false);}return card;

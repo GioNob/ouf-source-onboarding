@@ -187,4 +187,20 @@ class ManagedProfileBudgetRuntimeTest {
       assertThat(db.sql("select count(*) from ouf_onboarding.file_profile").query(Long.class).single()).isZero();
     }finally{release.countDown();pool.shutdownNow();}
   }
+
+  @Test void recoveryResourceIsResolvedFromSameOwnedRetainedJobWithoutChangingStateOrLabels(){
+    UUID a=asset(),j=failed(a);var before=files.profileJob(a,j);var r=files.profileRecoveryResource(a,j,principal);
+    assertThat(r.resourceType()).isEqualTo("managed-profile-job");assertThat(r.resourceId()).isEqualTo(j.toString());assertThat(r.tenantId()).isEqualTo("tenant-a");
+    assertThat(r.attributes()).containsEntry("assetRef",a.toString()).containsEntry("jobRef",j.toString()).containsEntry("detailLevel","TENANT_OPERATIONAL").doesNotContainKey("dataAccessLabel");
+    assertThat(files.profileJob(a,j)).isEqualTo(before);
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_profile_budget_session").query(Long.class).single()).isZero();
+    assertThatThrownBy(()->files.profileRecoveryResource(a,UUID.randomUUID(),principal)).hasMessageContaining("JOB_NOT_FOUND");
+    UUID other=asset();assertThatThrownBy(()->files.profileRecoveryResource(other,j,principal)).hasMessageContaining("JOB_NOT_FOUND");
+    var wrongTenant=new PrincipalContext("alice","other",PrincipalContext.ActorType.HUMAN,null,"auth","https://iam.test","ouf",Set.of());
+    assertThatThrownBy(()->files.profileRecoveryResource(a,j,wrongTenant)).hasMessageContaining("owner scope");
+    var wrongOwner=new PrincipalContext("bob","tenant-a",PrincipalContext.ActorType.HUMAN,null,"auth","https://iam.test","ouf",Set.of());
+    assertThatThrownBy(()->files.profileRecoveryResource(a,j,wrongOwner)).hasMessageContaining("owner scope");
+    var machine=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.SERVICE,"service","auth","https://iam.test","ouf",Set.of());
+    assertThatThrownBy(()->files.profileRecoveryResource(a,j,machine)).hasMessageContaining("HUMAN");
+  }
 }

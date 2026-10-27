@@ -52,6 +52,30 @@ test('lost budget response survives reload and reconciles exact command without 
 test('deny hides decisions and server labels are text, with no automatic POST after refresh',async()=>surface(async(page,url,asset,job)=>{
   let deny=true,posts=0;await page.route('**/recovery/api/**',async route=>{if(route.request().method()==='POST')posts++;
     if(deny)await route.fulfill({status:403,json:{code:'DENIED'}});else await route.fulfill({json:{card:{...initial(asset,job),uploadedAt:'<img src=x onerror=alert(1)>'},csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture'}});});
-  await page.goto(url);await page.getByRole('status').filter({hasText:'Accesso non autorizzato'}).waitFor();assert.equal(await page.locator('#review').isHidden(),true);assert.equal(posts,0);
+  await page.goto(url);await page.getByRole('status').filter({hasText:'Accesso negato (HTTP 403)'}).waitFor();assert.equal(await page.locator('#review').isHidden(),true);assert.equal(posts,0);
   deny=false;await page.locator('#refresh').click();await page.locator('#review').waitFor();assert.equal(await page.locator('#facts img').count(),0);assert.equal(posts,0);
+}));
+
+test('authentication and authorization are distinct, bounded, safe and never auto-retried',async()=>surface(async(page,url,asset,job)=>{
+  let reads=0,posts=0,status=403,problem={code:'ONB_CAPABILITY_DENIED',correlationId:'00000000-0000-4000-8000-000000000009',detail:'token=do-not-render object://private <img src=x>'};
+  await page.route('**/recovery/api/**',async route=>{if(route.request().method()==='POST')posts++;else reads++;await route.fulfill({status,json:problem});});
+  await page.goto(url);await page.getByRole('status').filter({hasText:'Manca una capability HUMAN richiesta'}).waitFor();
+  assert.equal(await page.locator('#review').isHidden(),true);assert.equal(reads,1);assert.equal(posts,0);
+  let message=await page.locator('#message').innerText();assert.match(message,/ONB_CAPABILITY_DENIED/);assert.match(message,/00000000-0000-4000-8000-000000000009/);assert.doesNotMatch(message,/do-not-render|object:\/\/|<img/);
+  status=401;problem={detail:'token=never'};await page.locator('#refresh').click();await page.getByRole('status').filter({hasText:'Sessione OUF non valida o scaduta (HTTP 401)'}).waitFor();
+  assert.equal(posts,0);assert.equal(reads,2);assert.match(await page.locator('#message').innerText(),/questo stesso collegamento/);
+  status=403;problem={code:'ONB_FILE_OWNER_SCOPE_UNPROVEN'};await page.locator('#refresh').click();await page.getByRole('status').filter({hasText:'ownership'}).waitFor();assert.equal(posts,0);
+  problem={code:'THS_SESSION_REQUIRED'};await page.locator('#refresh').click();await page.getByRole('status').filter({hasText:'Sessione OUF non valida o scaduta (HTTP 403)'}).waitFor();assert.equal(posts,0);
+  problem={code:'UNKNOWN_TOKEN_SECRET',correlationId:'private-reference',detail:'secret'};await page.locator('#refresh').click();await page.getByRole('status').filter({hasText:'Accesso negato (HTTP 403)'}).waitFor();
+  assert.doesNotMatch(await page.locator('#message').innerText(),/UNKNOWN_TOKEN_SECRET|private-reference|secret/);assert.equal(posts,0);
+}));
+
+test('authorization denial after a budget command preserves its exact pending request across reload',async()=>surface(async(page,url,asset,job)=>{
+  let card=initial(asset,job),posts=[];
+  await page.route('**/recovery/api/**',async route=>{const r=route.request();if(r.method()==='GET'){await route.fulfill({json:{card,csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture'}});return;}
+    posts.push(r.postDataJSON());await route.fulfill({status:403,json:{code:'ONB_CAPABILITY_DENIED'}});});
+  await page.goto(url);await page.locator('#review').waitFor();await page.locator('#reason').fill('Dependency repaired; exact retained operation');await page.locator('#confirmed').check();await page.locator('#budget').click();
+  await page.getByRole('status').filter({hasText:'Conserva e riconcilia la stessa richiesta'}).waitFor();assert.equal(posts.length,1);assert.equal(await page.locator('#budget').isDisabled(),true);
+  await page.reload();await page.locator('#review').waitFor();assert.equal(posts.length,1);assert.equal(await page.locator('#budget').isDisabled(),true);assert.equal(await page.locator('#resume').isDisabled(),true);
+  await page.locator('#reconcile').click();await page.getByRole('status').filter({hasText:'Conserva e riconcilia'}).waitFor();assert.equal(posts.length,2);assert.deepEqual(posts[0],posts[1]);assert.equal(card.cumulativeAttempts,5);
 }));

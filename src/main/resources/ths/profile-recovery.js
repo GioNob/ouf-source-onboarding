@@ -24,21 +24,35 @@
     $('truncated').textContent=card.historyTruncated?'Sono mostrate le ultime 16 transizioni. La storia completa è conservata.':'';
     $('confirmed').checked=false;controls();
   }
+  const denialCodes=new Set(['ONB_CAPABILITY_DENIED','ONB_AUTHORIZATION_DENIED','ONB_ACTOR_TYPE_DENIED','ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED','ONB_FILE_OWNER_SCOPE_UNPROVEN','ONB_FILE_OWNER_DENIED','THS_SESSION_REQUIRED']);
+  function accessFailure(error,action=false){
+    if(![401,403].includes(error.status))return null;
+    const reference=error.correlationId?' Riferimento: '+error.correlationId+'.':'';
+    const code=denialCodes.has(error.code)?' Codice: '+error.code+'.':'';
+    if(error.status===401||error.code==='THS_SESSION_REQUIRED')return 'Sessione OUF non valida o scaduta (HTTP '+error.status+'). Accedi nuovamente con il tuo account e riapri questo stesso collegamento.'+(action?' La richiesta precedente resta da riconciliare.':' Nessuna azione è stata inviata.')+reference;
+    const cause=error.code==='ONB_CAPABILITY_DENIED'||error.code==='ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED'?'Manca una capability HUMAN richiesta.':error.code==='ONB_FILE_OWNER_SCOPE_UNPROVEN'||error.code==='ONB_FILE_OWNER_DENIED'?'Il controllo di ownership del file è stato negato.':'Il controllo di accesso ha negato la richiesta; sessione, scope e permessi devono essere verificati.';
+    return 'Accesso negato (HTTP 403). '+cause+' Un nuovo login non concede permessi.'+(action?' Conserva e riconcilia la stessa richiesta; non concedere un altro budget.':' Il lavoro è conservato; nessuna azione è stata inviata.')+code+reference;
+  }
   async function request(path,options={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
     try{const response=await fetch(path,{credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,...options});
-      if(!response.ok){const error=new Error();error.status=response.status;throw error;}return await response.json();
+      if(!response.ok){const error=new Error();error.status=response.status;
+        // Never render arbitrary error detail, HTML, credentials or storage references.
+        try{const raw=await response.text();if(raw.length<=4096){const problem=JSON.parse(raw);const code=problem.code||problem.Code;
+          if(denialCodes.has(code))error.code=code;
+          if(typeof problem.correlationId==='string'&&/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(problem.correlationId))error.correlationId=problem.correlationId;}}catch(_){}
+        throw error;}return await response.json();
     }finally{clearTimeout(timer);}
   }
   async function refresh(silent=false){if(busy)return;busy=true;controls();try{const result=await request(endpoint);card=result.card;csrfHeader=result.csrfHeader;csrfToken=result.csrfToken;render();
       if(!silent)message(card.recoveryPermissionAvailable===false?'Hai accesso allo stato; manca il permesso HUMAN per il recupero. Nessuna azione è disponibile.':pending?'Esito precedente da riconciliare. Nessun invio viene ripetuto automaticamente.':card.status==='SUCCEEDED'?'Analisi completata. Il lavoro conservato è pronto per il passo successivo.':'Stato verificato. Esamina il lavoro e scegli l’azione.');
-    }catch(error){monitor=null;card=null;$('review').hidden=true;csrfToken=null;message(error.status===401||error.status===403?'Accesso non autorizzato o sessione scaduta. Accedi di nuovo a OUF.':'Stato non verificato. Aggiorna prima di decidere; nessuna azione è stata inviata.');}
+    }catch(error){monitor=null;card=null;$('review').hidden=true;csrfToken=null;message(accessFailure(error)||'Stato non verificato. Aggiorna prima di decidere; nessuna azione è stata inviata.');}
     finally{busy=false;controls();}}
   function storePending(value){pending=value;try{if(value)sessionStorage.setItem(storage,JSON.stringify(value));else sessionStorage.removeItem(storage);}catch(_){}controls();}
   async function send(action,body){if(busy||!csrfToken)return;monitor=null;busy=true;storePending({action,body});controls();
     try{card=await request(endpoint+'/'+action,{method:'POST',headers:{'Content-Type':'application/json',[csrfHeader]:csrfToken},body:JSON.stringify(body)});storePending(null);render();
       message(action==='budget'?'Budget concesso. L’analisi resta ferma: verifica la revisione, poi scegli Avvia il recupero.':action==='resume'?'Recupero avviato sullo stesso job. Verifico l’esito entro una finestra finita.':'Recupero annullato; storia e risultati conservati.');
       if(action==='resume'&&!['SUCCEEDED','FAILED','CANCELLED'].includes(card.status))monitor={start:Date.now(),reads:0};
-    }catch(error){message(error.status===401||error.status===403?'Azione non autorizzata. Aggiorna l’accesso prima di riconciliare.':'Esito non confermato. Nessun invio viene ripetuto automaticamente: aggiorna lo stato o riconcilia la stessa richiesta.');}
+    }catch(error){message(accessFailure(error,true)||'Esito non confermato. Nessun invio viene ripetuto automaticamente: aggiorna lo stato o riconcilia la stessa richiesta.');}
     finally{busy=false;controls();if(monitor)setTimeout(poll,6000);}}
   async function poll(){if(!monitor||busy)return;if(monitor.reads>=12||Date.now()-monitor.start>=90000){monitor=null;message('Monitoraggio terminato. Il lavoro conserva il proprio stato; usa Aggiorna stato.');return;}
     monitor.reads++;await refresh(true);if(!monitor)return;

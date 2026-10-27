@@ -1,0 +1,66 @@
+{
+  "roleId": "managed-profile-recovery-v1",
+  "displayName": "Recovery HUMAN del profiling di file posseduti",
+  "permissions": [
+    {
+      "capabilityId": "ouf.managed-source.preview",
+      "constraints": {
+        "effect": "ALLOW",
+        "externalRoleRef": null,
+        "resourceType": "managed-profile-job",
+        "resourceId": null,
+        "resourceAttributes": {
+          "module": "ONBOARDING",
+          "detailLevel": "TENANT_OPERATIONAL"
+        },
+        "allowedDataLabels": [],
+        "allowedDetailLevels": [
+          "TENANT_OPERATIONAL"
+        ],
+        "requiredAcr": null,
+        "requiredAmr": [],
+        "maxAuthenticationAgeSeconds": null
+      }
+    },
+    {
+      "capabilityId": "ouf.managed-source.file.profile",
+      "constraints": {
+        "effect": "ALLOW",
+        "externalRoleRef": null,
+        "resourceType": "managed-profile-job",
+        "resourceId": null,
+        "resourceAttributes": {
+          "module": "ONBOARDING",
+          "detailLevel": "TENANT_OPERATIONAL"
+        },
+        "allowedDataLabels": [],
+        "allowedDetailLevels": [
+          "TENANT_OPERATIONAL"
+        ],
+        "requiredAcr": null,
+        "requiredAmr": [],
+        "maxAuthenticationAgeSeconds": null
+      }
+    },
+    {
+      "capabilityId": "ouf.onboarding.quarantine.release",
+      "constraints": {
+        "effect": "ALLOW",
+        "externalRoleRef": null,
+        "resourceType": "managed-profile-job",
+        "resourceId": null,
+        "resourceAttributes": {
+          "module": "ONBOARDING",
+          "detailLevel": "TENANT_OPERATIONAL"
+        },
+        "allowedDataLabels": [],
+        "allowedDetailLevels": [
+          "TENANT_OPERATIONAL"
+        ],
+        "requiredAcr": null,
+        "requiredAmr": [],
+        "maxAuthenticationAgeSeconds": null
+      }
+    }
+  ]
+}
