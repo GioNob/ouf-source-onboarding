@@ -1,0 +1,46 @@
+name: Stage existing qualified profiling recovery image without release
+on:
+  push:
+    branches: [delivery/profile-recovery-image-20261027]
+    paths: ['scripts/stage_profile_recovery_image.py','tests/test_profile_image_delivery.py','.github/workflows/stage-profile-recovery-image.yml']
+permissions: {contents: write, actions: read}
+concurrency: {group: profile-recovery-image-12747244692, cancel-in-progress: false}
+jobs:
+  stage-existing-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DELIVERY_BRANCH: artifact/profile-recovery-image-20261027
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-deploy
+          ref: fb7ab42e218dc5f62e6093455fef32e3f5107100
+          path: .pairwise/deploy
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tests -p test_profile_image_delivery.py -v
+      - name: Refuse an existing delivery; no automatic publication replay
+        run: |
+          set +e
+          git ls-remote --exit-code --heads https://github.com/GioNob/ouf-source-onboarding.git "refs/heads/$DELIVERY_BRANCH"
+          lookup_exit=$?
+          set -e
+          test "$lookup_exit" = 2
+      - name: Download the original qualified artifact once, with finite transfer window
+        run: timeout --signal=TERM --kill-after=10s 600s gh api repos/GioNob/ouf-source-onboarding/actions/artifacts/12747244692/zip > "$RUNNER_TEMP/candidate.zip"
+      - name: Verify exact bytes, all35 retained migrations and native image representation; split without rebuild
+        run: python3 scripts/stage_profile_recovery_image.py "$RUNNER_TEMP/candidate.zip" "$RUNNER_TEMP/profile-image-delivery" "$GITHUB_WORKSPACE/.pairwise/deploy"
+      - name: Publish immutable artifact branch only; no merge, release or target action
+        run: |
+          gh auth setup-git --hostname github.com
+          git -C "$RUNNER_TEMP/profile-image-delivery" init --initial-branch="$DELIVERY_BRANCH"
+          git -C "$RUNNER_TEMP/profile-image-delivery" config user.name 'github-actions[bot]'
+          git -C "$RUNNER_TEMP/profile-image-delivery" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C "$RUNNER_TEMP/profile-image-delivery" add image
+          git -C "$RUNNER_TEMP/profile-image-delivery" commit -m 'Stage qualified existing V36 CI image; no target authority or release acceptance'
+          git -C "$RUNNER_TEMP/profile-image-delivery" remote add origin https://github.com/GioNob/ouf-source-onboarding.git
+          git -C "$RUNNER_TEMP/profile-image-delivery" push origin "HEAD:refs/heads/$DELIVERY_BRANCH"
+          git -C "$RUNNER_TEMP/profile-image-delivery" rev-parse HEAD
