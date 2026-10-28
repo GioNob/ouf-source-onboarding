@@ -21,11 +21,11 @@ public class ManagedFileService {
     return result;
   }
   private static final String TENANT_OWNER_PREDICATE="""
-      a.uploaded_by=:subject and (
+      a.uploaded_by=:subject and (a.tenant_id=:tenant or (a.tenant_id is null and (
         exists(select 1 from ouf_onboarding.managed_file_upload_attempt u where u.asset_id=a.asset_id and u.tenant_id=:tenant and u.subject_id=:subject)
         or exists(select 1 from ouf_onboarding.source s join ouf_onboarding.managed_onboarding_review r on r.source_id=s.source_id
           where s.metadata->>'managedFileAssetId'=a.asset_id::text and r.tenant_id=:tenant and r.subject_id=:subject
-          and (not(jsonb_exists(s.metadata,'managedTenantId')) or s.metadata->>'managedTenantId'=:tenant)))
+          and (not(jsonb_exists(s.metadata,'managedTenantId')) or s.metadata->>'managedTenantId'=:tenant)))))
       """;
   public void requireTenantOwner(UUID asset,String tenant,String subject){
     if(tenant==null||tenant.isBlank()||subject==null||subject.isBlank())throw invalid("ONB_FILE_TENANT_INVALID","Explicit authenticated owner required");
@@ -77,8 +77,25 @@ public class ManagedFileService {
   private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ManagedFileProfiler profiler; private final TransactionTemplate tx; private final OnboardingService onboarding; private final ManagedProfileJobs profileJobs;
   public ManagedFileService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ManagedFileProfiler profiler,TransactionTemplate tx,OnboardingService onboarding,ManagedProfileJobs profileJobs){this.db=db;this.json=json;this.hashes=hashes;this.profiler=profiler;this.tx=tx;this.onboarding=onboarding;this.profileJobs=profileJobs;}
   public Map<String,Object> register(String sourceId,String stagingRef,String contentHash,String mediaType,long size,String uploadedBy,String retentionRef){
+    return registerBound(sourceId,stagingRef,contentHash,mediaType,size,uploadedBy,retentionRef,null);
+  }
+  /** Persist the authenticated tenant at intake; never infer it from an asset or later login. */
+  public Map<String,Object> registerOwned(String sourceId,String stagingRef,String contentHash,String mediaType,long size,String uploadedBy,String retentionRef,String tenant){
+    if(tenant==null||tenant.isBlank()||!tenant.equals(tenant.strip())||tenant.length()>256||uploadedBy==null||uploadedBy.isBlank())
+      throw invalid("ONB_FILE_TENANT_INVALID","Explicit authenticated owner required");
+    return registerBound(sourceId,stagingRef,contentHash,mediaType,size,uploadedBy,retentionRef,tenant);
+  }
+  private Map<String,Object> registerBound(String sourceId,String stagingRef,String contentHash,String mediaType,long size,String uploadedBy,String retentionRef,String tenant){
     if(!stagingRef.startsWith("object://"))throw invalid("ONB_STAGING_REF_INVALID","stagingRef must use object://");if(size<1||size>MAX_PROFILE_BYTES)throw invalid("ONB_FILE_SIZE_INVALID","File exceeds the 10 MiB deterministic profiling limit");UUID id=UUID.randomUUID();
-    return tx.execute(status->{db.sql("insert into ouf_onboarding.managed_file_asset(asset_id,source_id,staging_ref,content_hash,media_type,size_bytes,uploaded_by,retention_ref) values(:i,:s,:r,:h,:m,:z,:u,:x) on conflict(staging_ref,content_hash) do nothing").param("i",id).param("s",new SqlParameterValue(Types.VARCHAR,sourceId)).param("r",stagingRef).param("h",contentHash).param("m",mediaType).param("z",size).param("u",uploadedBy).param("x",retentionRef).update();return db.sql("select asset_id,source_id,staging_ref,content_hash,media_type,size_bytes,uploaded_by,retention_ref,status,created_at from ouf_onboarding.managed_file_asset where staging_ref=:r and content_hash=:h").param("r",stagingRef).param("h",contentHash).query().singleRow();});
+    return tx.execute(status->{
+      db.sql("insert into ouf_onboarding.managed_file_asset(asset_id,source_id,staging_ref,content_hash,media_type,size_bytes,uploaded_by,retention_ref,tenant_id) values(:i,:s,:r,:h,:m,:z,:u,:x,:t) on conflict(staging_ref,content_hash) do nothing")
+        .param("i",id).param("s",new SqlParameterValue(Types.VARCHAR,sourceId)).param("r",stagingRef).param("h",contentHash).param("m",mediaType).param("z",size).param("u",uploadedBy).param("x",retentionRef).param("t",new SqlParameterValue(Types.VARCHAR,tenant)).update();
+      var row=db.sql("select asset_id,source_id,staging_ref,content_hash,media_type,size_bytes,uploaded_by,retention_ref,status,created_at,tenant_id from ouf_onboarding.managed_file_asset where staging_ref=:r and content_hash=:h")
+        .param("r",stagingRef).param("h",contentHash).query().singleRow();
+      if(!Objects.equals(uploadedBy,row.get("uploaded_by"))||!Objects.equals(tenant,row.get("tenant_id")))
+        throw conflict("ONB_FILE_OWNER_BINDING_CONFLICT","Existing file owner binding differs; reconciliation required");
+      return row;
+    });
   }
   /** Serialize an upload attempt across retries before writing to object storage. */
   public Map<String,Object> registerDelegatedUpload(String tenant,String subject,String fileId,String key,String hash,long size,java.util.function.Supplier<String> put){
@@ -98,7 +115,7 @@ public class ManagedFileService {
         return Map.<String,Object>of("assetId",row.get("asset_id"),"status",existing.get("status"));
       }
       String ref=put.get();
-      var asset=register(null,ref,hash,"text/csv",size,subject,"retention://managed-files/30d");
+      var asset=registerOwned(null,ref,hash,"text/csv",size,subject,"retention://managed-files/30d",tenant);
       db.sql("insert into ouf_onboarding.managed_file_upload_attempt(tenant_id,subject_id,file_id,idempotency_key,content_hash,size_bytes,asset_id) values(:t,:s,:f,:k,:h,:z,:a)")
           .param("t",tenant).param("s",subject).param("f",fileId).param("k",key).param("h",hash).param("z",size).param("a",asset.get("asset_id")).update();
       return Map.<String,Object>of("assetId",asset.get("asset_id"),"status","STAGED");
@@ -250,3 +267,4 @@ public class ManagedFileService {
   private static String required(String value,String code){if(value==null||value.isBlank())throw invalid(code,"Required field configuration is missing");return value;}
   private static Map<String,Object> jobView(Map<String,Object> row){Map<String,Object> out=new LinkedHashMap<>(row);out.put("jobId",row.get("job_id"));out.put("status","READY".equals(row.get("state"))?"QUEUED":row.get("state"));out.put("createdAt",row.get("created_at"));out.put("updatedAt",row.get("updated_at"));out.put("nextRetryAt",row.get("next_attempt_at"));out.put("resultRef",row.get("profile_id"));out.put("errorCode",row.get("error_code"));return out;}
 }
+

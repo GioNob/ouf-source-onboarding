@@ -114,7 +114,7 @@ jobs:
               'workflowRunId':os.environ['GITHUB_RUN_ID'],'workflowRunAttempt':os.environ['GITHUB_RUN_ATTEMPT'],
               'imageTag':image,'imageId':command('docker','image','inspect',image,'--format','{{.Id}}'),
               'archiveName':archive.name,'archiveSha256':checksum.hexdigest(),'archiveBytes':archive.stat().st_size,
-              'sourceSchemaMigration':'V36__managed_profile_recovery_sessions.sql',
+              'sourceSchemaMigration':'V37__managed_file_intake_tenant.sql',
               'preservedDeploymentSourceCommit':'b0f5e3dacbe59ebf87e22dd6af2575e41249f51d',
               'preservedSourceRevisionParent':'be388e1462778438a208c2e00e166370fee32189',
               'preservedAtomicInstallationOwner':True,
@@ -148,5 +148,6 @@ jobs:
             target/sdk-packaging.txt
             target/trivy-image.json
           if-no-files-found: warn
+
 
 
