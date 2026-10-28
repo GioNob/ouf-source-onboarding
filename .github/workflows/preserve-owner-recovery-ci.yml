@@ -1,0 +1,15 @@
+name: Preserve exact existing owner recovery CI ZIP
+on:
+  push:
+    branches: ['delivery/managed-file-owner-v38-ci-20261028']
+    paths: ['.github/workflows/preserve-owner-recovery-ci.yml','scripts/preserve-owner-recovery-ci-artifact.py']
+permissions: {contents: write, actions: read}
+jobs:
+  finite-exact-existing-artifact:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Preserve original ZIP bytes to delivery-only branch, no runtime action
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: python3 -I -S -B scripts/preserve-owner-recovery-ci-artifact.py
