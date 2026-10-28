@@ -1,0 +1,13 @@
+[
+  {
+    "ownerRef": "onboarding",
+    "descriptor": {
+      "capabilityId": "ouf.onboarding.quarantine.release",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.onboarding.quarantine.release",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  }
+]

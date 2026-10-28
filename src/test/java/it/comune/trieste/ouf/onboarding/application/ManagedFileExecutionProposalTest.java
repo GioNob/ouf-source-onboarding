@@ -68,6 +68,36 @@ class ManagedFileExecutionProposalTest {
     var p=proposal();var compiled=compile(config(),p);p.udp().clear();
     assertThat(object(object(object(compiled,"extractionProfile"),"runtime"),"udp")).containsKeys("resolution","materialization");
   }
+
+  @Test void onlyExplicitVersionedConversionsCanDeclareNumericOrDateProperties(){
+    for(String rule:List.of("DECIMAL_DOT_V1","DECIMAL_COMMA_V1","DATE_ISO_V1","DATE_DMY_V1")){
+      var c=config();var p=proposal();
+      var mappings=(List<Map<String,Object>>)object(c,"semanticMapping").get("propertyMappings");
+      mappings.get(1).put("transform",rule);
+      var props=(List<Map<String,Object>>)object(p.udp(),"materialization").get("properties");
+      String datatype="http://www.w3.org/2001/XMLSchema#"+(rule.startsWith("DECIMAL")?"decimal":"date");
+      props.get(1).put("datatype",datatype);
+      var policy=object(object(p.udp(),"resolution"),"governedIdentity");
+      ((List<Map<String,Object>>)policy.get("signals")).get(1).put("comparator",rule.startsWith("DECIMAL")?"DECIMAL_V1":"TEXT_V1");
+      var compiled=compile(c,p);
+      assertThat(compiled.get("semanticMapping")).isEqualTo(c.get("semanticMapping"));
+      var runtime=object(object(compiled,"extractionProfile"),"runtime");
+      var actual=(List<Map<String,Object>>)object(object(runtime,"udp"),"materialization").get("properties");
+      assertThat(actual.get(1)).containsEntry("datatype",datatype);
+      assertThat(compiled).doesNotContainKeys("runtimeAuthorityIssued","approvedBy","compatibilityAttestation");
+      props.get(1).put("datatype","http://www.w3.org/2001/XMLSchema#string");
+      assertThatThrownBy(()->compile(c,p)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    }
+  }
+
+  @Test void inferredOrUnversionedConversionNamesAreNotAccepted(){
+    for(String rule:List.of("AUTO","DECIMAL","DATE","DATE_DMY_V2")){
+      var c=config();
+      ((List<Map<String,Object>>)object(c,"semanticMapping").get("propertyMappings")).get(1).put("transform",rule);
+      assertThatThrownBy(()->compile(c,proposal())).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    }
+  }
+
   private Map<String,Object> compile(Map<String,Object> c,ManagedFileExecutionProposal.Proposal p){return ManagedFileExecutionProposal.compile(c,asset(),"fixture-tenant",p);}
   private Map<String,Object> asset(){return new LinkedHashMap<>(Map.of("asset_id",UUID.fromString(ASSET),"source_id",SOURCE,"staging_ref","staging://fixture/source.csv","content_hash","sha256:fixture","size_bytes",321L));}
   private ManagedFileExecutionProposal.Proposal proposal(){

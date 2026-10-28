@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.onboarding.api;
 
 import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
+import it.comune.trieste.ouf.authorization.ServletAuthorization;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileStagingStore;
 import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
@@ -34,6 +35,8 @@ public class ManagedFileStagingApi {
   public ResponseEntity<Map<String,Object>> upload(HttpServletRequest request,
       @RequestHeader(value="X-Content-SHA256",required=false) String declaredHash) throws IOException {
     var actor=actors.requireHuman(request,"ouf.managed-source.file.upload");
+    var principal=ServletAuthorization.principal(request).context();
+    if(!actor.subject().equals(principal.subjectId()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_FILE_OWNER_DENIED","Authenticated upload owner differs");
     Path staged=Files.createTempFile("ouf-managed-intake-",".csv");
     try {
       MessageDigest digest=MessageDigest.getInstance("SHA-256");
@@ -52,7 +55,7 @@ public class ManagedFileStagingApi {
       if(declaredHash!=null&&!hash.equals(declaredHash))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_FILE_HASH_MISMATCH","Upload checksum mismatch");
       String ref;
       try(var source=Files.newInputStream(staged)){ref=storage.put(source,size,"text/csv");}
-      var asset=files.register(null,ref,hash,"text/csv",size,actor.subject(),"retention://managed-files/30d");
+      var asset=files.registerOwned(null,ref,hash,"text/csv",size,actor.subject(),"retention://managed-files/30d",principal.tenantId());
       return ResponseEntity.created(URI.create("/api/onboarding/v1/managed-files/"+asset.get("asset_id"))).body(asset);
     } catch(NoSuchAlgorithmException e){throw new IllegalStateException("SHA-256 unavailable",e);}
       finally {Files.deleteIfExists(staged);}
@@ -65,3 +68,4 @@ public class ManagedFileStagingApi {
     return ResponseEntity.ok().contentType(MediaType.APPLICATION_OCTET_STREAM).contentLength(content.length).body(content);
   }
 }
+
