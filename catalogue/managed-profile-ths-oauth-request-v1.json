@@ -1,0 +1,16 @@
+{
+  "schema": "ouf.managed-profile-ths-oauth-request-contract.v1",
+  "clientRegistrationId": "ouf-ths",
+  "scopeRequestProperty": "spring.security.oauth2.client.registration.ouf-ths.scope",
+  "requiredScopes": [
+    "ouf.managed-source.preview",
+    "ouf.managed-source.file.profile",
+    "ouf.onboarding.quarantine.release"
+  ],
+  "mergeMode": "ADD_MISSING_PRESERVE_ALL_EXISTING",
+  "preserveOtherProperties": true,
+  "configuresIamBindings": false,
+  "grantsPermissions": false,
+  "grantsProfilingBudget": false,
+  "resumesJobs": false
+}
