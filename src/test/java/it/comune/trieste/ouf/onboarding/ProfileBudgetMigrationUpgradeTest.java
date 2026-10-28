@@ -23,7 +23,7 @@ class ProfileBudgetMigrationUpgradeTest {
           sql.execute("insert into ouf_onboarding.managed_file_quarantine(quarantine_id,asset_id,profile_job_id,reason_code,evidence_ref,safe_detail,correlation_id) values('"+q+"','"+asset+"','"+job+"','ONB_FILE_PROFILE_FAILED','quarantine://original','original evidence','fixture')");
           String history=one(sql,"select jsonb_agg(to_jsonb(h) order by installed_rank)::text from ouf_onboarding.flyway_schema_history h where version is not null");
           String beforeJob=one(sql,"select to_jsonb(j)::text from ouf_onboarding.file_profile_job j"),beforeAsset=one(sql,"select to_jsonb(a)::text from ouf_onboarding.managed_file_asset a"),beforeQuarantine=one(sql,"select to_jsonb(q)::text from ouf_onboarding.managed_file_quarantine q");
-          var upgraded=Flyway.configure().dataSource(isolated,user,password).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").load();assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();assertThat(upgraded.migrate().migrationsExecuted).isZero();
+          var upgraded=Flyway.configure().dataSource(isolated,user,password).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").target("36").load();assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();assertThat(upgraded.migrate().migrationsExecuted).isZero();
           assertThat(one(sql,"select jsonb_agg(to_jsonb(h) order by installed_rank)::text from ouf_onboarding.flyway_schema_history h where version is not null and version<>'36'")).isEqualTo(history);
           assertThat(one(sql,"select (to_jsonb(j)-array['generation','lock_version','input_binding_hash','recovery_session_id','failure_class','budget_profile'])::text from ouf_onboarding.file_profile_job j")).isEqualTo(beforeJob);
           assertThat(one(sql,"select to_jsonb(a)::text from ouf_onboarding.managed_file_asset a")).isEqualTo(beforeAsset);
@@ -38,3 +38,4 @@ class ProfileBudgetMigrationUpgradeTest {
   }
   private static String one(Statement sql,String query)throws SQLException{try(ResultSet r=sql.executeQuery(query)){assertThat(r.next()).isTrue();String value=r.getString(1);assertThat(r.next()).isFalse();return value;}}
 }
+
