@@ -20,6 +20,20 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.web.csrf.DefaultCsrfToken;
 
 class ManagedProfileRecoveryThsTest {
+  @Test void ownershipUsesSeparateExactNativePathAndRequiresExplicitConfirmationWithoutTenantInput()throws Exception{
+    var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);var gets=new AtomicInteger();var posts=new AtomicInteger();UUID asset=UUID.randomUUID(),job=UUID.randomUUID();
+    String expected="/api/onboarding/v1/managed-files/"+asset+"/profile-jobs/"+job+"/recovery/ownership";
+    server.createContext("/",exchange->{assertThat(exchange.getRequestURI().getPath()).isEqualTo(expected);assertThat(exchange.getRequestHeaders().getFirst("Authorization")).isEqualTo("Bearer fixture-private-token");
+      if(exchange.getRequestMethod().equals("GET"))gets.incrementAndGet();else posts.incrementAndGet();
+      byte[] body="{\"status\":\"OWNER_BINDING_REVIEW_REQUIRED\"}".getBytes();exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);exchange.close();});server.start();
+    try{var api=new ManagedProfileRecoveryThs(session(),new ObjectMapper(),"http://127.0.0.1:"+server.getAddress().getPort());var r=request();
+      assertThat(api.ownership(asset,job,r).getBody().toString()).contains("fixture-csrf").doesNotContain("fixture-private-token");
+      var command=new LinkedHashMap<String,Object>();command.put("expectedVersion",0);command.put("expectedGeneration",0);command.put("inputBindingHash","sha256:"+"a".repeat(64));command.put("reviewHash","sha256:"+"b".repeat(64));command.put("commandKey","one");command.put("reason","Original uploader confirms displayed tenant");command.put("confirmed",false);
+      assertThatThrownBy(()->api.action(asset,job,"ownership",new ObjectMapper().writeValueAsBytes(command),r)).hasMessageContaining("REVIEW_INVALID");assertThat(posts).hasValue(0);
+      command.put("confirmed",true);command.put("tenantId","caller-selected");assertThatThrownBy(()->api.action(asset,job,"ownership",new ObjectMapper().writeValueAsBytes(command),r)).hasMessageContaining("REVIEW_INVALID");assertThat(posts).hasValue(0);
+      command.remove("tenantId");assertThat(api.action(asset,job,"ownership",new ObjectMapper().writeValueAsBytes(command),r).getStatusCode().value()).isEqualTo(200);assertThat(gets).hasValue(1);assertThat(posts).hasValue(1);
+    }finally{server.stop(0);}
+  }
   @AfterEach void clear(){SecurityContextHolder.clearContext();}
   OAuth2AuthorizedClientService session(){var clients=mock(OAuth2AuthorizedClientService.class);
     var registration=ClientRegistration.withRegistrationId("ouf-ths").clientId("fixture").clientSecret("fixture-only").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE).redirectUri("https://ouf.test/login/oauth2/code/ouf-ths")
@@ -49,3 +63,4 @@ class ManagedProfileRecoveryThsTest {
     }finally{server.stop(0);}
   }
 }
+

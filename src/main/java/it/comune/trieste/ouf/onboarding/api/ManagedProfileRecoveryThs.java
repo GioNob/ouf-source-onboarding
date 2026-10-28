@@ -41,20 +41,27 @@ public class ManagedProfileRecoveryThs {
   @GetMapping("/recovery.js") public ResponseEntity<byte[]> script(HttpServletRequest r)throws IOException{token(r);return asset("profile-recovery.js",MediaType.valueOf("text/javascript"));}
   @GetMapping("/recovery.css") public ResponseEntity<byte[]> css(HttpServletRequest r)throws IOException{token(r);return asset("profile-recovery.css",MediaType.valueOf("text/css"));}
   @GetMapping("/api/{assetId}/{jobId}") public ResponseEntity<?> card(@PathVariable UUID assetId,@PathVariable UUID jobId,HttpServletRequest r)throws Exception{
-    var result=send(assetId,jobId,"",null,token(r));if(result.getStatusCode().value()!=200)return result;
+    return card(assetId,jobId,"",r);
+  }
+  @GetMapping("/api/{assetId}/{jobId}/ownership") public ResponseEntity<?> ownership(@PathVariable UUID assetId,@PathVariable UUID jobId,HttpServletRequest r)throws Exception{
+    return card(assetId,jobId,"/ownership",r);
+  }
+  private ResponseEntity<?> card(UUID assetId,UUID jobId,String suffix,HttpServletRequest r)throws Exception{
+    var result=send(assetId,jobId,suffix,null,token(r));if(result.getStatusCode().value()!=200)return result;
     var csrf=(CsrfToken)r.getAttribute(CsrfToken.class.getName());if(csrf==null)throw new ResponseStatusException(HttpStatus.FORBIDDEN,"THS_CSRF_REQUIRED");
     return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(Map.of("card",json.readTree(result.getBody()),"csrfHeader",csrf.getHeaderName(),"csrfToken",csrf.getToken()));
   }
-  @PostMapping("/api/{assetId}/{jobId}/{action:budget|resume|cancel}") public ResponseEntity<String> action(@PathVariable UUID assetId,@PathVariable UUID jobId,@PathVariable String action,@RequestBody byte[] body,HttpServletRequest r)throws Exception{
+  @PostMapping("/api/{assetId}/{jobId}/{action:budget|resume|cancel|ownership}") public ResponseEntity<String> action(@PathVariable UUID assetId,@PathVariable UUID jobId,@PathVariable String action,@RequestBody byte[] body,HttpServletRequest r)throws Exception{
     String access=token(r);if(body.length>4096)throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"THS_PROFILE_BODY_LIMIT");
     var d=json.readTree(body);if(d==null||!d.isObject())throw invalid();
-    Set<String> fields=switch(action){case "budget"->Set.of("expectedVersion","expectedGeneration","inputBindingHash","reviewHash","commandKey","reason","maximumAttempts","maximumElapsedSeconds");case "resume"->Set.of("expectedVersion","expectedGeneration","inputBindingHash","sessionId");case "cancel"->Set.of("expectedVersion","expectedGeneration","inputBindingHash","commandKey","reason");default->throw invalid();};
+    Set<String> fields=switch(action){case "budget"->Set.of("expectedVersion","expectedGeneration","inputBindingHash","reviewHash","commandKey","reason","maximumAttempts","maximumElapsedSeconds");case "ownership"->Set.of("expectedVersion","expectedGeneration","inputBindingHash","reviewHash","commandKey","reason","confirmed");case "resume"->Set.of("expectedVersion","expectedGeneration","inputBindingHash","sessionId");case "cancel"->Set.of("expectedVersion","expectedGeneration","inputBindingHash","commandKey","reason");default->throw invalid();};
     var actual=new HashSet<String>();d.fieldNames().forEachRemaining(actual::add);if(!actual.equals(fields))throw invalid();
     for(String n:List.of("expectedVersion","expectedGeneration"))if(!d.path(n).isIntegralNumber()||!d.path(n).canConvertToLong()||d.path(n).asLong()<0||d.path(n).asLong()>9007199254740991L)throw invalid();
     if(!d.path("inputBindingHash").isTextual()||!d.path("inputBindingHash").asText().matches("sha256:[a-f0-9]{64}"))throw invalid();
     if("resume".equals(action)){if(!d.path("sessionId").isTextual()||!d.path("sessionId").asText().matches("[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}"))throw invalid();}
     else if(!d.path("commandKey").isTextual()||!d.path("commandKey").asText().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")||!d.path("reason").isTextual()||d.path("reason").asText().strip().length()<10||d.path("reason").asText().length()>500||d.path("reason").asText().chars().anyMatch(Character::isISOControl))throw invalid();
     if("budget".equals(action)&&(!d.path("reviewHash").isTextual()||!d.path("reviewHash").asText().matches("sha256:[a-f0-9]{64}")||!d.path("maximumAttempts").isIntegralNumber()||!d.path("maximumAttempts").canConvertToInt()||d.path("maximumAttempts").asInt()!=3||!d.path("maximumElapsedSeconds").isIntegralNumber()||!d.path("maximumElapsedSeconds").canConvertToInt()||d.path("maximumElapsedSeconds").asInt()!=900))throw invalid();
+    if("ownership".equals(action)&&(!d.path("reviewHash").isTextual()||!d.path("reviewHash").asText().matches("sha256:[a-f0-9]{64}")||!d.path("confirmed").isBoolean()||!d.path("confirmed").asBoolean()))throw invalid();
     return send(assetId,jobId,"/"+action,body,access);
   }
   private ResponseEntity<String> send(UUID asset,UUID job,String suffix,byte[] body,String access){
@@ -85,3 +92,4 @@ public class ManagedProfileRecoveryThs {
       .header("Content-Security-Policy","default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
       .body(new ClassPathResource("ths/"+name).getContentAsByteArray());}
 }
+

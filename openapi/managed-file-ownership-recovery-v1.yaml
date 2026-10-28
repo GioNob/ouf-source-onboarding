@@ -1,0 +1,91 @@
+openapi: 3.0.3
+info:
+  title: Retained managed-file tenant reconciliation
+  version: 1.0.0
+  description: >-
+    Native HUMAN control for an original uploader's retained failed CSV job.
+    Existing exact-job profile and quarantine recovery permissions are both
+    reevaluated. Tenant and subject come only from the authenticated principal.
+    Confirmation adds an immutable tenant proof and does not grant a budget,
+    resume a job, upload a file, create a source or acquire data.
+security:
+  - humanBearer: []
+paths:
+  /api/onboarding/v1/managed-files/{assetId}/profile-jobs/{jobId}/recovery/ownership:
+    parameters:
+      - name: assetId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+      - name: jobId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: reviewRetainedFileTenant
+      x-ouf-capabilities: [ouf.managed-source.file.profile, ouf.onboarding.quarantine.release]
+      x-ouf-resource-type: managed-profile-job
+      description: >-
+        Read only. Original uploader, same job and current policy are checked
+        before metadata is serialized. Only legacy tenantless failed inputs
+        with no prior source/upload/budget provenance can receive a review.
+        Existing ownership proof returns OWNER_BINDING_ALREADY_PROVEN.
+      responses:
+        '200':
+          description: Current original-uploader review or already-proven status; Cache-Control no-store.
+        '403': {description: HUMAN identity, original uploader or current permission denied.}
+        '409': {description: Existing or conflicting provenance, incompatible input or job state.}
+    post:
+      operationId: confirmRetainedFileTenant
+      x-ouf-capabilities: [ouf.managed-source.file.profile, ouf.onboarding.quarantine.release]
+      x-ouf-resource-type: managed-profile-job
+      description: >-
+        Separate explicit HUMAN decision. Requires stateless trusted write proof
+        at the owner and session CSRF at the THS adapter. Revalidates input,
+        tenant, subject, job version/generation, review and absence of conflicting
+        provenance under bounded row/command locks. One append-only receipt per
+        asset, deduplicated by authenticated tenant/subject/commandKey and intent
+        hash. A lost response is reconciled with the same body and commandKey.
+        Job, cumulative attempts, quarantine, uploads, source reviews and budget
+        history remain unchanged. Budget and resume are subsequent decisions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/OwnershipDecision'}
+      responses:
+        '200':
+          description: Durable receipt for this command, including reconciliation after a lost response.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, assetId, jobId, tenantId, subjectId, decisionRef, reconciled, humanBudgetGranted, resumed]
+                properties:
+                  status: {type: string, enum: [OWNER_BINDING_RECONCILED]}
+                  assetId: {type: string, format: uuid}
+                  jobId: {type: string, format: uuid}
+                  tenantId: {type: string}
+                  subjectId: {type: string}
+                  decisionRef: {type: string, format: uuid}
+                  reconciled: {type: boolean}
+                  humanBudgetGranted: {type: boolean, enum: [false]}
+                  resumed: {type: boolean, enum: [false]}
+        '403': {description: HUMAN identity, original uploader, current permission or write proof denied.}
+        '409': {description: Stale review, changed intent, incompatible state or conflicting provenance.}
+components:
+  securitySchemes:
+    humanBearer: {type: http, scheme: bearer, bearerFormat: JWT}
+  schemas:
+    OwnershipDecision:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, expectedGeneration, inputBindingHash, reviewHash, commandKey, reason, confirmed]
+      properties:
+        expectedVersion: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        expectedGeneration: {type: integer, format: int64, minimum: 0, maximum: 9007199254740991}
+        inputBindingHash: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+        reviewHash: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+        commandKey: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        reason: {type: string, minLength: 10, maxLength: 500}
+        confirmed: {type: boolean, enum: [true]}

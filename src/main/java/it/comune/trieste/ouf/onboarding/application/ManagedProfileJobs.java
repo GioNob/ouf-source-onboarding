@@ -30,6 +30,8 @@ public class ManagedProfileJobs {
   private Map<String,Object> row(UUID asset,UUID job,boolean lock){return db.sql("select * from ouf_onboarding.file_profile_job where asset_id=:a and job_id=:j"+(lock?" for update":""))
       .param("a",asset).param("j",job).query().listOfRows().stream().findFirst().orElseThrow(()->denied("ONB_FILE_PROFILE_JOB_NOT_FOUND"));}
   public void requireRetainedJob(UUID asset,UUID job){row(asset,job,false);}
+  /** The same immutable input binding is reused by the separate ownership decision. */
+  public String inputBinding(UUID asset){return binding(asset(asset));}
   private Map<String,Object> asset(UUID id){return db.sql("select * from ouf_onboarding.managed_file_asset where asset_id=:a").param("a",id).query().singleRow();}
   private String binding(Map<String,Object> a){return hashes.of(List.of("managed-profile-input.v1",a.get("asset_id").toString(),
       a.get("staging_ref"),a.get("content_hash"),a.get("media_type"),((Number)a.get("size_bytes")).longValue(),a.get("uploaded_by")));}
@@ -197,3 +199,4 @@ public class ManagedProfileJobs {
         .param("s",new SqlParameterValue(Types.OTHER,j.get("recovery_session_id"))).update();event(job,"CANCELLED","ONB_PROFILE_HUMAN_CANCEL",subject,tenant,d.commandKey(),fingerprint,UUID.randomUUID(),d.reason().strip());return card(assetId,job);
   });}
 }
+

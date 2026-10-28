@@ -5,6 +5,8 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {chromium}=require('playwright');
 
+function ownerReview(asset,job){return{status:'OWNER_BINDING_REVIEW_REQUIRED',assetId:asset,jobId:job,tenantId:'tenant-fixture',subjectId:'original-uploader',contentHash:'sha256:'+'c'.repeat(64),sizeBytes:13903,uploadedAt:'2026-10-26T10:00:00Z',cumulativeAttempts:5,expectedVersion:0,expectedGeneration:0,inputBindingHash:'sha256:'+'a'.repeat(64),reviewHash:'sha256:'+'d'.repeat(64)};}
+
 async function surface(run){
   const root=path.resolve('src/main/resources/ths');
   const server=http.createServer((req,res)=>{const part=req.url.split('?')[0];const name=part.endsWith('/recovery.js')?'profile-recovery.js':part.endsWith('/recovery.css')?'profile-recovery.css':'profile-recovery.html';
@@ -78,4 +80,54 @@ test('authorization denial after a budget command preserves its exact pending re
   await page.getByRole('status').filter({hasText:'Conserva e riconcilia la stessa richiesta'}).waitFor();assert.equal(posts.length,1);assert.equal(await page.locator('#budget').isDisabled(),true);
   await page.reload();await page.locator('#review').waitFor();assert.equal(posts.length,1);assert.equal(await page.locator('#budget').isDisabled(),true);assert.equal(await page.locator('#resume').isDisabled(),true);
   await page.locator('#reconcile').click();await page.getByRole('status').filter({hasText:'Conserva e riconcilia'}).waitFor();assert.equal(posts.length,2);assert.deepEqual(posts[0],posts[1]);assert.equal(card.cumulativeAttempts,5);
+}));
+
+
+test('legacy ownership is a separate explicit HUMAN decision before unchanged budget and resume controls',async()=>surface(async(page,url,asset,job)=>{
+  let restored=false,card=initial(asset,job),posts=[];const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.route('**/recovery/api/**',async route=>{const request=route.request(),ownership=request.url().endsWith('/ownership');
+    if(request.method()==='GET'){
+      if(!restored&&!ownership){await route.fulfill({status:403,json:{code:'ONB_FILE_OWNER_SCOPE_UNPROVEN'}});return;}
+      await route.fulfill({json:{card:ownership?ownerReview(asset,job):card,csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture-csrf'}});return;
+    }
+    posts.push({path:new URL(request.url()).pathname,body:request.postDataJSON(),csrf:request.headers()['x-csrf-token']});
+    if(ownership){restored=true;await route.fulfill({json:{status:'OWNER_BINDING_RECONCILED',humanBudgetGranted:false,resumed:false}});return;}
+    assert.equal(request.url().endsWith('/budget'),true);
+    card={...card,expectedVersion:1,expectedGeneration:1,budgetAvailableToGrant:false,canResume:true,sessionId:asset,sessionState:'ACTIVE',sessionUsedAttempts:0,sessionBaseAttempts:5,sessionExpiresAt:'2999-01-01T00:00:00Z',decisionRef:job};await route.fulfill({json:card});
+  });
+  await page.goto(url);await page.locator('#ownership-review').waitFor();assert.equal(posts.length,0);assert.match(await page.locator('#ownership-facts').innerText(),/tenant-fixture/);
+  assert.equal(await page.locator('#review').isHidden(),true);assert.equal(await page.locator('#ownership').isDisabled(),true);
+  await page.locator('#ownership-reason').fill('Original uploader confirms the displayed tenant');await page.locator('#ownership-confirmed').check();await page.locator('#ownership').click();
+  await page.getByRole('status').filter({hasText:'Associazione registrata'}).waitFor();assert.equal(posts.length,1);assert.equal(posts[0].body.confirmed,true);assert.equal(posts[0].csrf,'fixture-csrf');assert.equal(card.cumulativeAttempts,5);assert.equal(card.status,'FAILED');
+  assert.equal(await page.locator('#ownership-review').isHidden(),true);assert.equal(await page.locator('#budget').isDisabled(),true);assert.equal(await page.locator('#resume').isDisabled(),true);
+  await page.locator('#reason').fill('Dependency permission repaired; retained input verified');await page.locator('#confirmed').check();await page.locator('#budget').click();
+  await page.getByRole('status').filter({hasText:'Budget concesso'}).waitFor();assert.equal(posts.length,2);assert.equal(card.cumulativeAttempts,5);assert.equal(card.status,'FAILED');assert.equal(await page.locator('#resume').isDisabled(),true);assert.deepEqual(errors,[]);
+  fs.mkdirSync('target/browser-evidence',{recursive:true});await page.screenshot({path:'target/browser-evidence/legacy-owner-before-resume.png',fullPage:true});
+}));
+
+test('lost ownership response survives reload and reconciles the exact command without budget or resume',async()=>surface(async(page,url,asset,job)=>{
+  let restored=false,lost=true,posts=[];const card=initial(asset,job);
+  await page.route('**/recovery/api/**',async route=>{const r=route.request(),own=r.url().endsWith('/ownership');
+    if(r.method()==='GET'){if(!restored&&!own){await route.fulfill({status:403,json:{code:'ONB_FILE_OWNER_SCOPE_UNPROVEN'}});return;}await route.fulfill({json:{card:own?ownerReview(asset,job):card,csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture'}});return;}
+    assert.equal(own,true);posts.push(r.postDataJSON());restored=true;if(lost){lost=false;await route.abort('failed');}else await route.fulfill({json:{status:'OWNER_BINDING_RECONCILED',reconciled:true}});
+  });
+  await page.goto(url);await page.locator('#ownership-review').waitFor();await page.locator('#ownership-reason').fill('Original uploader confirms the retained file tenant');await page.locator('#ownership-confirmed').check();await page.locator('#ownership').click();
+  await page.getByRole('status').filter({hasText:'Esito non confermato'}).waitFor();assert.equal(posts.length,1);
+  await page.reload();await page.locator('#review').waitFor();assert.equal(posts.length,1);assert.equal(await page.locator('#budget').isDisabled(),true);
+  await page.locator('#reconcile').click();await page.getByRole('status').filter({hasText:'Associazione registrata'}).waitFor();assert.equal(posts.length,2);assert.deepEqual(posts[0],posts[1]);assert.equal(card.status,'FAILED');assert.equal(card.cumulativeAttempts,5);assert.equal(await page.locator('#resume').isDisabled(),true);
+}));
+
+test('unavailable browser persistence blocks a new ownership decision before dispatch',async()=>surface(async(page,url,asset,job)=>{
+  let posts=0;await page.addInitScript(()=>{Object.defineProperty(window,'sessionStorage',{get(){throw new Error('fixture storage unavailable');}});});
+  await page.route('**/recovery/api/**',async route=>{const r=route.request();if(r.method()==='POST')posts++;
+    if(!r.url().endsWith('/ownership'))await route.fulfill({status:403,json:{code:'ONB_FILE_OWNER_SCOPE_UNPROVEN'}});else await route.fulfill({json:{card:ownerReview(asset,job),csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture'}});
+  });
+  await page.goto(url);await page.locator('#ownership-review').waitFor();await page.locator('#ownership-reason').fill('Original uploader confirms the retained file tenant');await page.locator('#ownership-confirmed').check();assert.equal(await page.locator('#ownership').isDisabled(),true);assert.equal(posts,0);assert.match(await page.locator('#message').innerText(),/non può conservare/);
+}));
+
+test('legacy reconciliation read still stops on missing current HUMAN recovery authority',async()=>surface(async(page,url)=>{
+  let posts=0,reads=0;await page.route('**/recovery/api/**',async route=>{const r=route.request();if(r.method()==='POST')posts++;else reads++;
+    await route.fulfill({status:403,json:{code:r.url().endsWith('/ownership')?'ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED':'ONB_FILE_OWNER_SCOPE_UNPROVEN'}});
+  });
+  await page.goto(url);await page.getByRole('status').filter({hasText:'Manca una capability HUMAN richiesta'}).waitFor();assert.equal(reads,2);assert.equal(posts,0);assert.equal(await page.locator('#ownership-review').isHidden(),true);assert.equal(await page.locator('#review').isHidden(),true);
 }));
