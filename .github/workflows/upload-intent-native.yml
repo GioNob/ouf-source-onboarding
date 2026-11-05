@@ -1,0 +1,88 @@
+name: Onboarding durable upload native owner
+on:
+  push:
+    branches: [feat/storage-upload-intent-20261105]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: upload-intent-native-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  postgres-seaweed-owner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.11-alpine
+        env:
+          POSTGRES_DB: ouf_onboarding
+          POSTGRES_USER: ouf_onboarding
+          POSTGRES_PASSWORD: ci-only-password
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U ouf_onboarding -d ouf_onboarding" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      OUF_ONB_DB_URL: jdbc:postgresql://127.0.0.1:5432/ouf_onboarding
+      OUF_ONB_DB_USER: ouf_onboarding
+      OUF_ONB_DB_PASSWORD: ci-only-password
+      OUF_UPLOAD_NATIVE: 'true'
+      OUF_UPLOAD_S3_URL: http://127.0.0.1:18333
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-deploy
+          ref: 783f883e66403a860d913e0c72f036b9dd37f7c4
+          path: .pairwise/storage-proof
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Bind and boot the exact qualified storage image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -B -S scripts/ci-upload-intent-storage.py
+      - name: Compile actual owner and execute native crash scenarios
+        run: |
+          set -euo pipefail
+          bash scripts/install-authorization-sdk.sh
+          timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp -Dtest=ManagedFileUploadNativeTest,ManagedFileStagingApiTest,ManagedFileDelegatedUploadApiTest,MinioManagedFileStagingStoreTest test
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree as E
+          p=Path('target/surefire-reports/TEST-it.comune.trieste.ouf.onboarding.application.ManagedFileUploadNativeTest.xml')
+          r=E.parse(p).getroot()
+          assert int(r.attrib['tests'])>=12
+          assert all(int(r.attrib[k])==0 for k in ('failures','errors','skipped'))
+          PY
+      - name: Preserve native receipts and exact producer bindings
+        if: always()
+        run: |
+          mkdir -p target/upload-native
+          for role in master volume filer s3; do
+            docker logs "ouf-upload-native-$role" > "target/upload-native/$role.log" 2>&1 || true
+          done
+          git rev-parse HEAD > target/upload-native/source-commit.txt
+          git rev-parse 'HEAD^{tree}' > target/upload-native/source-tree.txt
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path('target/upload-native')
+          paths=[Path('pom.xml'),Path('.github/workflows/upload-intent-native.yml'),Path('scripts/ci-upload-intent-storage.py')]
+          paths+=list(Path('src/main').rglob('*.*'))+list(Path('src/test/java').rglob('*Upload*Test.java'))+[Path('src/test/java/it/comune/trieste/ouf/onboarding/application/UploadCrashProcess.java')]
+          (root/'source-bindings.json').write_text(json.dumps({str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths) if p.is_file()},indent=2)+'\n')
+          (root/'run.json').write_text(json.dumps({'runId':os.environ['GITHUB_RUN_ID'],'runAttempt':os.environ['GITHUB_RUN_ATTEMPT'],'targetOperations':0,'releaseAdmitted':False})+'\n')
+          files=sorted(p for p in Path('target').rglob('*') if p.is_file() and ('upload-native' in p.parts or 'surefire-reports' in p.parts))
+          (root/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+str(p.relative_to('target'))+'\n' for p in files if p.name!='SHA256SUMS'))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: onboarding-upload-native-${{ github.run_id }}
+          path: |
+            target/upload-native/
+            target/surefire-reports/
+          retention-days: 90
+          if-no-files-found: error

@@ -30,15 +30,14 @@ class ManagedFileStagingApiTest {
     var actors=mock(TrustedActorResolver.class);var hashes=new CanonicalHash(new ObjectMapper());
     var actor=new OnboardingService.Actor("human:operator","HUMAN_USER",Set.of("ouf.managed-source.file.upload"));
     when(actors.requireHuman(request,"ouf.managed-source.file.upload")).thenReturn(actor);
-    when(store.put(any(InputStream.class),eq((long)csv.length),eq("text/csv"))).thenAnswer(invocation->{
-      assertThat(((InputStream)invocation.getArgument(0)).readAllBytes()).isEqualTo(csv);
-      return "object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8";
-    });
-    UUID asset=UUID.randomUUID();when(files.registerOwned(eq(null),anyString(),anyString(),eq("text/csv"),eq((long)csv.length),eq("human:operator"),anyString(),eq("tenant-a"))).thenReturn(Map.of("asset_id",asset));
+    UUID asset=UUID.randomUUID();
+    when(files.registerDirectUpload(eq("tenant-a"),eq("human:operator"),isNull(),eq(hashes.ofBytes(csv)),eq((long)csv.length),eq(store),any()))
+      .thenAnswer(call->{assertThat(java.nio.file.Files.readAllBytes(call.getArgument(6))).isEqualTo(csv);return Map.of("asset_id",asset);});
     var api=new ManagedFileStagingApi(store,files,hashes,actors);
     var response=api.upload(request,"sha256:"+hashes.ofBytes(csv).substring(7));
     assertThat(response.getStatusCode().value()).isEqualTo(201);
-    verify(files).registerOwned(null,"object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8",hashes.ofBytes(csv),"text/csv",csv.length,"human:operator","retention://managed-files/30d","tenant-a");
+    verify(files).registerDirectUpload(eq("tenant-a"),eq("human:operator"),isNull(),eq(hashes.ofBytes(csv)),eq((long)csv.length),eq(store),any());
+    verifyNoInteractions(store);
   }
 
   @Test void mismatchedChecksumCannotWriteToMinio() throws Exception {

@@ -28,22 +28,26 @@ class ManagedFileRuntimeTest {
         .isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class)
         .hasMessageContaining("not owned");
   }
-  @Test void delegatedUploadRetryKeepsOneAssetAndRejectsChangedBytes(){
+  @Test void delegatedUploadRetryKeepsOneAssetAndRejectsChangedBytes()throws Exception{
     byte[] csv="cinema,indirizzo\nA,Trieste\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     String hash=hashes.ofBytes(csv);
     java.util.concurrent.atomic.AtomicInteger puts=new java.util.concurrent.atomic.AtomicInteger();
-    java.util.function.Supplier<String> put=()->"object://staging/upload-"+puts.incrementAndGet();
-    var first=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put);
-    var retry=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put);
+    var spool=java.nio.file.Files.createTempFile("upload-test-",".csv");java.nio.file.Files.write(spool,csv);
+    var put=new ManagedFileStagingStore(){
+      public void putReserved(String ref,InputStream in,long size,String type)throws IOException {assertThat(in.readAllBytes()).isEqualTo(csv);puts.incrementAndGet();}
+      public byte[] get(String ref){return csv;}
+    };
+    var first=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put,spool);
+    var retry=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put,spool);
     assertThat(retry).isEqualTo(first).containsEntry("status","STAGED");
     assertThat(puts).hasValue(1);
     assertThat(db.sql("select count(*) from ouf_onboarding.managed_file_upload_attempt").query(Long.class).single()).isOne();
-    assertThatThrownBy(()->files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123","sha256:"+"0".repeat(64),csv.length,put))
+    assertThatThrownBy(()->files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123","sha256:"+"0".repeat(64),csv.length,put,spool))
         .hasMessageContaining("different file content");
     assertThat(puts).hasValue(1);
-    var other=files.registerDelegatedUpload("tenant-b","human:alice","file_123","upload:file_123",hash,csv.length,put);
+    var other=files.registerDelegatedUpload("tenant-b","human:alice","file_123","upload:file_123",hash,csv.length,put,spool);
     assertThat(other.get("assetId")).isNotEqualTo(first.get("assetId"));
-    assertThat(puts).hasValue(2);
+    assertThat(puts).hasValue(2);java.nio.file.Files.delete(spool);
   }
   @Test void managedFileDraftRetryReturnsOneVersionAndRejectsChangedArguments(){
     byte[] csv="cinema,indirizzo\nA,Trieste\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
