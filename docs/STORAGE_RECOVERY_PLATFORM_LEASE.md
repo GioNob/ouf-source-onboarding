@@ -1,5 +1,9 @@
 # Platform binding and live logical Authorization rollback
 
+See [durable same-host provider](STORAGE_RECOVERY_DURABLE_LOCAL_AUTHORITY.md) for the explicit
+POSIX implementation and separate-JVM qualification. Production wiring remains absent;
+the original in-memory lease tests below are retained as component coverage.
+
 `PlatformStorageRecoveryAuthorityFence` is an explicitly constructed bridge from trusted
 platform worker admission to the existing Authorization recovery service. It is not a bean,
 HTTP/MCP endpoint, token verifier, new policy owner or grant issuer.

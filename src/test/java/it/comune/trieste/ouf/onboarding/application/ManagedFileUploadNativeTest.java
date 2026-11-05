@@ -14,6 +14,7 @@ import it.comune.trieste.ouf.authorization.*;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 import it.comune.trieste.ouf.onboarding.authorization.*;
 import it.comune.trieste.ouf.onboarding.installation.PlatformStorageRecoveryAuthorityFence;
+import it.comune.trieste.ouf.onboarding.installation.FilePlatformRecoveryAuthority;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -687,4 +688,99 @@ class ManagedFileUploadNativeTest {
   }
   @Test void logicalAuthorizationRollbackCannotUndoIndependentRevocationInLiveWorker()throws Exception{logicalRollbackWithLiveWorker(true);}
   @Test void logicalAuthorizationRollbackCannotReuseLiveWorkerAfterGenerationOnlyChange()throws Exception{logicalRollbackWithLiveWorker(false);}
+  Path fileAuthorityDirectory()throws Exception{return Files.createTempDirectory("ouf-authority-",java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")));}
+  FilePlatformRecoveryAuthority fileAuthority(Path directory,StorageRecoveryAuthorityFence.Proof first){FilePlatformRecoveryAuthority.provision(directory,first);return new FilePlatformRecoveryAuthority(directory);}
+  StorageRecoveryAuthorityFence.Proof fileProof(FilePlatformRecoveryAuthority source){
+    try(var lease=source.tryAcquire(new PlatformStorageRecoveryAuthorityFence.Binding("lab-installation","platform-tenant",1))){assertThat(lease).isNotNull();return lease.proof();}
+  }
+  Process fileProcess(Path directory,String action,Path proof,long expected)throws Exception{
+    return new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin/java").toString(),"-cp",System.getProperty("surefire.test.class.path",System.getProperty("java.class.path")),FilePlatformAuthorityProcess.class.getName(),directory.toString(),action,proof==null?"unused":proof.toString(),Long.toString(expected))
+      .redirectErrorStream(true).redirectOutput(evidence.resolve("file-platform-"+key+"-"+UUID.randomUUID()+".log").toFile()).start();
+  }
+  int fileChild(Path directory,String action,Path proof,long expected){
+    try{var child=fileProcess(directory,action,proof,expected);if(!child.waitFor(10,TimeUnit.SECONDS)){child.destroyForcibly();child.waitFor(5,TimeUnit.SECONDS);throw new AssertionError("File authority child deadline");}return child.exitValue();}
+    catch(Exception ex){throw new IllegalStateException(ex);}
+  }
+  Path nextFileProof(Path directory,StorageRecoveryAuthorityFence.Proof proof)throws Exception{Path path=directory.resolve("proposal-"+UUID.randomUUID()+".json");Files.writeString(path,JSON.writeValueAsString(proof));return path;}
+  void fileEvidence(String scenario,Map<String,Object> facts)throws Exception{
+    var receipt=new TreeMap<String,Object>(facts);receipt.put("scenario",scenario);receipt.put("status","PASS");receipt.put("scope","same-host local POSIX filesystem; synthetic authority; no target");
+    Files.writeString(evidence.resolve("file-authority-"+scenario+".json"),JSON.writeValueAsString(receipt)+"\n");System.out.println("FILE_PLATFORM_PASS "+JSON.writeValueAsString(receipt));
+  }
+  @Test void fileAuthorityPersistsRestartAndReconcilesLostPublicationWithoutRenewal()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var first=fenceProof(1,false);fileAuthority(dir,first);
+    assertThat(fileChild(dir,"read",null,0)).isZero();var next=fenceProof(2,true);var proposal=nextFileProof(dir,next);
+    assertThat(fileChild(dir,"publish",proposal,1)).isZero();var reopened=new FilePlatformRecoveryAuthority(dir);assertThat(fileProof(reopened)).isEqualTo(next);
+    assertThat(reopened.publish(1,next)).isEqualTo(2);assertThat(fileProof(new FilePlatformRecoveryAuthority(dir)).expiresAt()).isEqualTo(next.expiresAt());
+    assertThatThrownBy(()->reopened.publish(1,fenceProof(2,false))).hasMessageContaining("Stale authority generation");
+    fileEvidence("restart-idempotency",Map.of("generation",2,"revoked",true,"sameProofAfterRestart",true,"deadlineUnchanged",true,"stalePublicationRejected",true,"filesystem",Files.getFileStore(dir).type()));
+  }
+  @Test void fileAuthorityRevocationInOtherJvmCannotCrossActualOwnerCommit()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var source=fileAuthority(dir,fenceProof(1,false));var guarded=authority(platformFence(source));
+    var d=guarded.prepare(p,request(key));guarded.deliver(d.id(),0);Path proposal=nextFileProof(dir,fenceProof(2,true));
+    var delegate=new PolicyStorageRecoveryGate(db,guarded,runtime,null);var rejected=new AtomicInteger();
+    var gate=new StorageRecoveryGate(){
+      public Evidence lock(Action a,long e,UUID id){return delegate.lock(a,e,id);}
+      public void record(Evidence proof,Action a,UUID id,String outcome){delegate.record(proof,a,id,outcome);assertThat(fileChild(dir,"publish",proposal,1)).isEqualTo(3);rejected.incrementAndGet();}
+    };
+    new ManagedFileStorageRecovery(db,tx,owner(),HASHES,gate,runtime).beginDrain(epoch());assertThat(rejected).hasValue(1);
+    assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("DRAINING");
+    assertThat(fileChild(dir,"publish",proposal,1)).isZero();assertThatThrownBy(()->policyRecovery(guarded).freeze(epoch())).hasMessageContaining("admission generation revoked or differs");
+    fileEvidence("cross-process-commit",Map.of("blockedDuringOwnerCommit",true,"publishedAfterCommit",true,"generation",2,"revoked",true));
+  }
+  @Test void killedFileLeaseHolderReleasesOsLockWithoutRegranting()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var source=fileAuthority(dir,fenceProof(1,false));var guarded=authority(platformFence(source));
+    var d=guarded.prepare(p,request(key));guarded.deliver(d.id(),0);var child=fileProcess(dir,"hold",null,0);
+    try{
+      long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);while(!Files.exists(dir.resolve("child-ready"))&&child.isAlive()&&System.nanoTime()<until)Thread.sleep(20);
+      assertThat(Files.exists(dir.resolve("child-ready"))).isTrue();assertThat(child.isAlive()).isTrue();
+      assertThatThrownBy(()->policyRecovery(guarded).beginDrain(epoch())).hasMessageContaining("unavailable or contended");
+      child.destroyForcibly();assertThat(child.waitFor(5,TimeUnit.SECONDS)).isTrue();
+      policyRecovery(guarded).beginDrain(epoch());assertThat(fileProof(new FilePlatformRecoveryAuthority(dir)).generation()).isOne();
+      fileEvidence("killed-holder",Map.of("ownerDeniedWhileHeld",true,"holderKilled",true,"lockReleased",true,"generationUnchanged",true,"existingAuthorityOnly",true));
+    }finally{if(child.isAlive()){child.destroyForcibly();child.waitFor(5,TimeUnit.SECONDS);}}
+  }
+  @Test void fileRevocationSurvivesPublisherCrashAndLogicalAuthorizationReplay()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var source=fileAuthority(dir,fenceProof(1,false));var guarded=authority(platformFence(source));
+    var d=guarded.prepare(p,request(key));guarded.deliver(d.id(),0);var before=logicalSnapshot();var postmaster=StorageRecoveryRuntime.databaseStartedAt(db);
+    guarded.revoke(p,d.id(),1);var next=fenceProof(2,true);var proposal=nextFileProof(dir,next);
+    assertThat(fileChild(dir,"publish-halt",proposal,1)).isEqualTo(86);var reopened=new FilePlatformRecoveryAuthority(dir);assertThat(fileProof(reopened)).isEqualTo(next);assertThat(reopened.publish(1,next)).isEqualTo(2);
+    restoreLogical(before);assertThat(StorageRecoveryRuntime.databaseStartedAt(db)).isEqualTo(postmaster);var restored=authority(platformFence(reopened));
+    assertThatThrownBy(()->restored.prepare(p,request(key+"-after"))).hasMessageContaining("admission generation revoked or differs");
+    assertThatThrownBy(()->restored.deliver(d.id(),1)).hasMessageContaining("admission generation revoked or differs");
+    assertThatThrownBy(()->policyRecovery(restored).beginDrain(epoch())).hasMessageContaining("admission generation revoked or differs");assertThat(logicalSnapshot()).isEqualTo(before);
+    fileEvidence("crash-and-logical-replay",Map.of("publisherExit",86,"generation",2,"revoked",true,"exactPublicationReconciled",true,"samePostmaster",true,"restoredSnapshotUnchanged",true,"prepareDeliveryOwnerRejected",true));
+  }
+  @Test void twoFilePublishersHaveOneExpectedGenerationWinner()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();fileAuthority(dir,fenceProof(1,false));
+    var a=fileProcess(dir,"publish",nextFileProof(dir,fenceProof(2,true)),1);var b=fileProcess(dir,"publish",nextFileProof(dir,fenceProof(2,false)),1);
+    try{assertThat(a.waitFor(10,TimeUnit.SECONDS)).isTrue();assertThat(b.waitFor(10,TimeUnit.SECONDS)).isTrue();assertThat(List.of(a.exitValue(),b.exitValue())).containsExactlyInAnyOrder(0,3);}
+    finally{if(a.isAlive())a.destroyForcibly();if(b.isAlive())b.destroyForcibly();}
+    assertThat(fileProof(new FilePlatformRecoveryAuthority(dir)).generation()).isEqualTo(2);fileEvidence("concurrent-publication",Map.of("successes",1,"denials",1,"generation",2));
+  }
+  @Test void fileAuthorityRejectsCorruptionOversizeMissingStateAndSymlink()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var source=fileAuthority(dir,fenceProof(1,false));Path state=dir.resolve("current.json");byte[] original=Files.readAllBytes(state);
+    for(String bad:List.of("{}","x".repeat(4097),new String(original,java.nio.charset.StandardCharsets.UTF_8).replace("\"generation\":1","\"generation\":2"))){
+      Files.writeString(state,bad);assertThatThrownBy(()->fileProof(source)).isInstanceOf(IllegalStateException.class);
+    }
+    Files.write(state,original);Path saved=dir.resolve("saved.json");Files.move(state,saved);
+    assertThatThrownBy(()->fileProof(source)).hasMessageContaining("state unavailable");assertThatThrownBy(()->source.publish(1,fenceProof(2,true))).hasMessageContaining("state unavailable");
+    assertThatThrownBy(()->FilePlatformRecoveryAuthority.provision(dir,fenceProof(1,false))).hasMessageContaining("empty directory");
+    Files.createSymbolicLink(state,saved);assertThatThrownBy(()->fileProof(source)).hasMessageContaining("regular authority file");Files.delete(state);Files.move(saved,state);
+    assertThat(fileProof(source).generation()).isOne();fileEvidence("invalid-state",Map.of("corruptionRejected",true,"oversizeRejected",true,"missingStateRejected",true,"automaticReprovisionRejected",true,"symlinkRejected",true));
+  }
+  @Test void fileAuthorityIgnoresUncommittedPendingAndRejectsReplacedGuard()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var source=fileAuthority(dir,fenceProof(1,false));
+    Files.writeString(dir.resolve("current.pending"),"incomplete");Files.setPosixFilePermissions(dir.resolve("current.pending"),java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+    assertThat(fileProof(new FilePlatformRecoveryAuthority(dir)).generation()).isOne();source.publish(1,fenceProof(2,true));assertThat(Files.exists(dir.resolve("current.pending"))).isFalse();
+    Files.move(dir.resolve("authority.lock"),dir.resolve("old.lock"));Files.createFile(dir.resolve("authority.lock"),java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")));
+    assertThatThrownBy(()->fileProof(source)).hasMessageContaining("lock unavailable");fileEvidence("pending-and-guard",Map.of("pendingNeverUsedAsAuthority",true,"replacementPublished",true,"staleGuardRejected",true));
+  }
+  @Test void fileAuthorityRejectsExpiryAmbientPublicationAndInsecurePermissions()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var first=fenceProof(1,false);var source=fileAuthority(dir,first);
+    assertThatThrownBy(()->tx.executeWithoutResult(s->source.publish(1,fenceProof(2,true)))).hasMessageContaining("no owner transaction");
+    var expired=new StorageRecoveryAuthorityFence.Proof(first.installation(),first.tenant(),first.bundleId(),first.bundleVersion(),2,Instant.now().minusSeconds(20),Instant.now().minusSeconds(1),true);
+    assertThatThrownBy(()->source.publish(1,expired)).hasMessageContaining("expired or future");assertThat(fileProof(source)).isEqualTo(first);
+    Files.setPosixFilePermissions(dir.resolve("current.json"),java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-rw-"));assertThatThrownBy(()->fileProof(source)).hasMessageContaining("regular authority file");
+    fileEvidence("invalid-publication",Map.of("expiredRejected",true,"ambientTransactionRejected",true,"insecurePermissionsRejected",true,"generationUnchanged",true));
+  }
 }
