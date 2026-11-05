@@ -45,8 +45,8 @@ public final class UploadCommonCutProcess {
   }
   static void snapshot(String name)throws Exception {
     var rows=new TreeMap<String,Object>();
-    for(String table:List.of("managed_file_storage_control","managed_file_upload_intent","managed_file_upload_attempt","managed_file_asset","managed_file_owner_reconciliation","storage_recovery_lab_gate","storage_recovery_lab_audit")) {
-      String value=db.sql("select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]'::jsonb)::text from ouf_onboarding."+table+" t").query(String.class).single();
+    for(String table:List.of("managed_file_storage_control","managed_file_upload_intent","managed_file_upload_attempt","managed_file_asset","managed_file_owner_reconciliation","storage_recovery_lab_gate","storage_recovery_lab_audit","storage_recovery_authority_projection","storage_recovery_action_audit","ouf_authorization.storage_recovery_decision","ouf_authorization.storage_recovery_delivery_audit")) {
+      String value=db.sql("select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]'::jsonb)::text from "+(table.contains(".")?table:"ouf_onboarding."+table)+" t").query(String.class).single();
       rows.put(table,JSON.readTree(value));
     }
     Files.writeString(PROOF.resolve(name+".json"),JSON.writeValueAsString(rows)+"\n");

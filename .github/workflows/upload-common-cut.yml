@@ -10,6 +10,10 @@ on:
       - src/main/java/it/comune/trieste/ouf/onboarding/application/ManagedFileStorageRecovery.java
       - src/main/java/it/comune/trieste/ouf/onboarding/application/StorageRecoveryGate.java
       - src/main/java/it/comune/trieste/ouf/onboarding/application/StorageRecoveryRuntime.java
+      - src/main/java/it/comune/trieste/ouf/onboarding/application/PolicyStorageRecoveryGate.java
+      - src/main/java/it/comune/trieste/ouf/onboarding/application/StorageRecoveryCustody.java
+      - src/main/java/it/comune/trieste/ouf/onboarding/authorization/StorageRecoveryAuthorization.java
+      - src/main/resources/db/migration/*.sql
       - src/test/java/it/comune/trieste/ouf/onboarding/application/StorageRecoveryLabGate.java
       - src/main/java/it/comune/trieste/ouf/onboarding/application/ManagedFileUploadCoordinator.java
       - src/test/java/it/comune/trieste/ouf/onboarding/application/UploadCommonCutProcess.java

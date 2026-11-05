@@ -60,6 +60,10 @@ def verify(archive,root,commit):
     require(backup_count==receipt['backupFiles'],'BACKUP_COUNT')
     segment=cut['targetWalSegment'];require(segment in j('wal-inventory') and 'pg_wal/'+segment not in j('base-inventory'),'POST_BASE_REQUIRED_WAL')
     frozen=j('frozen-owner');draining=j('draining-owner');base=j('base-owner')
+    require(frozen['storage_recovery_authority_projection']==[{'singleton':True,'version':0,'decision_id':None}]
+            and not frozen['storage_recovery_action_audit']
+            and not frozen['ouf_authorization.storage_recovery_decision']
+            and not frozen['ouf_authorization.storage_recovery_delivery_audit'],'V40_NO_IMPLICIT_AUTHORITY')
     gate=frozen['storage_recovery_lab_gate'];audit=frozen['storage_recovery_lab_audit']
     require(len(gate)==1 and gate[0]['scope']=='onboarding:managed-file-storage'
             and gate[0]['epoch']==1 and gate[0]['quiescent'] is True and gate[0]['revoked'] is False

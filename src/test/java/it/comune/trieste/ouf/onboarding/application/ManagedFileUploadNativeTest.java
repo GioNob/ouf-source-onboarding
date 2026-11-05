@@ -9,6 +9,10 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.time.Instant;
+import it.comune.trieste.ouf.authorization.*;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
+import it.comune.trieste.ouf.onboarding.authorization.*;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -18,7 +22,7 @@ import org.springframework.transaction.support.*;
 
 @EnabledIfEnvironmentVariable(named="OUF_UPLOAD_NATIVE",matches="true")
 class ManagedFileUploadNativeTest {
-  static final ObjectMapper JSON=new ObjectMapper();
+  static final ObjectMapper JSON=new ObjectMapper().findAndRegisterModules();
   static final CanonicalHash HASHES=new CanonicalHash(JSON);
   static final byte[] CSV="\uFEFFid;name\r\n1;Trieste\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
   static JdbcClient db;static TransactionTemplate tx;static MinioClient client;static MinioManagedFileStagingStore real;
@@ -45,14 +49,18 @@ class ManagedFileUploadNativeTest {
     db.sql("truncate ouf_onboarding.source,ouf_onboarding.managed_file_asset restart identity cascade").update();
     db.sql("update ouf_onboarding.managed_file_storage_control set epoch=epoch+1,phase='ACTIVE'").update();
     runtime=StorageRecoveryRuntime.start("lab-installation",db);StorageRecoveryLabGate.init(db,epoch(),true,runtime);
+    db.sql("truncate ouf_authorization.storage_recovery_decision cascade").update();
+    db.sql("insert into ouf_onboarding.storage_recovery_authority_projection values(true,0,null)").update();
     spool=Files.createTempFile("ouf-upload-fixture-",".csv");Files.write(spool,CSV);key=UUID.randomUUID().toString();store=new CountingStore();
   }
   @AfterEach void proof(TestInfo info)throws Exception{
     // Synthetic fixture rows only; no credentials, user content or signed URLs.
     String rows=db.sql("select coalesce(json_agg(i order by created_at),'[]'::json)::text from ouf_onboarding.managed_file_upload_intent i").query(String.class).single();
     String audit=db.sql("select coalesce(json_agg(a order by id),'[]'::json)::text from ouf_onboarding.storage_recovery_lab_audit a").query(String.class).single();
+    String delivery=db.sql("select coalesce(json_agg(a order by occurred_at,event_id),'[]'::json)::text from ouf_authorization.storage_recovery_delivery_audit a").query(String.class).single();
+    String actions=db.sql("select coalesce(json_agg(a order by occurred_at,event_id),'[]'::json)::text from ouf_onboarding.storage_recovery_action_audit a").query(String.class).single();
     Files.writeString(evidence.resolve(info.getTestMethod().orElseThrow().getName()+".json"),JSON.writeValueAsString(Map.of(
-      "scenario",info.getTestMethod().orElseThrow().getName(),"intents",JSON.readTree(rows),"syntheticGateAudit",JSON.readTree(audit),"parentPutCalls",store.puts.get(),"parentGetCalls",store.gets.get()))+"\n");
+      "scenario",info.getTestMethod().orElseThrow().getName(),"intents",JSON.readTree(rows),"syntheticGateAudit",JSON.readTree(audit),"deliveryAudit",JSON.readTree(delivery),"policyOwnerAudit",JSON.readTree(actions),"parentPutCalls",store.puts.get(),"parentGetCalls",store.gets.get()))+"\n");
     Files.deleteIfExists(spool);
   }
   static ManagedFileService owner(){return new ManagedFileService(db,JSON,HASHES,null,tx,null,null);}
@@ -415,5 +423,119 @@ class ManagedFileUploadNativeTest {
     UUID id=pendingRecovery();long e=epoch();var replacement=StorageRecoveryRuntime.start("lab-installation",db);
     assertThatThrownBy(()->recovery().reconcile(id,e,changedDuringGet(()->bindRuntimeOnly(replacement)))).hasMessageContaining("runtime binding differs");
     assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
+  }
+  AuthorizationPolicyRegistry policyRegistry(){return new AuthorizationPolicyRegistry(db,JSON,HASHES);}
+  PrincipalContext operator(){return new PrincipalContext("operator","platform-tenant",PrincipalContext.ActorType.HUMAN,null,"lab/authn","lab/issuer","lab/audience",Set.of(StorageRecoveryAuthorization.CAPABILITY.requiredScope()),new PrincipalContext.IdentityClaims(Set.of(),"lab-mfa",Set.of("mfa"),Instant.now().minusSeconds(1)));}
+  StorageRecoveryAuthorization authority(){return new StorageRecoveryAuthorization(db,tx,JSON,policyRegistry(),HASHES,"lab-installation","platform-tenant");}
+  void recoveryPolicy(PrincipalContext p,String bundle,long version,boolean allowed){
+    var constraints=new GrantConstraints("ALLOW",null,"installation-storage-recovery","lab-installation",Map.of("storageOwner","onboarding"),Set.of(),Set.of("SECURITY_SENSITIVE"),null,Set.of(),null);
+    var grants=allowed?List.of(new Grant("lab-recovery",StorageRecoveryAuthorization.CAPABILITY.capabilityId(),"platform-tenant",p.subjectId(),null,null,Instant.now().minusSeconds(60),Instant.now().plusSeconds(600),constraints)):List.<Grant>of();
+    tx.executeWithoutResult(s->policyRegistry().publishAndActivate(new PolicyBundle(bundle,version,Instant.now(),List.of(StorageRecoveryAuthorization.CAPABILITY),grants),"lab-operator"));
+  }
+  StorageRecoveryAuthorization.Request request(String command){return new StorageRecoveryAuthorization.Request(command,runtime.sessionId(),epoch(),StorageRecoveryAuthorization.ACTIONS,Instant.now().plusSeconds(300));}
+  ManagedFileStorageRecovery policyRecovery(){
+    StorageRecoveryCustody custody=(installation,session,epoch)->{
+      var evidence=new StorageRecoveryLabGate(db).lock(StorageRecoveryGate.Action.RECONCILE,epoch,null);
+      return new StorageRecoveryCustody.Proof(evidence.quiescenceRef(),evidence.quiescenceRuntimeSessionId(),evidence.quiescent());
+    };
+    return new ManagedFileStorageRecovery(db,tx,owner(),HASHES,new PolicyStorageRecoveryGate(db,authority(),runtime,custody),runtime);
+  }
+  StorageRecoveryAuthorization.Decision delivered(PrincipalContext p,String bundle){recoveryPolicy(p,bundle,1,true);var d=authority().prepare(p,request(key));assertThat(authority().deliver(d.id(),0)).isOne();return d;}
+  @Test void storageCapabilityIsDistinctAndDenyByDefault(){
+    var p=operator();recoveryPolicy(p,key,1,false);
+    assertThatThrownBy(()->authority().prepare(p,request(key))).hasMessageContaining("policy denied");
+    assertThat(AuthorizationCapabilities.bootstrapDescriptors()).doesNotContain(StorageRecoveryAuthorization.CAPABILITY);
+    assertThat(AuthorizationCapabilities.installationDescriptors()).doesNotContain(StorageRecoveryAuthorization.CAPABILITY);
+    assertThat(db.sql("select count(*) from ouf_authorization.storage_recovery_decision").query(Long.class).single()).isZero();
+  }
+  @Test void staleHumanAndServiceCannotPrepareStorageAuthority(){
+    var p=operator();recoveryPolicy(p,key,1,true);
+    var stale=new PrincipalContext(p.subjectId(),p.tenantId(),p.actorType(),null,p.authenticationContextRef(),p.issuer(),p.audience(),p.scopes(),new PrincipalContext.IdentityClaims(Set.of(),"lab-mfa",Set.of("mfa"),Instant.now().minusSeconds(1000)));
+    var service=new PrincipalContext(p.subjectId(),p.tenantId(),PrincipalContext.ActorType.SERVICE,"lab-service",p.authenticationContextRef(),p.issuer(),p.audience(),p.scopes(),p.claims());
+    for(var invalid:List.of(stale,service))assertThatThrownBy(()->authority().prepare(invalid,request(key))).hasMessageContaining("HUMAN");
+  }
+  @Test void prepareLostResponseReplaysExactDecisionWithoutRenewal(){
+    var p=operator();recoveryPolicy(p,key,1,true);var request=request(key);var first=authority().prepare(p,request);
+    assertThat(authority().prepare(p,request)).isEqualTo(first);
+    assertThatThrownBy(()->authority().prepare(p,new StorageRecoveryAuthorization.Request(key,runtime.sessionId(),epoch(),Set.of("DRAIN"),request.expiresAt()))).hasMessageContaining("different binding");
+    assertThat(db.sql("select count(*) from ouf_authorization.storage_recovery_decision").query(Long.class).single()).isOne();
+  }
+  @Test void deliveredLostResponseReconcilesSameProjectionVersion(){
+    var p=operator();var d=delivered(p,key);
+    assertThat(authority().deliver(d.id(),0)).isOne();
+    assertThat(db.sql("select event from ouf_authorization.storage_recovery_delivery_audit where decision_id=:id order by occurred_at").param("id",d.id()).query(String.class).list()).containsExactly("PREPARED","DELIVERED");
+    policyRecovery().beginDrain(epoch());policyRecovery().freeze(epoch());
+    assertThat(db.sql("select outcome from ouf_onboarding.storage_recovery_action_audit order by occurred_at").query(String.class).list()).containsExactly("DRAINED","FROZEN");
+  }
+  @Test void explicitRevocationBlocksLateAckAndOldDelivery(){
+    var p=operator();var d=delivered(p,key);store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
+    long e=epoch();policyRecovery().beginDrain(e);UUID id=(UUID)intent().get("intent_id");
+    assertThatThrownBy(()->policyRecovery().reconcile(id,e,changedDuringGet(()->assertThat(authority().revoke(p,d.id(),1)).isEqualTo(2)))).hasMessageContaining("No delivered");
+    assertThat(assets()).isZero();assertThat(intent()).containsEntry("reconciliation_reads",1);
+    assertThat(authority().revoke(p,d.id(),1)).isEqualTo(2);
+    assertThatThrownBy(()->authority().deliver(d.id(),2)).hasMessageContaining("revoked");
+  }
+  @Test void activePolicyRevocationDuringGetBlocksPublication(){
+    var p=operator();delivered(p,key);store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
+    long e=epoch();policyRecovery().beginDrain(e);UUID id=(UUID)intent().get("intent_id");
+    assertThatThrownBy(()->policyRecovery().reconcile(id,e,changedDuringGet(()->recoveryPolicy(p,key,2,false)))).hasMessageContaining("policy generation changed");
+    assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
+  }
+  @Test void policyChangeBeforeDeliveryCannotPublishPreparedDecision(){
+    var p=operator();recoveryPolicy(p,key,1,true);var d=authority().prepare(p,request(key));recoveryPolicy(p,key,2,false);
+    assertThatThrownBy(()->authority().deliver(d.id(),0)).hasMessageContaining("policy generation changed");
+    assertThat(db.sql("select version from ouf_onboarding.storage_recovery_authority_projection").query(Long.class).single()).isZero();
+  }
+  @Test void concurrentPreparationHasOneDurableCommand()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var request=request(key);var pool=Executors.newFixedThreadPool(2);
+    try{var a=pool.submit(()->authority().prepare(p,request));var b=pool.submit(()->authority().prepare(p,request));assertThat(a.get(10,TimeUnit.SECONDS)).isEqualTo(b.get(10,TimeUnit.SECONDS));}
+    finally{pool.shutdownNow();}
+    assertThat(db.sql("select count(*) from ouf_authorization.storage_recovery_decision").query(Long.class).single()).isOne();
+  }
+  @Test void staleProjectionCasAndSupersededDecisionCannotOverwrite(){
+    var p=operator();var first=delivered(p,key);var second=authority().prepare(p,request(key+"-next"));
+    assertThatThrownBy(()->authority().deliver(second.id(),0)).hasMessageContaining("Stale projection");
+    assertThat(authority().deliver(second.id(),1)).isEqualTo(2);
+    assertThatThrownBy(()->authority().deliver(first.id(),2)).hasMessageContaining("revoked");
+    assertThat(db.sql("select decision_id from ouf_onboarding.storage_recovery_authority_projection").query(UUID.class).single()).isEqualTo(second.id());
+  }
+  @Test void decisionBindingAndHistoryCannotBeEditedOrReopened(){
+    var p=operator();var d=delivered(p,key);authority().revoke(p,d.id(),1);
+    for(String statement:List.of("update ouf_authorization.storage_recovery_decision set state='PREPARED'","update ouf_authorization.storage_recovery_decision set expires_at=expires_at+interval '1 hour'","delete from ouf_authorization.storage_recovery_decision","update ouf_onboarding.storage_recovery_authority_projection set version=0"))
+      assertThatThrownBy(()->db.sql(statement).update()).isInstanceOf(org.springframework.dao.DataAccessException.class);
+  }
+  @Test void policyActivationConflictsWithGateUntilOwnerTransactionCompletes()throws Exception{
+    var p=operator();delivered(p,key);var entered=new CountDownLatch(1);var release=new CountDownLatch(1);var pool=Executors.newSingleThreadExecutor();
+    try{
+      var held=pool.submit(()->tx.executeWithoutResult(s->{authority().lockCurrent(runtime.sessionId(),epoch(),"DRAIN");entered.countDown();try{if(!release.await(10,TimeUnit.SECONDS))throw new AssertionError("fixture timeout");}catch(InterruptedException ex){throw new RuntimeException(ex);}}));
+      assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
+      assertThatThrownBy(()->tx.executeWithoutResult(s->{db.sql("set local lock_timeout='500ms'").update();policyRegistry().activate(key,1);})).hasMessageContaining("lock timeout");
+      release.countDown();held.get(10,TimeUnit.SECONDS);
+    }finally{release.countDown();pool.shutdownNow();}
+  }
+  @Test void noCustodyVerifierCannotFreezeEvenWithRealPolicyDecision(){
+    var p=operator();delivered(p,key);
+    var guarded=new ManagedFileStorageRecovery(db,tx,owner(),HASHES,new PolicyStorageRecoveryGate(db,authority(),runtime,null),runtime);
+    guarded.beginDrain(epoch());assertThatThrownBy(()->guarded.freeze(epoch())).hasMessageContaining("quiescence");
+  }
+  @Test void sameCapabilityNameCannotBorrowAWeakerDescriptor(){
+    var p=operator();var weak=new CapabilityDescriptor(StorageRecoveryAuthorization.CAPABILITY.capabilityId(),"EXECUTE","ouf.managed-source.file.profile",Set.of(PrincipalContext.ActorType.HUMAN));
+    tx.executeWithoutResult(s->policyRegistry().publishAndActivate(new PolicyBundle(key,1,Instant.now(),List.of(weak),List.of()),"lab-operator"));
+    assertThatThrownBy(()->authority().prepare(p,request(key))).hasMessageContaining("semantics differ");
+  }
+  @Test void concurrentDeliveriesHaveOneProjectionWinner()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var a=authority().prepare(p,request(key));var b=authority().prepare(p,request(key+"-other"));var pool=Executors.newFixedThreadPool(2);
+    java.util.function.Function<UUID,Boolean> deliver=id->{try{assertThat(authority().deliver(id,0)).isOne();return true;}catch(IllegalStateException ex){assertThat(ex).hasMessageContaining("Stale projection");return false;}};
+    try{var one=pool.submit(()->deliver.apply(a.id()));var two=pool.submit(()->deliver.apply(b.id()));assertThat(List.of(one.get(10,TimeUnit.SECONDS),two.get(10,TimeUnit.SECONDS))).containsExactlyInAnyOrder(true,false);}
+    finally{pool.shutdownNow();}
+    assertThat(db.sql("select version from ouf_onboarding.storage_recovery_authority_projection").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_authorization.storage_recovery_delivery_audit where event='DELIVERED'").query(Long.class).single()).isOne();
+  }
+  @Test void replacementPolicyDecisionDoesNotResetIntentBudget(){
+    var p=operator();delivered(p,key);store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
+    long e=epoch();policyRecovery().beginDrain(e);db.sql("update ouf_onboarding.managed_file_upload_intent set reconciliation_reads=128").update();
+    var next=authority().prepare(p,request(key+"-replacement"));assertThat(authority().deliver(next.id(),1)).isEqualTo(2);
+    assertThatThrownBy(()->policyRecovery().reconcile((UUID)intent().get("intent_id"),e,store)).hasMessageContaining("budget exhausted");
+    assertThat(intent()).containsEntry("reconciliation_reads",128);assertThat(store.gets).hasValue(0);assertThat(assets()).isZero();
   }
 }
