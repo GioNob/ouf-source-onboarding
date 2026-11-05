@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
 
 def sha(data):return hashlib.sha256(data).hexdigest()
@@ -25,7 +26,14 @@ def verify(archive,root,commit):
     require(set(manifest)==set(data)-{'SHA256SUMS'},'COMPLETE_CHECKSUM_COVERAGE')
     for name,digest in manifest.items():require(sha(data[name])==digest,'CHECKSUM:'+name)
     def j(name):return json.loads(data[name+'.json'])
-    bindings=j('source-bindings');require(len(bindings)>=260,'SOURCE_BINDINGS_REQUIRED')
+    bindings=j('source-bindings')
+    paths=[root/'pom.xml',root/'.github/workflows/upload-common-cut.yml',*(root/'scripts').glob('*upload*.py')]
+    paths+=list((root/'src/main').rglob('*.*'))+list((root/'src/test/java').rglob('*.java'))
+    require(set(bindings)=={str(p.relative_to(root)) for p in paths if p.is_file()},'EXACT_SOURCE_BINDING_SET')
+    image=j('exact-image')
+    require(image['manifestDigest']=='sha256:5bfda2ef577b3c33216b82fb3eb1bed3ad76842ed13fc0a114ef94084b20da4d'
+            and image['configDigest']=='sha256:3b972a3ca20f98b73554f0772a2df4f1a5ef4441298299a443f0e605f10ec9b6'
+            and image['binarySha256']=='c301b4f487f17f4d9b8dfe1b26885ec4ea6141e1ace73b8dfaadff70bd714dfc','EXACT_OCI33')
     for name,digest in bindings.items():
         path=PurePosixPath(name);require(not path.is_absolute() and '..' not in path.parts,'SAFE_SOURCE_PATH')
         require(sha((root/name).read_bytes())==digest,'SOURCE:'+name)
@@ -69,6 +77,7 @@ def verify(archive,root,commit):
         else:require(row['reconciliation_reads']==previous['reconciliation_reads']+1,'DURABLE_READ_BUDGET')
         asset=assets[row['asset_id']];attempt=attempts[row['asset_id']]
         for key in ('content_hash','size_bytes','tenant_id'):require(row[key]==asset[key]==attempt[key],'OWNER_BINDING:'+key)
+        require(all(row[k]==attempt[k] for k in ('file_id','idempotency_key')),'RECEIPT_BINDING')
         require(asset['staging_ref']==row['staging_ref'] and asset['uploaded_by']==row['subject_id']==attempt['subject_id'],'STABLE_OBJECT_OWNER')
     objects=j('objects-source');require(objects==j('objects-restored') and len(objects)==2,'S3_PARITY')
     for row in intents:
@@ -91,4 +100,29 @@ def verify(archive,root,commit):
             'checksums':len(manifest),'sources':len(bindings),'backupFiles':backup_count,'objects':len(objects),
             'independentNativeRestore':False,'targetOperations':0}
 
-if __name__=='__main__':print(json.dumps(verify(Path(sys.argv[1]),Path.cwd(),sys.argv[2]),indent=2,sort_keys=True))
+def negative_probes(archive,root,commit):
+    with zipfile.ZipFile(archive) as z:original={n:z.read(n) for n in z.namelist()}
+    results=[]
+    cases=[('source-bindings.json','EXACT_SOURCE_BINDING_SET',lambda x:x.pop(next(k for k in x if k.endswith('ManagedFileStorageRecovery.java')))),
+           ('receipt.json','TERMINAL_PASS',lambda x:x.update(status='BLOCKED')),
+           ('common-cut.json','COMPONENT_BINDING',lambda x:x['components'].update(wal='0'*64)),
+           ('restored-owner.json','EXACT_OWNER_AFTER_RESTORE',lambda x:x['managed_file_storage_control'][0].update(phase='ACTIVE')),
+           ('missing-wal.json','NEGATIVE_WAL_GATE',lambda x:x.update(restoredS3Started=1))]
+    with tempfile.TemporaryDirectory() as directory:
+        for name,expected,change in cases:
+            data=dict(original);value=json.loads(data[name]);change(value);data[name]=json.dumps(value).encode()
+            # Recompute the outer manifest: these must fail semantic checks, not just hashes.
+            data['SHA256SUMS']=''.join(sha(v)+'  '+k+'\n' for k,v in sorted(data.items()) if k!='SHA256SUMS').encode()
+            candidate=Path(directory)/'modified.zip'
+            with zipfile.ZipFile(candidate,'w',zipfile.ZIP_DEFLATED) as z:
+                for k,v in data.items():z.writestr(k,v)
+            try:verify(candidate,root,commit)
+            except ValueError as error:require(str(error)==expected,'EXPECTED_REJECTION:'+expected);results.append(expected)
+            else:raise ValueError('TAMPER_ACCEPTED:'+name)
+    return results
+
+if __name__=='__main__':
+    archive=Path(sys.argv[1]);root=Path.cwd();commit=sys.argv[2]
+    result=verify(archive,root,commit)
+    if '--negative-probes' in sys.argv:result['negativeReadbacks']=negative_probes(archive,root,commit)
+    print(json.dumps(result,indent=2,sort_keys=True))

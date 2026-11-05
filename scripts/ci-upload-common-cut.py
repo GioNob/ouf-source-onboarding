@@ -73,11 +73,14 @@ def start_storage(root,templates):
         time.sleep(1)
 def own(path,uid=None):
     run(['sudo','-n','chown','-R',uid or f'{os.getuid()}:{os.getgid()}',str(path)])
+def recovery_settings():
+    return (f"\nrestore_command = 'cp /archive/%f %p'\nrecovery_target_name = '{TARGET}'\n"
+            "recovery_target_action = 'promote'\nhot_standby = off\narchive_mode = off\n")
 def start_restore(name,data,wal,image):
     own(wal,'70:70')
     own(data)
     with (data/'postgresql.auto.conf').open('a') as f:
-        f.write("\nrestore_command = 'cp /archive/%f %p'\nrecovery_target_name = '%s'\nrecovery_target_action = 'promote'\nhot_standby = off\narchive_mode = off\n"%TARGET)
+        f.write(recovery_settings())
     (data/'recovery.signal').touch();own(data,'70:70')
     docker('run','-d','--name',name,'-p','127.0.0.1:5432:5432',
            '-v',f'{data}:/var/lib/postgresql/data','-v',f'{wal}:/archive:ro',image)
