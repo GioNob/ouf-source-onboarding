@@ -74,6 +74,9 @@ final class ManagedFileUploadCoordinator {
       var current=db.sql("select * from ouf_onboarding.managed_file_upload_intent where intent_id=:i for update")
         .param("i",row.get("intent_id")).query().singleRow();
       if("ACKED".equals(current.get("state")))return files.asset((UUID)current.get("asset_id"));
+      if(!db.sql("select clock_timestamp()<reconcile_until from ouf_onboarding.managed_file_upload_intent where intent_id=:i")
+          .param("i",current.get("intent_id")).query(Boolean.class).single())
+        throw failure("ONB_UPLOAD_RECONCILIATION_EXHAUSTED","Upload reconciliation budget expired during storage I/O");
       var asset=files.registerOwned(null,ref,hash,"text/csv",size,subject,"retention://managed-files/30d",tenant);
       if("DELEGATED".equals(kind))db.sql("insert into ouf_onboarding.managed_file_upload_attempt(tenant_id,subject_id,file_id,idempotency_key,content_hash,size_bytes,asset_id) values(:t,:s,:f,:k,:h,:z,:a)")
         .param("t",tenant).param("s",subject).param("f",fileId).param("k",key).param("h",hash).param("z",size).param("a",asset.get("asset_id")).update();

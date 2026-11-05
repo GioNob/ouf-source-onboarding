@@ -231,4 +231,27 @@ class ManagedFileUploadNativeTest {
       assertThat(assets()).isOne();assertThat(store.puts).hasValue(1);
     }finally{store.release.countDown();pool.shutdownNow();}
   }
+  void deadlineDuringRead(boolean draining){
+    UUID id=UUID.randomUUID();
+    db.sql("insert into ouf_onboarding.managed_file_upload_intent(intent_id,upload_kind,tenant_id,subject_id,idempotency_key,file_id,content_hash,size_bytes,staging_ref,epoch,state,reconcile_until) select :i,'DELEGATED','tenant-a','alice',:k,'file_fixture',:h,:z,:r,epoch,'DISPATCHED',clock_timestamp()+interval '3 seconds' from ouf_onboarding.managed_file_storage_control")
+      .param("i",id).param("k",key).param("h",HASHES.ofBytes(CSV)).param("z",CSV.length).param("r","object://managed-files/"+id).update();
+    var slow=new ManagedFileStagingStore(){
+      public void putReserved(String r,InputStream in,long z,String t){throw new AssertionError("Unexpected PUT");}
+      public byte[] get(String ref){
+        assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+        // Wait against the database deadline itself, with a finite test watchdog.
+        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+        while(db.sql("select clock_timestamp()<reconcile_until from ouf_onboarding.managed_file_upload_intent where intent_id=:i").param("i",id).query(Boolean.class).single()){
+          if(System.nanoTime()>deadline)throw new AssertionError("Fixture deadline exceeded");
+          try{Thread.sleep(25);}catch(InterruptedException e){Thread.currentThread().interrupt();throw new RuntimeException(e);}
+        }
+        return CSV;
+      }
+    };
+    if(draining){long e=epoch();recovery().beginDrain(e);assertThatThrownBy(()->recovery().reconcile(id,e,slow)).hasMessageContaining("expired during");}
+    else assertThatThrownBy(()->owner().registerDelegatedUpload("tenant-a","alice","file_fixture",key,HASHES.ofBytes(CSV),CSV.length,slow,spool)).hasMessageContaining("expired during");
+    assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
+  }
+  @Test void recoveryDeadlineIncludesTimeSpentInGet(){deadlineDuringRead(true);}
+  @Test void uploadDeadlineIncludesTimeSpentInGet(){deadlineDuringRead(false);}
 }

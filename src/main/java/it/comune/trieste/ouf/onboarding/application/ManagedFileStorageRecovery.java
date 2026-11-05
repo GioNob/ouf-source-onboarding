@@ -54,6 +54,8 @@ final class ManagedFileStorageRecovery {
       var control=control(false); requireEpoch(control,expectedEpoch); requirePhase(control,"DRAINING");
       var current=intent(intentId);
       if("ACKED".equals(current.get("state")))return files.asset((UUID)current.get("asset_id"));
+      if(!db.sql("select clock_timestamp()<reconcile_until from ouf_onboarding.managed_file_upload_intent where intent_id=:i")
+          .param("i",intentId).query(Boolean.class).single())throw blocked("Upload reconciliation budget expired during storage read");
       var asset=files.registerOwned(null,(String)current.get("staging_ref"),(String)current.get("content_hash"),"text/csv",
         ((Number)current.get("size_bytes")).longValue(),(String)current.get("subject_id"),"retention://managed-files/30d",(String)current.get("tenant_id"));
       if("DELEGATED".equals(current.get("upload_kind")))db.sql("insert into ouf_onboarding.managed_file_upload_attempt(tenant_id,subject_id,file_id,idempotency_key,content_hash,size_bytes,asset_id) values(:t,:s,:f,:k,:h,:z,:a)")
