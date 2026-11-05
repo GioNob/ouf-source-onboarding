@@ -71,9 +71,11 @@ or issues grants. Close the pool at its owning component's shutdown.
 
 The CI-only resolver role has LOGIN and no superuser/createdb/createrole/replication/
 bypassrls, no application-schema privileges and only the additional EXECUTE grant
-on pg_catalog.pg_control_system(). PostgreSQL's normal PUBLIC catalogue/function
-and database defaults remain; this is a minimal **additional-grant** profile for
-the qualified baseline, not a complete production privilege audit. No pg_monitor
+on pg_catalog.pg_control_system(). Stock PG17 exposes that function through PUBLIC:
+the fixture explicitly removes that inherited access, tests absence/direct grant/
+revocation, and restores the original PUBLIC ACL on close. Other PUBLIC catalogue,
+function and database defaults remain; this is a minimal **additional-grant** profile
+on that hardened fixture, not a complete production privilege audit. No pg_monitor
 membership or broad table grant is used. Grant removal must deny resolution and
 retain the latch; identity restoration is a fixture action, not automatic repair.
 

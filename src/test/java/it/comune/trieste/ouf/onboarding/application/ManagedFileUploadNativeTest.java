@@ -1109,7 +1109,12 @@ class ManagedFileUploadNativeTest {
   }
   final class RestrictedResolver implements AutoCloseable {
     final String role="ouf_resolver_"+UUID.randomUUID().toString().replace("-","");final com.zaxxer.hikari.HikariDataSource pool;
+    final boolean publicExecute;
     RestrictedResolver(boolean grant)throws Exception{
+      // Stock PG17 grants this function via PUBLIC. Harden only the disposable
+      // fixture, otherwise revoking a direct grant would not remove effective access.
+      publicExecute=db.sql("select exists(select 1 from pg_proc p cross join lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid='pg_catalog.pg_control_system()'::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE')").query(Boolean.class).single();
+      db.sql("revoke execute on function pg_catalog.pg_control_system() from public").update();
       db.sql("create role "+role+" login password 'ci-only-resolver' nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls").update();
       String database=db.sql("select current_database()").query(String.class).single();assertThat(database).matches("[A-Za-z0-9_]{1,63}");
       db.sql("grant connect on database "+database+" to "+role).update();
@@ -1117,7 +1122,7 @@ class ManagedFileUploadNativeTest {
     }
     void grant(){db.sql("grant execute on function pg_catalog.pg_control_system() to "+role).update();}
     void revoke(){db.sql("revoke execute on function pg_catalog.pg_control_system() from "+role).update();}
-    @Override public void close(){pool.close();db.sql("drop owned by "+role).update();db.sql("drop role "+role).update();}
+    @Override public void close(){try{pool.close();db.sql("drop owned by "+role).update();db.sql("drop role "+role).update();}finally{if(publicExecute)db.sql("grant execute on function pg_catalog.pg_control_system() to public").update();}}
   }
   @Test void resolverNeedsOnlyControlIdentityGrantAndCannotReadOrWriteOwnerTables()throws Exception{
     recoveryPolicy(operator(),key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var source=boundAuthority(fileAuthorityDirectory(),ds,admitted);orphanPgTransaction(source,true);var request=resolution(source);
@@ -1131,7 +1136,7 @@ class ManagedFileUploadNativeTest {
       }
       var iam=new RecoveryHumanIamFixture();try(var approved=iam.approve(humanCommand(request));var proof=resolver.prepare(source,approved.request(),approved.lease())){var receipt=source.reconcile(approved.request(),proof);assertThat(receipt.evidence().outcome()).isEqualTo(Outcome.ROLLED_BACK);pgReceipt("least-privilege-human",receipt);}
     }
-    fileEvidence("pg-least-privilege",Map.of("withoutIdentityGrantDenied",true,"singleControlFunctionGrant",true,"noSuperuserOrAdminRoles",true,"ownerReadWriteDenied",true,"authorizationReadDenied",true,"ddlDenied",true,"authenticatedResolutionSucceeded",true));
+    fileEvidence("pg-least-privilege",Map.of("withoutIdentityGrantDenied",true,"publicExecuteRemovedInFixture",true,"singleControlFunctionGrant",true,"noSuperuserOrAdminRoles",true,"ownerReadWriteDenied",true,"authorizationReadDenied",true,"ddlDenied",true,"authenticatedResolutionSucceeded",true));
   }
   @Test void resolverPrivilegeRevocationBlocksCommittedOutcomeUntilExplicitGrantRestored()throws Exception{
     recoveryPolicy(operator(),key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var source=boundAuthority(fileAuthorityDirectory(),ds,admitted);orphanPgTransaction(source,false);var request=resolution(source);

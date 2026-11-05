@@ -29,6 +29,7 @@ def verify(archive,root,commit):
     bindings=j('source-bindings')
     paths=[root/'pom.xml',root/'.github/workflows/upload-common-cut.yml',*(root/'scripts').glob('*upload*.py')]
     paths+=list((root/'src/main').rglob('*.*'))+list((root/'src/test/java').rglob('*.java'))
+    paths += [root/'authorization-sdk/pom.xml',root/'authorization-sdk/README.md',root/'authorization-sdk/SOURCE_SHA256SUMS'] + list((root/'authorization-sdk/src').rglob('*.*'))
     require(set(bindings)=={str(p.relative_to(root)) for p in paths if p.is_file()},'EXACT_SOURCE_BINDING_SET')
     image=j('exact-image')
     require(image['manifestDigest']=='sha256:5bfda2ef577b3c33216b82fb3eb1bed3ad76842ed13fc0a114ef94084b20da4d'
