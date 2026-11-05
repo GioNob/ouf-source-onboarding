@@ -107,6 +107,10 @@ def verify(archive,root,commit):
     expected_revoked['storage_recovery_lab_gate'][0]['revoked']=True
     expected_revoked['storage_recovery_authority_projection']=[{'singleton':True,'version':3,'decision_id':None}]
     for d in expected_revoked['ouf_authorization.storage_recovery_decision']:d['state']='REVOKED'
+    # Snapshots sort by full JSON; a state transition may change the row order.
+    # Compare the complete post-transition rows in stable primary-key order.
+    for snapshot in (revoked,expected_revoked):
+        snapshot['ouf_authorization.storage_recovery_decision'].sort(key=lambda d:d['decision_id'])
     changed=('ouf_authorization.storage_recovery_delivery_audit','ouf_authorization.policy_bundle','ouf_authorization.active_policy_bundle','ouf_authorization.authorization_decision_audit')
     require({k:v for k,v in revoked.items() if k not in changed}=={k:v for k,v in expected_revoked.items() if k not in changed},'REVOCATION_AFTER_NAMED_CUT')
     after_delivery=revoked['ouf_authorization.storage_recovery_delivery_audit']
@@ -175,6 +179,7 @@ def negative_probes(archive,root,commit):
            ('authorization-restore.json','RESTORED_AUTHORIZATION_CANNOT_REISSUE',lambda x:x.update(freshPrepareRejected=False)),
            ('authorization-restore.json','RESTORED_AUTHORIZATION_CANNOT_REISSUE',lambda x:x.update(oldRedeliveryRejected=False)),
            ('authorization-restore.json','RESTORED_AUTHORIZATION_CANNOT_REISSUE',lambda x:x.update(restoredAuthorityGeneration=2)),
+           ('revoked-after-cut-owner.json','REVOCATION_AFTER_NAMED_CUT',lambda x:x['ouf_authorization.storage_recovery_decision'][0].update(authority_generation=2)),
            ('revoked-after-cut-owner.json','POST_CUT_REVOCATION_AUDIT',lambda x:x['ouf_authorization.storage_recovery_delivery_audit'].pop()),
            ('revoked-after-cut-owner.json','POST_CUT_POLICY_REVOCATION',lambda x:x['ouf_authorization.active_policy_bundle'][0].update(version=1))]
     with tempfile.TemporaryDirectory() as directory:
