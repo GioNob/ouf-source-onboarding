@@ -343,4 +343,31 @@ class ManagedFileUploadNativeTest {
     gateUpdate("revoked=true");assertThatThrownBy(()->recovery().freeze(e)).hasMessageContaining("authority denied");
     assertThatThrownBy(this::upload).hasMessageContaining("phase");assertThat(store.puts).hasValue(0);
   }
+  @Test void authorityExpiryDuringAuditRollsBackWholePublication(){
+    UUID id=pendingRecovery();long e=epoch();gateUpdate("expires_at=clock_timestamp()+interval '3 seconds'");
+    var delegate=new StorageRecoveryLabGate(db);var delayed=new AtomicInteger();
+    var slow=new StorageRecoveryGate(){
+      public Evidence lock(Action a,long epoch,UUID intent){return delegate.lock(a,epoch,intent);}
+      public void record(Evidence p,Action a,UUID intent,String outcome){
+        delegate.record(p,a,intent,outcome);
+        if("ACKED".equals(outcome)){delayed.incrementAndGet();db.sql("select pg_sleep(3)").query().listOfRows();}
+      }
+    };
+    assertThatThrownBy(()->new ManagedFileStorageRecovery(db,tx,owner(),HASHES,slow).reconcile(id,e,store)).hasMessageContaining("expired before transition completion");
+    assertThat(delayed).hasValue(1);assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
+    assertThat(db.sql("select outcome from ouf_onboarding.storage_recovery_lab_audit order by id").query(String.class).list()).containsExactly("DRAINED","READ_RESERVED");
+  }
+  @Test void contendedAuthorityLockFailsWithinBoundAndLeavesControlActive()throws Exception{
+    var entered=new CountDownLatch(1);var release=new CountDownLatch(1);var pool=Executors.newSingleThreadExecutor();
+    try{
+      var held=pool.submit(()->tx.executeWithoutResult(status->{
+        db.sql("select singleton from ouf_onboarding.storage_recovery_lab_gate for update").query(Boolean.class).single();entered.countDown();
+        try{if(!release.await(10,TimeUnit.SECONDS))throw new AssertionError("fixture timeout");}catch(InterruptedException ex){throw new RuntimeException(ex);}
+      }));
+      assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
+      assertThatThrownBy(()->recovery().beginDrain(epoch())).hasMessageContaining("lock timeout");
+      release.countDown();held.get(15,TimeUnit.SECONDS);
+      assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("ACTIVE");
+    }finally{release.countDown();pool.shutdownNow();}
+  }
 }

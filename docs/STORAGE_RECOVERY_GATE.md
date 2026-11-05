@@ -42,6 +42,12 @@ and budget consumption durable. Denied-command audit and production incident han
 remain platform integration requirements. There is no reopen method; fresh authority
 alone does not change FROZEN to ACTIVE or bump the owner epoch.
 
+Owner transactions are bounded to 12 seconds, with a 2-second lock wait and 5-second SQL
+statement timeout. The authority deadline is checked again after writes/audit, before
+transaction completion, so expiry while waiting for locks or persisting audit rolls back
+the transition. No transaction is held across GET. The two additional native cases exercise
+authority lock contention and expiry during a deliberately delayed audit insert.
+
 ## Synthetic qualification
 
 `StorageRecoveryLabGate` exists only under `src/test`: synthetic PostgreSQL tables,

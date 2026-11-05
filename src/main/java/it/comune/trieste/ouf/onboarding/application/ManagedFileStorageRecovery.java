@@ -27,7 +27,8 @@ final class ManagedFileStorageRecovery {
   }
 
   ManagedFileStorageRecovery(JdbcClient db, TransactionTemplate tx, ManagedFileService files, CanonicalHash hashes, StorageRecoveryGate gate) {
-    this.db=db; this.tx=tx; this.files=files; this.hashes=hashes; this.gate=gate;
+    this.db=db; this.tx=new TransactionTemplate(tx.getTransactionManager()); this.tx.setTimeout(12);
+    this.files=files; this.hashes=hashes; this.gate=gate;
   }
 
   void beginDrain(long expectedEpoch) {
@@ -36,10 +37,10 @@ final class ManagedFileStorageRecovery {
       var control=control(true);
       requireEpoch(control,expectedEpoch);
       var evidence=authorize(DRAIN,expectedEpoch,null);
-      if("DRAINING".equals(control.get("phase"))){gate.record(evidence,DRAIN,null,"REPLAY");return;}
+      if("DRAINING".equals(control.get("phase"))){audit(evidence,DRAIN,null,"REPLAY");return;}
       requirePhase(control,"ACTIVE");
       db.sql("update ouf_onboarding.managed_file_storage_control set phase='DRAINING' where singleton=true").update();
-      gate.record(evidence,DRAIN,null,"DRAINED");
+      audit(evidence,DRAIN,null,"DRAINED");
     });
   }
 
@@ -51,11 +52,11 @@ final class ManagedFileStorageRecovery {
       var evidence=authorize(RECONCILE,expectedEpoch,intentId);
       var current=intent(intentId);
       if(((Number)current.get("epoch")).longValue()!=expectedEpoch)throw blocked("Intent generation differs");
-      if("ACKED".equals(current.get("state"))){gate.record(evidence,RECONCILE,intentId,"REPLAY");return new Reservation(current,evidence);}
+      if("ACKED".equals(current.get("state"))){audit(evidence,RECONCILE,intentId,"REPLAY");return new Reservation(current,evidence);}
       int claimed=db.sql("update ouf_onboarding.managed_file_upload_intent set reconciliation_reads=reconciliation_reads+1 where intent_id=:i and reconciliation_reads<128 and clock_timestamp()<reconcile_until")
         .param("i",intentId).update();
       if(claimed!=1)throw blocked("Upload reconciliation budget exhausted; intervention required");
-      gate.record(evidence,RECONCILE,intentId,"READ_RESERVED");
+      audit(evidence,RECONCILE,intentId,"READ_RESERVED");
       return new Reservation(current,evidence);
     });
     var row=reservation.row();
@@ -68,7 +69,7 @@ final class ManagedFileStorageRecovery {
       var evidence=authorize(RECONCILE,expectedEpoch,intentId);
       if(!evidence.equals(reservation.evidence()))throw blocked("Recovery authority or quiescence binding changed during storage read");
       var current=intent(intentId);
-      if("ACKED".equals(current.get("state"))){gate.record(evidence,RECONCILE,intentId,"REPLAY");return files.asset((UUID)current.get("asset_id"));}
+      if("ACKED".equals(current.get("state"))){audit(evidence,RECONCILE,intentId,"REPLAY");return files.asset((UUID)current.get("asset_id"));}
       if(!db.sql("select clock_timestamp()<reconcile_until from ouf_onboarding.managed_file_upload_intent where intent_id=:i")
           .param("i",intentId).query(Boolean.class).single())throw blocked("Upload reconciliation budget expired during storage read");
       var asset=files.registerOwned(null,(String)current.get("staging_ref"),(String)current.get("content_hash"),"text/csv",
@@ -79,7 +80,7 @@ final class ManagedFileStorageRecovery {
         .param("z",current.get("size_bytes")).param("a",asset.get("asset_id")).update();
       db.sql("update ouf_onboarding.managed_file_upload_intent set state='ACKED',asset_id=:a,acknowledged_at=clock_timestamp() where intent_id=:i")
         .param("a",asset.get("asset_id")).param("i",intentId).update();
-      gate.record(evidence,RECONCILE,intentId,"ACKED");
+      audit(evidence,RECONCILE,intentId,"ACKED");
       return files.asset((UUID)asset.get("asset_id"));
     });
   }
@@ -89,12 +90,12 @@ final class ManagedFileStorageRecovery {
     tx.executeWithoutResult(status -> {
       var control=control(true); requireEpoch(control,expectedEpoch);
       var evidence=authorize(FREEZE,expectedEpoch,null);
-      if("FROZEN".equals(control.get("phase"))){gate.record(evidence,FREEZE,null,"REPLAY");return;}
+      if("FROZEN".equals(control.get("phase"))){audit(evidence,FREEZE,null,"REPLAY");return;}
       requirePhase(control,"DRAINING");
       if(db.sql("select count(*) from ouf_onboarding.managed_file_upload_intent where state<>'ACKED'").query(Long.class).single()!=0)
         throw blocked("Pending upload intents block the cut");
       db.sql("update ouf_onboarding.managed_file_storage_control set phase='FROZEN' where singleton=true").update();
-      gate.record(evidence,FREEZE,null,"FROZEN");
+      audit(evidence,FREEZE,null,"FROZEN");
     });
   }
 
@@ -115,6 +116,12 @@ final class ManagedFileStorageRecovery {
       throw blocked("Current storage quiescence evidence required");
     return evidence;
   }
+  private void audit(StorageRecoveryGate.Evidence evidence,StorageRecoveryGate.Action action,UUID intentId,String outcome) {
+    gate.record(evidence,action,intentId,outcome);
+    // Locks/writes/audit can take time after admission. Expiry rolls the whole transition back.
+    if(!db.sql("select clock_timestamp()<:deadline").param("deadline",OffsetDateTime.ofInstant(evidence.expiresAt(),java.time.ZoneOffset.UTC)).query(Boolean.class).single())
+      throw blocked("Storage recovery authority expired before transition completion");
+  }
   private static boolean reference(String value) { return value!=null && value.matches("[A-Za-z0-9_.:/-]{1,256}"); }
 
   private Map<String,Object> intent(UUID id) {
@@ -122,6 +129,8 @@ final class ManagedFileStorageRecovery {
       .param("i",id).query().singleRow();
   }
   private Map<String,Object> control(boolean exclusive) {
+    db.sql("set local lock_timeout='2s'").update();
+    db.sql("set local statement_timeout='5s'").update();
     return db.sql("select epoch,phase from ouf_onboarding.managed_file_storage_control where singleton=true for "+(exclusive?"update":"share")).query().singleRow();
   }
   private static void requireEpoch(Map<String,Object> control,long epoch) {
