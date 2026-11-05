@@ -23,7 +23,7 @@ public final class UploadCommonCutProcess {
   static MinioClient client; static MinioManagedFileStagingStore store;
   static void snapshot(String name)throws Exception {
     var rows=new TreeMap<String,Object>();
-    for(String table:List.of("managed_file_storage_control","managed_file_upload_intent","managed_file_upload_attempt","managed_file_asset","managed_file_owner_reconciliation")) {
+    for(String table:List.of("managed_file_storage_control","managed_file_upload_intent","managed_file_upload_attempt","managed_file_asset","managed_file_owner_reconciliation","storage_recovery_lab_gate","storage_recovery_lab_audit")) {
       String value=db.sql("select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]'::jsonb)::text from ouf_onboarding."+table+" t").query(String.class).single();
       rows.put(table,JSON.readTree(value));
     }
@@ -59,11 +59,12 @@ public final class UploadCommonCutProcess {
   public static void main(String[] args)throws Exception {
     Files.createDirectories(PROOF);
     var ds=UploadCrashProcess.datasource();db=JdbcClient.create(ds);var tx=new TransactionTemplate(new DataSourceTransactionManager(ds));
-    owner=new ManagedFileService(db,JSON,HASHES,null,tx,null,null);recovery=new ManagedFileStorageRecovery(db,tx,owner,HASHES);
+    owner=new ManagedFileService(db,JSON,HASHES,null,tx,null,null);recovery=new ManagedFileStorageRecovery(db,tx,owner,HASHES,new StorageRecoveryLabGate(db));
     client=UploadCrashProcess.client();client.setTimeout(10000,10000,10000);store=new MinioManagedFileStagingStore(client,"upload-fixture");
     switch(args[0]) {
       case "init" -> {
         Flyway.configure().dataSource(ds).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").load().migrate();
+        StorageRecoveryLabGate.init(db,1,false);
         db.sql("create table ouf_onboarding.cut_canary(value text not null)").update();db.sql("insert into ouf_onboarding.cut_canary values('base')").update();
         snapshot("base-owner");
       }
@@ -80,12 +81,14 @@ public final class UploadCommonCutProcess {
           };
           assertThatThrownBy(()->upload("late",late,spool)).hasMessageContaining("phase");
           assertThatThrownBy(()->upload("new-during-drain",store,spool)).hasMessageContaining("phase");
-          assertThatThrownBy(()->recovery.freeze(1)).hasMessageContaining("Pending");
+          assertThatThrownBy(()->recovery.freeze(1)).hasMessageContaining("quiescence");
           snapshot("draining-owner");
         } finally {Files.deleteIfExists(spool);}
       }
       case "reconcile-freeze" -> {
         verifyObjects();
+        // Only this lab adapter is updated, after the physical stop/restriction and three PUT denials.
+        db.sql("update ouf_onboarding.storage_recovery_lab_gate set quiescent=true").update();
         var ids=db.sql("select intent_id from ouf_onboarding.managed_file_upload_intent where state='DISPATCHED'").query(UUID.class).list();
         assertThat(ids).hasSize(1);recovery.reconcile(ids.getFirst(),1,store);recovery.freeze(1);snapshot("frozen-owner");
         assertThat(db.sql("select count(*) from ouf_onboarding.managed_file_asset").query(Long.class).single()).isEqualTo(2);

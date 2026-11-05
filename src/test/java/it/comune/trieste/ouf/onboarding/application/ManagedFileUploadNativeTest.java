@@ -43,13 +43,15 @@ class ManagedFileUploadNativeTest {
   @BeforeEach void before()throws Exception{
     db.sql("truncate ouf_onboarding.source,ouf_onboarding.managed_file_asset restart identity cascade").update();
     db.sql("update ouf_onboarding.managed_file_storage_control set epoch=epoch+1,phase='ACTIVE'").update();
+    StorageRecoveryLabGate.init(db,epoch(),true);
     spool=Files.createTempFile("ouf-upload-fixture-",".csv");Files.write(spool,CSV);key=UUID.randomUUID().toString();store=new CountingStore();
   }
   @AfterEach void proof(TestInfo info)throws Exception{
     // Synthetic fixture rows only; no credentials, user content or signed URLs.
     String rows=db.sql("select coalesce(json_agg(i order by created_at),'[]'::json)::text from ouf_onboarding.managed_file_upload_intent i").query(String.class).single();
+    String audit=db.sql("select coalesce(json_agg(a order by id),'[]'::json)::text from ouf_onboarding.storage_recovery_lab_audit a").query(String.class).single();
     Files.writeString(evidence.resolve(info.getTestMethod().orElseThrow().getName()+".json"),JSON.writeValueAsString(Map.of(
-      "scenario",info.getTestMethod().orElseThrow().getName(),"intents",JSON.readTree(rows),"parentPutCalls",store.puts.get(),"parentGetCalls",store.gets.get()))+"\n");
+      "scenario",info.getTestMethod().orElseThrow().getName(),"intents",JSON.readTree(rows),"syntheticGateAudit",JSON.readTree(audit),"parentPutCalls",store.puts.get(),"parentGetCalls",store.gets.get()))+"\n");
     Files.deleteIfExists(spool);
   }
   static ManagedFileService owner(){return new ManagedFileService(db,JSON,HASHES,null,tx,null,null);}
@@ -165,7 +167,7 @@ class ManagedFileUploadNativeTest {
     var unkeyed2=owner().registerDirectUpload("tenant-a","alice",null,HASHES.ofBytes(CSV),CSV.length,store,spool);
     assertThat(unkeyed1.get("asset_id")).isNotEqualTo(unkeyed2.get("asset_id"));assertThat(store.puts).hasValue(3);
   }
-  ManagedFileStorageRecovery recovery(){return new ManagedFileStorageRecovery(db,tx,owner(),HASHES);}
+  ManagedFileStorageRecovery recovery(){return new ManagedFileStorageRecovery(db,tx,owner(),HASHES,new StorageRecoveryLabGate(db));}
   long epoch(){return db.sql("select epoch from ouf_onboarding.managed_file_storage_control").query(Long.class).single();}
   @Test void recoveryDrainReconcilesThenFreezesWithoutAnotherPut(){
     store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
@@ -254,4 +256,91 @@ class ManagedFileUploadNativeTest {
   }
   @Test void recoveryDeadlineIncludesTimeSpentInGet(){deadlineDuringRead(true);}
   @Test void uploadDeadlineIncludesTimeSpentInGet(){deadlineDuringRead(false);}
+
+  void gateUpdate(String clause){db.sql("update ouf_onboarding.storage_recovery_lab_gate set "+clause).update();}
+  UUID pendingRecovery(){store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");recovery().beginDrain(epoch());return (UUID)intent().get("intent_id");}
+  ManagedFileStagingStore changedDuringGet(Runnable change){return new ManagedFileStagingStore(){
+    public void putReserved(String r,InputStream i,long z,String t){throw new AssertionError("Recovery PUT");}
+    public byte[] get(String ref){byte[] bytes=store.get(ref);change.run();return bytes;}
+  };}
+  @Test void missingAuthorityAdapterCannotDrainOrConsumeReads(){
+    var unavailable=new ManagedFileStorageRecovery(db,tx,owner(),HASHES);
+    assertThatThrownBy(()->unavailable.beginDrain(epoch())).hasMessageContaining("adapter unavailable");
+    assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("ACTIVE");
+    UUID id=pendingRecovery();assertThatThrownBy(()->unavailable.reconcile(id,epoch(),store)).hasMessageContaining("adapter unavailable");
+    assertThat(intent()).containsEntry("reconciliation_reads",0);assertThat(store.gets).hasValue(0);
+  }
+  @Test void wrongScopeActionGenerationAndInvalidAuthorityWindowsDenyBeforeRead(){
+    UUID id=pendingRecovery();long e=epoch();
+    for(String change:List.of("scope='tenant-a:profile'","actions='DRAIN'","epoch=epoch+1","revoked=true",
+        "issued_at=clock_timestamp()+interval '1 minute'","expires_at=clock_timestamp()-interval '1 second'",
+        "expires_at=issued_at+interval '25 hours'","decision_ref=''")){
+      StorageRecoveryLabGate.init(db,e,true);gateUpdate(change);
+      assertThatThrownBy(()->recovery().reconcile(id,e,store)).isInstanceOf(DomainFailure.class);
+    }
+    assertThat(intent()).containsEntry("reconciliation_reads",0);assertThat(store.gets).hasValue(0);assertThat(assets()).isZero();
+  }
+  @Test void unprovenQuiescenceAllowsDrainButBlocksReconcileAndFreeze(){
+    gateUpdate("quiescent=false");UUID id=pendingRecovery();
+    assertThatThrownBy(()->recovery().reconcile(id,epoch(),store)).hasMessageContaining("quiescence");
+    assertThatThrownBy(()->recovery().freeze(epoch())).hasMessageContaining("quiescence");
+    gateUpdate("quiescent=true,quiescence_ref=null");
+    assertThatThrownBy(()->recovery().reconcile(id,epoch(),store)).hasMessageContaining("quiescence");
+    assertThat(store.gets).hasValue(0);assertThat(intent()).containsEntry("reconciliation_reads",0);
+  }
+  @Test void revocationDuringPausedGetCommitsAndRejectsLateAck()throws Exception{
+    UUID id=pendingRecovery();long e=epoch();var entered=new CountDownLatch(1);var release=new CountDownLatch(1);var pool=Executors.newSingleThreadExecutor();
+    var paused=changedDuringGet(()->{entered.countDown();try{if(!release.await(10,TimeUnit.SECONDS))throw new AssertionError("fixture timeout");}catch(InterruptedException ex){throw new RuntimeException(ex);}});
+    try{
+      var result=pool.submit(()->recovery().reconcile(id,e,paused));assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
+      gateUpdate("revoked=true");release.countDown();
+      assertThatThrownBy(()->result.get(15,TimeUnit.SECONDS)).hasCauseInstanceOf(DomainFailure.class);
+      assertThatThrownBy(()->recovery().freeze(e)).hasMessageContaining("authority denied");
+      assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);assertThat(assets()).isZero();
+    }finally{release.countDown();pool.shutdownNow();}
+  }
+  @Test void replacementAuthorityCannotAdoptAnInFlightRead(){
+    UUID id=pendingRecovery();long e=epoch();
+    assertThatThrownBy(()->recovery().reconcile(id,e,changedDuringGet(()->gateUpdate("decision_ref='lab-only/new-decision'")))).hasMessageContaining("binding changed");
+    assertThat(assets()).isZero();assertThat(intent()).containsEntry("reconciliation_reads",1);
+    recovery().reconcile(id,e,store);assertThat(assets()).isOne();assertThat(intent()).containsEntry("reconciliation_reads",2);assertThat(store.puts).hasValue(1);
+  }
+  @Test void custodyWithdrawalDuringGetRejectsLateAck(){
+    UUID id=pendingRecovery();long e=epoch();
+    assertThatThrownBy(()->recovery().reconcile(id,e,changedDuringGet(()->gateUpdate("quiescent=false")))).hasMessageContaining("quiescence");
+    assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
+  }
+  @Test void authorityExpiryIncludesTimeSpentOutsideTransaction(){
+    UUID id=pendingRecovery();long e=epoch();gateUpdate("expires_at=clock_timestamp()+interval '3 seconds'");
+    var slow=changedDuringGet(()->{
+      long limit=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+      while(db.sql("select clock_timestamp()<expires_at from ouf_onboarding.storage_recovery_lab_gate").query(Boolean.class).single()){
+        if(System.nanoTime()>limit)throw new AssertionError("fixture timeout");
+        try{Thread.sleep(25);}catch(InterruptedException ex){throw new RuntimeException(ex);}
+      }
+    });
+    assertThatThrownBy(()->recovery().reconcile(id,e,slow)).hasMessageContaining("authority expired");
+    assertThat(assets()).isZero();assertThat(intent()).containsEntry("reconciliation_reads",1);
+    assertThatThrownBy(()->recovery().reconcile(id,e,store)).hasMessageContaining("authority expired");assertThat(store.gets).hasValue(1);
+  }
+  @Test void auditFailureRollsBackAckButPreservesConsumedRead(){
+    UUID id=pendingRecovery();long e=epoch();var delegate=new StorageRecoveryLabGate(db);
+    var failing=new StorageRecoveryGate(){
+      public Evidence lock(Action a,long epoch,UUID intent){return delegate.lock(a,epoch,intent);}
+      public void record(Evidence p,Action a,UUID intent,String outcome){delegate.record(p,a,intent,outcome);if("ACKED".equals(outcome))throw new IllegalStateException("fixture audit unavailable");}
+    };
+    var guarded=new ManagedFileStorageRecovery(db,tx,owner(),HASHES,failing);
+    assertThatThrownBy(()->guarded.reconcile(id,e,store)).hasMessageContaining("audit unavailable");
+    assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
+    assertThat(db.sql("select outcome from ouf_onboarding.storage_recovery_lab_audit order by id").query(String.class).list()).containsExactly("DRAINED","READ_RESERVED");
+    recovery().reconcile(id,e,store);recovery().freeze(e);
+    assertThat(db.sql("select outcome from ouf_onboarding.storage_recovery_lab_audit order by id").query(String.class).list()).containsExactly("DRAINED","READ_RESERVED","READ_RESERVED","ACKED","FROZEN");
+  }
+  @Test void frozenOwnerCannotReopenWithReplayedOrReplacedAuthority(){
+    long e=epoch();recovery().beginDrain(e);recovery().freeze(e);gateUpdate("decision_ref='lab-only/fresh-decision'");
+    assertThatThrownBy(()->recovery().beginDrain(e)).hasMessageContaining("phase");
+    assertThatThrownBy(()->recovery().beginDrain(e+1)).hasMessageContaining("generation");
+    gateUpdate("revoked=true");assertThatThrownBy(()->recovery().freeze(e)).hasMessageContaining("authority denied");
+    assertThatThrownBy(this::upload).hasMessageContaining("phase");assertThat(store.puts).hasValue(0);
+  }
 }

@@ -60,6 +60,15 @@ def verify(archive,root,commit):
     require(backup_count==receipt['backupFiles'],'BACKUP_COUNT')
     segment=cut['targetWalSegment'];require(segment in j('wal-inventory') and 'pg_wal/'+segment not in j('base-inventory'),'POST_BASE_REQUIRED_WAL')
     frozen=j('frozen-owner');draining=j('draining-owner');base=j('base-owner')
+    gate=frozen['storage_recovery_lab_gate'];audit=frozen['storage_recovery_lab_audit']
+    require(len(gate)==1 and gate[0]['scope']=='onboarding:managed-file-storage'
+            and gate[0]['epoch']==1 and gate[0]['quiescent'] is True and gate[0]['revoked'] is False
+            and gate[0]['decision_ref']=='lab-only/decision' and gate[0]['quiescence_ref']=='lab-only/quiescence','LAB_GATE_BINDING')
+    require(base['storage_recovery_lab_gate'][0]['quiescent'] is False
+            and draining['storage_recovery_lab_gate'][0]['quiescent'] is False,'QUIESCENCE_AFTER_NATIVE_DENIALS')
+    require([a['outcome'] for a in sorted(audit,key=lambda a:a['id'])]==['DRAINED','READ_RESERVED','ACKED','FROZEN']
+            and all(a['session_id']==gate[0]['session_id'] and a['decision_ref']==gate[0]['decision_ref']
+                    and a['quiescence_ref']==gate[0]['quiescence_ref'] for a in audit),'ATOMIC_LAB_AUDIT')
     require(not base['managed_file_upload_intent'] and not base['managed_file_asset'],'BASE_PRECEDES_INTENTS')
     require(frozen==j('restored-owner')==j('restored-after-s3'),'EXACT_OWNER_AFTER_RESTORE')
     require(frozen['managed_file_storage_control']==[{'singleton':True,'epoch':1,'phase':'FROZEN'}],'PERSISTENT_FROZEN_CONTROL')
