@@ -199,6 +199,7 @@ def main():
             freshRuntimeAttestationRequired=True,revokedAuthorityRestoreBlocked=True,
             currentAuthorityOutsideOwnerBackup=True,currentAuthoritySha256=authority_hash,
             liveWorkerDatabaseRestoreBlocked=True,
+            populatedAuthorizationHistoryRestored=True,restoredPolicyCannotPrepareOrRedeliver=True,
             scope='synthetic Onboarding owner only; no UDP/Ingestion or operational binding')
     finally:
         if watch is not None and watch.poll() is None:

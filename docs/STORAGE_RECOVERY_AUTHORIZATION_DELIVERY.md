@@ -70,12 +70,32 @@ lost responses, delivery CAS and concurrency, immutable history, explicit and po
 revocation during GET, policy activation exclusion, freshness/actor checks, descriptor drift,
 missing custody and unchanged exhausted upload budgets. No test grants are deployed.
 
-The existing physical restore regression includes the new V40 tables in snapshots and
-requires them to remain ungranted in that drill. It does **not** yet restore populated V40
-decision/projection history; that is a separate next qualification. The previous independent
-current-authority/restart drill remains valid and is not replaced by a restored local policy.
-Same-database policy evaluation does not make a restored old Authorization bundle current:
-production wiring must retain the independent restore-generation/current-authority fence.
+The physical restore regression now uses populated V40 decisions, delivered projection,
+delivery/action audit and actual policy registry rows. Two fresh JVM sessions prepare and
+deliver distinct decisions; the second supersedes the first. The named physical cut contains
+projection version 2 and the second decision DELIVERED. After the cut, explicit revocation
+clears that projection at version 3, a policy version 2 removes its grant, and the independent
+current-authority fixture advances to generation 2/revoked. Restoring PostgreSQL returns
+the old allowed policy and DELIVERED decision, while the external current fence stays revoked.
+Direct fresh preparation, redelivery, drain and freeze are rejected. Withholding the external
+fence also rejects preparation/redelivery. Owner, policy and all included audit rows remain
+exactly equal to their frozen snapshots after those attempts and storage verification.
+
+`StorageRecoveryAuthorityFence` is mandatory for preparation, delivery and owner consumption.
+The default constructor has no verifier and denies. The trusted port binds installation,
+tenant, active policy, independent generation and a finite window; a decision cannot outlive
+the fence supplied at preparation. V41 pins that generation in immutable decision history
+and command hashes. Existing V40 rows receive generation 0, which is deliberately unusable.
+A generation change rejects old decisions even with the same local policy. The owner gate
+checks the current fence again after writing its audit, before transaction completion.
+
+No production implementation of this independent port is installed. Its implementation must
+hold revocation exclusion through the consuming transaction's commit without remote I/O
+under owner locks. Native component tests use synthetic proofs; the physical test uses a
+bounded local file outside all backup/restore directories and sequential revocation. This
+qualifies physical restore behavior, not distributed concurrent revocation or logical rollback.
+The independent readback verifies populated state, exact restored audit preservation and
+post-cut policy/decision revocation, including semantic corruptions with rehashed manifests.
 
 Distributed policy delivery, remote revocation acknowledgement, authenticated Gateway/THS
 wiring, approved capability registration, denial audit, complete writer custody, logical

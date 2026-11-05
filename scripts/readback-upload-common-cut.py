@@ -39,7 +39,7 @@ def verify(archive,root,commit):
         require(sha((root/name).read_bytes())==digest,'SOURCE:'+name)
     require(j('run')['commit']==commit and j('run')['storageProofCommit']=='99594c878a3130a353531841e91c53c38741dbd0','PRODUCER_BINDINGS')
     receipt=j('receipt');require(receipt['status']=='PASS' and receipt['targetOperations']==0 and receipt['releaseAdmitted'] is False,'TERMINAL_PASS')
-    for field in ('namedPhysicalRecovery','actualOwnerTablesPreserved','pendingReconciledWithoutPut','staleApplicationWriterBlocked','staleS3PutDenied','missingWalBlocksS3','freshRuntimeAttestationRequired','revokedAuthorityRestoreBlocked','currentAuthorityOutsideOwnerBackup','liveWorkerDatabaseRestoreBlocked'):
+    for field in ('namedPhysicalRecovery','actualOwnerTablesPreserved','pendingReconciledWithoutPut','staleApplicationWriterBlocked','staleS3PutDenied','missingWalBlocksS3','freshRuntimeAttestationRequired','revokedAuthorityRestoreBlocked','currentAuthorityOutsideOwnerBackup','liveWorkerDatabaseRestoreBlocked','populatedAuthorizationHistoryRestored','restoredPolicyCannotPrepareOrRedeliver'):
         require(receipt[field] is True,field)
     cut=j('common-cut');require(cut['schema']=='ouf.onboarding-common-cut.v1' and cut['targetName']=='ouf_onboarding_upload_frozen_v39','NAMED_CUT')
     require(cut['sourceStopped'] and cut['storageStopped'] and cut['systemIdentifier']==receipt['systemIdentifier'],'SOURCE_CUT_IDENTITY')
@@ -60,21 +60,33 @@ def verify(archive,root,commit):
     require(backup_count==receipt['backupFiles'],'BACKUP_COUNT')
     segment=cut['targetWalSegment'];require(segment in j('wal-inventory') and 'pg_wal/'+segment not in j('base-inventory'),'POST_BASE_REQUIRED_WAL')
     frozen=j('frozen-owner');draining=j('draining-owner');base=j('base-owner')
-    require(frozen['storage_recovery_authority_projection']==[{'singleton':True,'version':0,'decision_id':None}]
-            and not frozen['storage_recovery_action_audit']
-            and not frozen['ouf_authorization.storage_recovery_decision']
-            and not frozen['ouf_authorization.storage_recovery_delivery_audit'],'V40_NO_IMPLICIT_AUTHORITY')
-    gate=frozen['storage_recovery_lab_gate'];audit=frozen['storage_recovery_lab_audit']
+    decisions=frozen['ouf_authorization.storage_recovery_decision'];delivery=frozen['ouf_authorization.storage_recovery_delivery_audit']
+    require(len(decisions)==2 and sorted(d['state'] for d in decisions)==['DELIVERED','REVOKED'],'V40_POPULATED_DECISIONS')
+    active=next(d for d in decisions if d['state']=='DELIVERED');old=next(d for d in decisions if d['state']=='REVOKED')
+    require(frozen['storage_recovery_authority_projection']==[{'singleton':True,'version':2,'decision_id':active['decision_id']}]
+            and all(d['authority_generation']==1 and d['bundle_id']=='lab-storage-policy' and d['bundle_version']==1
+                    and d['installation_ref']=='lab-installation' and d['tenant_id']=='platform-tenant' for d in decisions),'V41_AUTHORITY_BINDING')
+    require([a['event'] for a in sorted(delivery,key=lambda a:a['occurred_at'])]==['PREPARED','DELIVERED','PREPARED','SUPERSEDED','DELIVERED']
+            and {a['decision_id'] for a in delivery}=={d['decision_id'] for d in decisions},'V40_DELIVERY_AUDIT')
+    require(not base['ouf_authorization.storage_recovery_decision'] and not base['ouf_authorization.storage_recovery_delivery_audit']
+            and base['storage_recovery_authority_projection']==[{'singleton':True,'version':0,'decision_id':None}],'BASE_PRECEDES_AUTHORITY')
+    require(len(frozen['ouf_authorization.policy_bundle'])==1 and frozen['ouf_authorization.active_policy_bundle'][0]['version']==1
+            and len(frozen['ouf_authorization.authorization_decision_audit'])>0
+            and all(a['allowed'] and a['bundle_version']==1 and a['capability_id']=='installation.storage.recovery' for a in frozen['ouf_authorization.authorization_decision_audit']),'REAL_POLICY_AND_AUDIT')
+    gate=frozen['storage_recovery_lab_gate'];audit=frozen['storage_recovery_action_audit']
     require(len(gate)==1 and gate[0]['scope']=='onboarding:managed-file-storage'
             and gate[0]['epoch']==1 and gate[0]['quiescent'] is True and gate[0]['revoked'] is False
             and gate[0]['decision_ref']=='lab-only/decision' and gate[0]['quiescence_ref']=='lab-only/quiescence','LAB_GATE_BINDING')
     require(base['storage_recovery_lab_gate'][0]['quiescent'] is False
             and draining['storage_recovery_lab_gate'][0]['quiescent'] is False,'QUIESCENCE_AFTER_NATIVE_DENIALS')
-    require([a['outcome'] for a in sorted(audit,key=lambda a:a['id'])]==['DRAINED','READ_RESERVED','ACKED','FROZEN']
-            and all(a['session_id']==gate[0]['session_id'] and a['decision_ref']==gate[0]['decision_ref']
-                    and a['quiescence_ref']==gate[0]['quiescence_ref'] for a in audit),'ATOMIC_LAB_AUDIT')
+    ordered=sorted(audit,key=lambda a:a['occurred_at'])
+    require([a['outcome'] for a in ordered]==['DRAINED','READ_RESERVED','ACKED','FROZEN']
+            and ordered[0]['decision_id']==old['decision_id'] and ordered[0]['quiescence_ref'] is None
+            and all(a['decision_id']==active['decision_id'] and a['quiescence_ref']==gate[0]['quiescence_ref'] for a in ordered[1:])
+            and not frozen['storage_recovery_lab_audit'],'ATOMIC_POLICY_OWNER_AUDIT')
     restart=j('authority-restart');restored=j('authority-restore');live=j('authority-after-cut')
-    require(live=={'installationRef':'lab-installation','decisionRef':'lab-only/decision','epoch':1,'revision':2,'revoked':True},'CURRENT_REVOKED_AUTHORITY')
+    require(all(live[k]==v for k,v in {'installationRef':'lab-installation','decisionRef':'lab-only/decision','epoch':1,'revision':2,'revoked':True,
+            'tenantId':'platform-tenant','bundleId':'lab-storage-policy','bundleVersion':2}.items()),'CURRENT_REVOKED_AUTHORITY')
     require(receipt['currentAuthoritySha256']==sha(data['authority-after-cut.json'])
             and restored['currentAuthoritySha256']=='sha256:'+receipt['currentAuthoritySha256'],'CURRENT_AUTHORITY_BYTES')
     require(gate[0]['installation_ref']=='lab-installation'
@@ -87,12 +99,25 @@ def verify(archive,root,commit):
             and restored['restoredProjectionRevoked'] is False and restored['currentDecisionRevoked'] is True
             and restored['currentRevision']==2
             and all(restored[k] is True for k in ('replayRejected','freshAttestationRejected','missingAuthorityRejected')),'RESTORE_AUTHORITY_REJECTED')
+    proof=j('authorization-restore')
+    require(proof=={'decisionId':active['decision_id'],'restoredState':'DELIVERED','projectionVersion':2,'restoredPolicyVersion':1,
+            'currentPolicyVersion':2,'restoredAuthorityGeneration':1,'currentAuthorityGeneration':2,
+            'freshPrepareRejected':True,'oldRedeliveryRejected':True,'missingFenceRejected':True},'RESTORED_AUTHORIZATION_CANNOT_REISSUE')
     revoked=j('revoked-after-cut-owner');expected_revoked=json.loads(json.dumps(frozen))
     expected_revoked['storage_recovery_lab_gate'][0]['revoked']=True
-    require(revoked==expected_revoked,'REVOCATION_AFTER_NAMED_CUT')
-    ordered=sorted(audit,key=lambda a:a['id'])
-    require(ordered[0]['runtime_session_id']==restart['oldRuntime'] and ordered[0]['quiescence_runtime_session_id'] is None
-            and all(a['runtime_session_id']==a['quiescence_runtime_session_id']==restart['currentRuntime'] for a in ordered[1:]),'AUDIT_RUNTIME_BINDING')
+    expected_revoked['storage_recovery_authority_projection']=[{'singleton':True,'version':3,'decision_id':None}]
+    for d in expected_revoked['ouf_authorization.storage_recovery_decision']:d['state']='REVOKED'
+    changed=('ouf_authorization.storage_recovery_delivery_audit','ouf_authorization.policy_bundle','ouf_authorization.active_policy_bundle','ouf_authorization.authorization_decision_audit')
+    require({k:v for k,v in revoked.items() if k not in changed}=={k:v for k,v in expected_revoked.items() if k not in changed},'REVOCATION_AFTER_NAMED_CUT')
+    after_delivery=revoked['ouf_authorization.storage_recovery_delivery_audit']
+    require(len(after_delivery)==len(delivery)+1 and all(a in after_delivery for a in delivery)
+            and any(a['decision_id']==active['decision_id'] and a['event']=='REVOKED' and a['projection_version']==3 for a in after_delivery),'POST_CUT_REVOCATION_AUDIT')
+    require(len(revoked['ouf_authorization.policy_bundle'])==2 and frozen['ouf_authorization.policy_bundle'][0] in revoked['ouf_authorization.policy_bundle']
+            and revoked['ouf_authorization.active_policy_bundle'][0]['version']==2
+            and not next(b for b in revoked['ouf_authorization.policy_bundle'] if b['version']==2)['bundle_payload']['grants']
+            and all(a in revoked['ouf_authorization.authorization_decision_audit'] for a in frozen['ouf_authorization.authorization_decision_audit']),'POST_CUT_POLICY_REVOCATION')
+    require(ordered[0]['runtime_session_id']==restart['oldRuntime']==old['runtime_session_id']
+            and all(a['runtime_session_id']==restart['currentRuntime']==active['runtime_session_id'] for a in ordered[1:]),'AUDIT_RUNTIME_BINDING')
     worker=j('authority-live-runtime')
     require(worker['originalDatabaseStartedAt']!=worker['restoredDatabaseStartedAt'] and worker['liveWorkerRejected'] is True,'LIVE_WORKER_DATABASE_BINDING')
     require(not base['managed_file_upload_intent'] and not base['managed_file_asset'],'BASE_PRECEDES_INTENTS')
@@ -146,7 +171,12 @@ def negative_probes(archive,root,commit):
            ('authority-restart.json','RESTART_BLOCKED_BEFORE_BUDGET',lambda x:x.update(oldAuthorityRejected=False)),
            ('authority-restore.json','RESTORE_AUTHORITY_REJECTED',lambda x:x.update(freshAttestationRejected=False)),
            ('revoked-after-cut-owner.json','REVOCATION_AFTER_NAMED_CUT',lambda x:x['storage_recovery_lab_gate'][0].update(revoked=False)),
-           ('authority-live-runtime.json','LIVE_WORKER_DATABASE_BINDING',lambda x:x.update(liveWorkerRejected=False))]
+           ('authority-live-runtime.json','LIVE_WORKER_DATABASE_BINDING',lambda x:x.update(liveWorkerRejected=False)),
+           ('authorization-restore.json','RESTORED_AUTHORIZATION_CANNOT_REISSUE',lambda x:x.update(freshPrepareRejected=False)),
+           ('authorization-restore.json','RESTORED_AUTHORIZATION_CANNOT_REISSUE',lambda x:x.update(oldRedeliveryRejected=False)),
+           ('authorization-restore.json','RESTORED_AUTHORIZATION_CANNOT_REISSUE',lambda x:x.update(restoredAuthorityGeneration=2)),
+           ('revoked-after-cut-owner.json','POST_CUT_REVOCATION_AUDIT',lambda x:x['ouf_authorization.storage_recovery_delivery_audit'].pop()),
+           ('revoked-after-cut-owner.json','POST_CUT_POLICY_REVOCATION',lambda x:x['ouf_authorization.active_policy_bundle'][0].update(version=1))]
     with tempfile.TemporaryDirectory() as directory:
         for name,expected,change in cases:
             data=dict(original);value=json.loads(data[name]);change(value);data[name]=json.dumps(value).encode()

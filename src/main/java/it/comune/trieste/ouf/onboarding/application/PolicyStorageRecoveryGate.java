@@ -20,5 +20,8 @@ final class PolicyStorageRecoveryGate implements StorageRecoveryGate {
   public void record(Evidence e,Action action,UUID intentId,String outcome){
     db.sql("insert into ouf_onboarding.storage_recovery_action_audit(event_id,decision_id,action,intent_id,outcome,quiescence_ref,runtime_session_id) values(:e,:d,:a,:i,:o,:q,:r)")
       .param("e",UUID.randomUUID()).param("d",e.sessionId()).param("a",action.name()).param("i",intentId).param("o",outcome).param("q",e.quiescenceRef()).param("r",e.runtimeSessionId()).update();
+    // Recheck the independent current fence after owner/audit writes, before commit.
+    var decision=authority.lockCurrent(runtime.sessionId(),e.epoch(),action.name());
+    if(!decision.id().equals(e.sessionId()))throw new IllegalStateException("Recovery decision changed before commit");
   }
 }

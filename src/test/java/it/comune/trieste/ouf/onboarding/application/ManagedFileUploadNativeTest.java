@@ -426,19 +426,26 @@ class ManagedFileUploadNativeTest {
   }
   AuthorizationPolicyRegistry policyRegistry(){return new AuthorizationPolicyRegistry(db,JSON,HASHES);}
   PrincipalContext operator(){return new PrincipalContext("operator","platform-tenant",PrincipalContext.ActorType.HUMAN,null,"lab/authn","lab/issuer","lab/audience",Set.of(StorageRecoveryAuthorization.CAPABILITY.requiredScope()),new PrincipalContext.IdentityClaims(Set.of(),"lab-mfa",Set.of("mfa"),Instant.now().minusSeconds(1)));}
-  StorageRecoveryAuthorization authority(){return new StorageRecoveryAuthorization(db,tx,JSON,policyRegistry(),HASHES,"lab-installation","platform-tenant");}
+  // Component fixture only. The physical restore test uses an independent external file.
+  StorageRecoveryAuthorityFence.Proof fenceProof(long generation,boolean revoked){
+    var active=policyRegistry().active().orElseThrow();
+    return new StorageRecoveryAuthorityFence.Proof("lab-installation","platform-tenant",active.bundleId(),active.version(),generation,Instant.now().minusSeconds(1),Instant.now().plusSeconds(600),revoked);
+  }
+  StorageRecoveryAuthorization authority(StorageRecoveryAuthorityFence fence){return new StorageRecoveryAuthorization(db,tx,JSON,policyRegistry(),HASHES,"lab-installation","platform-tenant",fence);}
+  StorageRecoveryAuthorization authority(){return authority(()->fenceProof(1,false));}
   void recoveryPolicy(PrincipalContext p,String bundle,long version,boolean allowed){
     var constraints=new GrantConstraints("ALLOW",null,"installation-storage-recovery","lab-installation",Map.of("storageOwner","onboarding"),Set.of(),Set.of("SECURITY_SENSITIVE"),null,Set.of(),null);
     var grants=allowed?List.of(new Grant("lab-recovery",StorageRecoveryAuthorization.CAPABILITY.capabilityId(),"platform-tenant",p.subjectId(),null,null,Instant.now().minusSeconds(60),Instant.now().plusSeconds(600),constraints)):List.<Grant>of();
     tx.executeWithoutResult(s->policyRegistry().publishAndActivate(new PolicyBundle(bundle,version,Instant.now(),List.of(StorageRecoveryAuthorization.CAPABILITY),grants),"lab-operator"));
   }
   StorageRecoveryAuthorization.Request request(String command){return new StorageRecoveryAuthorization.Request(command,runtime.sessionId(),epoch(),StorageRecoveryAuthorization.ACTIONS,Instant.now().plusSeconds(300));}
-  ManagedFileStorageRecovery policyRecovery(){
+  ManagedFileStorageRecovery policyRecovery(){return policyRecovery(authority());}
+  ManagedFileStorageRecovery policyRecovery(StorageRecoveryAuthorization authorization){
     StorageRecoveryCustody custody=(installation,session,epoch)->{
       var evidence=new StorageRecoveryLabGate(db).lock(StorageRecoveryGate.Action.RECONCILE,epoch,null);
       return new StorageRecoveryCustody.Proof(evidence.quiescenceRef(),evidence.quiescenceRuntimeSessionId(),evidence.quiescent());
     };
-    return new ManagedFileStorageRecovery(db,tx,owner(),HASHES,new PolicyStorageRecoveryGate(db,authority(),runtime,custody),runtime);
+    return new ManagedFileStorageRecovery(db,tx,owner(),HASHES,new PolicyStorageRecoveryGate(db,authorization,runtime,custody),runtime);
   }
   StorageRecoveryAuthorization.Decision delivered(PrincipalContext p,String bundle){recoveryPolicy(p,bundle,1,true);var d=authority().prepare(p,request(key));assertThat(authority().deliver(d.id(),0)).isOne();return d;}
   @Test void storageCapabilityIsDistinctAndDenyByDefault(){
@@ -537,5 +544,54 @@ class ManagedFileUploadNativeTest {
     var next=authority().prepare(p,request(key+"-replacement"));assertThat(authority().deliver(next.id(),1)).isEqualTo(2);
     assertThatThrownBy(()->policyRecovery().reconcile((UUID)intent().get("intent_id"),e,store)).hasMessageContaining("budget exhausted");
     assertThat(intent()).containsEntry("reconciliation_reads",128);assertThat(store.gets).hasValue(0);assertThat(assets()).isZero();
+  }
+  @Test void currentFenceIsMandatoryEvenWithAllowedLocalPolicy(){
+    var p=operator();recoveryPolicy(p,key,1,true);
+    var unbound=new StorageRecoveryAuthorization(db,tx,JSON,policyRegistry(),HASHES,"lab-installation","platform-tenant");
+    assertThatThrownBy(()->unbound.prepare(p,request(key))).hasMessageContaining("fence unavailable");
+    assertThat(db.sql("select count(*) from ouf_authorization.storage_recovery_decision").query(Long.class).single()).isZero();
+  }
+  @Test void revokedOrAbsentFenceBlocksFreshPrepareAndRedelivery(){
+    var p=operator();var d=delivered(p,key);
+    for(StorageRecoveryAuthorityFence fence:List.<StorageRecoveryAuthorityFence>of(()->null,()->fenceProof(2,true))){
+      assertThatThrownBy(()->authority(fence).prepare(p,request(key+"-fresh"))).hasMessageContaining("Current platform authority");
+      assertThatThrownBy(()->authority(fence).deliver(d.id(),1)).hasMessageContaining("Current platform authority");
+    }
+    assertThat(db.sql("select version from ouf_onboarding.storage_recovery_authority_projection").query(Long.class).single()).isOne();
+  }
+  @Test void fenceBindingsAndWindowCannotBeBorrowed(){
+    var p=operator();recoveryPolicy(p,key,1,true);var good=fenceProof(1,false);
+    var wrong=List.of(
+      new StorageRecoveryAuthorityFence.Proof("other",good.tenant(),key,1,1,good.issuedAt(),good.expiresAt(),false),
+      new StorageRecoveryAuthorityFence.Proof(good.installation(),"other",key,1,1,good.issuedAt(),good.expiresAt(),false),
+      new StorageRecoveryAuthorityFence.Proof(good.installation(),good.tenant(),key,2,1,good.issuedAt(),good.expiresAt(),false),
+      new StorageRecoveryAuthorityFence.Proof(good.installation(),good.tenant(),key,1,0,good.issuedAt(),good.expiresAt(),false),
+      new StorageRecoveryAuthorityFence.Proof(good.installation(),good.tenant(),key,1,1,Instant.now().minusSeconds(20),Instant.now().minusSeconds(1),false));
+    for(var proof:wrong)assertThatThrownBy(()->authority(()->proof).prepare(p,request(key))).hasMessageContaining("Current platform authority");
+    var shortProof=new StorageRecoveryAuthorityFence.Proof(good.installation(),good.tenant(),key,1,1,good.issuedAt(),Instant.now().plusSeconds(60),false);
+    assertThatThrownBy(()->authority(()->shortProof).prepare(p,request(key))).hasMessageContaining("deadline");
+  }
+  @Test void independentGenerationCannotReuseOldDecisionWithSamePolicy(){
+    var p=operator();var d=delivered(p,key);var renewed=authority(()->fenceProof(2,false));
+    assertThatThrownBy(()->renewed.deliver(d.id(),1)).hasMessageContaining("authority generation differs");
+    assertThatThrownBy(()->policyRecovery(renewed).beginDrain(epoch())).hasMessageContaining("authority generation differs");
+    var next=renewed.prepare(p,request(key+"-fresh"));assertThat(next.authorityGeneration()).isEqualTo(2);
+    assertThat(renewed.deliver(next.id(),1)).isEqualTo(2);
+    assertThatThrownBy(()->db.sql("update ouf_authorization.storage_recovery_decision set authority_generation=3").update()).isInstanceOf(org.springframework.dao.DataAccessException.class);
+  }
+  @Test void independentRevocationDuringGetBlocksLateOwnerPublication(){
+    var p=operator();delivered(p,key);var revoked=new java.util.concurrent.atomic.AtomicBoolean();
+    var guarded=policyRecovery(authority(()->fenceProof(1,revoked.get())));
+    store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
+    long e=epoch();guarded.beginDrain(e);UUID id=(UUID)intent().get("intent_id");
+    assertThatThrownBy(()->guarded.reconcile(id,e,changedDuringGet(()->revoked.set(true)))).hasMessageContaining("Current platform authority revoked");
+    assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
+  }
+  @Test void independentFenceIsRecheckedAfterOwnerAuditBeforeCommit(){
+    var p=operator();delivered(p,key);var calls=new AtomicInteger();
+    var guarded=policyRecovery(authority(()->fenceProof(1,calls.incrementAndGet()>1)));
+    assertThatThrownBy(()->guarded.beginDrain(epoch())).hasMessageContaining("Current platform authority revoked");
+    assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("ACTIVE");
+    assertThat(db.sql("select count(*) from ouf_onboarding.storage_recovery_action_audit").query(Long.class).single()).isZero();
   }
 }
