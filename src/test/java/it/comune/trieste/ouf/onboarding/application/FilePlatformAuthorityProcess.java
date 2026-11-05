@@ -12,6 +12,16 @@ public final class FilePlatformAuthorityProcess {
     var json=new ObjectMapper().findAndRegisterModules();var root=Path.of(args[0]);var store=new FilePlatformRecoveryAuthority(root);
     try{
       switch(args[1]){
+        case "pg-reconcile" -> {
+          var request=json.readValue(Path.of(args[2]).toFile(),PlatformAuthorityReconciliation.Request.class);
+          var transaction=store.pendingTransaction(request);
+          var resolver=new PostgresRecoveryOutcomeResolver(UploadCrashProcess.datasource(),transaction.database());
+          var approved=new PostgresRecoveryOutcomeResolver.Approval(FilePlatformRecoveryAuthority.reconciliationFingerprint(request),java.time.Instant.now(),java.time.Instant.now().plusSeconds(30));
+          var authorization=new PostgresRecoveryOutcomeResolver.ApprovalLease(){public PostgresRecoveryOutcomeResolver.Approval current(){return approved;}public void close(){}};
+          try(var prepared=resolver.prepare(store,request,authorization)){
+            var receipt=store.reconcile(request,prepared);System.out.println("POSTGRES_AUTHORITY_RECONCILED "+json.writeValueAsString(receipt));
+          }
+        }
         case "inspect" -> System.out.println("FILE_AUTHORITY_OBSERVED "+json.writeValueAsString(store.inspect(new PlatformStorageRecoveryAuthorityFence.Binding("lab-installation","platform-tenant",1))));
         case "reconcile","reconcile-halt","reconcile-halt-before-clear" -> {
           var request=json.readValue(Path.of(args[2]).toFile(),PlatformAuthorityReconciliation.Request.class);

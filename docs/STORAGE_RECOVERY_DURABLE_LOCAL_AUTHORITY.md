@@ -1,5 +1,9 @@
 # Durable current authority on one protected POSIX host
 
+The [PostgreSQL outcome binding](STORAGE_RECOVERY_POSTGRES_OUTCOME.md) adds an explicit bound
+store mode and a real xid8 resolver. The legacy/unbound cases below remain component coverage.
+Authenticated platform approval and operational wiring are still absent.
+
 `FilePlatformRecoveryAuthority` implements the existing platform lease port using a
 protected local directory outside the owner/Authorization backup and restore set. It is
 explicitly constructed, not a Spring bean, HTTP/MCP endpoint, policy issuer or installed
@@ -101,7 +105,8 @@ exclude every old owner transaction, including a possibly sent COMMIT, until clo
 or unknown outcomes deny. The gate uses bounded nonwaiting acquisition: no network retries,
 sleep or remote operator interaction under the store guard. A production implementation must
 also cover restored databases, prepared transactions and custody loss; none is inferred from
-a PID, time, an unlocked file or an old receipt. This operational gate is still unimplemented.
+a PID, time, an unlocked file or an old receipt. The bound-mode PostgreSQL resolver implements
+the transaction-outcome portion; authenticated approval and the operational gate wiring remain open.
 
 The provider checks the full request fingerprint, safe actor/reason/decision references, exact
 marker UUID/digest/generation, installation/tenant, and fresh evidence with at most five minutes

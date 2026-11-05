@@ -17,11 +17,14 @@ on:
       - src/main/java/it/comune/trieste/ouf/onboarding/installation/PlatformStorageRecoveryAuthorityFence.java
       - src/main/java/it/comune/trieste/ouf/onboarding/installation/FilePlatformRecoveryAuthority.java
       - src/main/java/it/comune/trieste/ouf/onboarding/installation/PlatformAuthorityReconciliation.java
+      - src/main/java/it/comune/trieste/ouf/onboarding/installation/PostgresRecoveryTransactions.java
+      - src/main/java/it/comune/trieste/ouf/onboarding/installation/PostgresRecoveryOutcomeResolver.java
       - src/main/resources/db/migration/*.sql
       - src/test/java/it/comune/trieste/ouf/onboarding/application/StorageRecoveryLabGate.java
       - src/test/java/it/comune/trieste/ouf/onboarding/application/ManagedFileUploadNativeTest.java
       - src/test/java/it/comune/trieste/ouf/onboarding/application/FilePlatformAuthorityProcess.java
       - src/test/java/it/comune/trieste/ouf/onboarding/application/FileAuthorityReconciliationLab.java
+      - src/test/java/it/comune/trieste/ouf/onboarding/application/PostgresCommitFaultProxy.java
       - src/main/java/it/comune/trieste/ouf/onboarding/application/ManagedFileUploadCoordinator.java
       - src/test/java/it/comune/trieste/ouf/onboarding/application/UploadCommonCutProcess.java
   workflow_dispatch:

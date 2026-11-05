@@ -15,6 +15,8 @@ import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 import it.comune.trieste.ouf.onboarding.authorization.*;
 import it.comune.trieste.ouf.onboarding.installation.PlatformStorageRecoveryAuthorityFence;
 import it.comune.trieste.ouf.onboarding.installation.FilePlatformRecoveryAuthority;
+import it.comune.trieste.ouf.onboarding.installation.PostgresRecoveryTransactions;
+import it.comune.trieste.ouf.onboarding.installation.PostgresRecoveryOutcomeResolver;
 import static it.comune.trieste.ouf.onboarding.installation.PlatformAuthorityReconciliation.*;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
@@ -947,5 +949,148 @@ class ManagedFileUploadNativeTest {
     assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.RECONCILE_REQUIRED);assertThat(source.inspect(fileBinding(1)).generation()).isEqualTo(2);
     source.reconcile(r,realGate);assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.REVOKED);
     fileEvidence("resolution-final-check",Map.of("expiredFinalEvidenceDenied",true,"revokedStatePersisted",true,"latchRetained",true,"freshReconciliationCompleted",true));
+  }
+  javax.sql.DataSource nativeDatasource(){return ((DataSourceTransactionManager)tx.getTransactionManager()).getDataSource();}
+  FilePlatformRecoveryAuthority boundAuthority(Path dir,javax.sql.DataSource ds,PostgresRecoveryTransactions.Database admitted){
+    FilePlatformRecoveryAuthority.provisionBound(dir,fenceProof(1,false),admitted);
+    return new FilePlatformRecoveryAuthority(dir,new PostgresRecoveryTransactions(ds,admitted));
+  }
+  PostgresRecoveryOutcomeResolver.ApprovalLease pgApproval(Request r){
+    var a=new PostgresRecoveryOutcomeResolver.Approval(FilePlatformRecoveryAuthority.reconciliationFingerprint(r),Instant.now(),Instant.now().plusSeconds(30));
+    return new PostgresRecoveryOutcomeResolver.ApprovalLease(){public PostgresRecoveryOutcomeResolver.Approval current(){return a;}public void close(){}};
+  }
+  void pgReceipt(String scenario,Receipt receipt)throws Exception{Files.writeString(evidence.resolve("postgres-resolution-"+scenario+".json"),JSON.writeValueAsString(receipt)+"\n");}
+  String orphanPgTransaction(FilePlatformRecoveryAuthority source,boolean rollback){
+    return tx.execute(s->{
+      var lease=source.tryAcquire(fileBinding(1));assertThat(lease).isNotNull();
+      try{
+        String xid=db.sql("select pg_current_xact_id()::text").query(String.class).single();
+        db.sql("update ouf_onboarding.managed_file_storage_control set phase='DRAINING'").update();
+        if(rollback)s.setRollbackOnly();return xid;
+      }finally{lease.abandon();}
+    });
+  }
+  record PgOwner(StorageRecoveryAuthorization auth,ManagedFileStorageRecovery owner) {}
+  PgOwner pgOwner(javax.sql.DataSource ds,FilePlatformRecoveryAuthority source,long generation){
+    var jdbc=JdbcClient.create(ds);var transactions=new TransactionTemplate(new DataSourceTransactionManager(ds));
+    var registry=new AuthorizationPolicyRegistry(jdbc,JSON,HASHES);
+    var auth=new StorageRecoveryAuthorization(jdbc,transactions,JSON,registry,HASHES,"lab-installation","platform-tenant",new PlatformStorageRecoveryAuthorityFence(fileBinding(generation),source));
+    var files=new ManagedFileService(jdbc,JSON,HASHES,null,transactions,null,null);
+    return new PgOwner(auth,new ManagedFileStorageRecovery(jdbc,transactions,files,HASHES,new PolicyStorageRecoveryGate(jdbc,auth,runtime,null),runtime));
+  }
+  @Test void postgresMarkerCapturesExactOwnerXidAndCannotDowngradeToLegacy()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var dir=fileAuthorityDirectory();var source=boundAuthority(dir,ds,admitted);
+    assertThatThrownBy(()->source.tryAcquire(fileBinding(1))).hasMessageContaining("Exact owner datasource transaction");
+    assertThatThrownBy(()->new FilePlatformRecoveryAuthority(dir).tryAcquire(fileBinding(1))).hasMessageContaining("transaction capture required");
+    var wrong=new FilePlatformRecoveryAuthority(dir,new PostgresRecoveryTransactions(UploadCrashProcess.datasource(),admitted));
+    assertThatThrownBy(()->tx.executeWithoutResult(s->wrong.tryAcquire(fileBinding(1)))).hasMessageContaining("Exact owner datasource transaction");
+    String xid=orphanPgTransaction(source,true);var r=resolution(source);var recorded=new FilePlatformRecoveryAuthority(dir).pendingTransaction(r);
+    assertThat(recorded.xid8()).isEqualTo(xid);assertThat(recorded.database()).isEqualTo(admitted);
+    assertThatThrownBy(()->source.reconcile(r,FileAuthorityReconciliationLab.gate(Outcome.ROLLED_BACK,"ACTIVE"))).hasMessageContaining("Verified PostgreSQL outcome resolver required");
+    byte[] database=Files.readAllBytes(dir.resolve("owner.database"));Files.delete(dir.resolve("owner.database"));
+    assertThat(new FilePlatformRecoveryAuthority(dir).inspect(fileBinding(1)).state()).isEqualTo(State.UNAVAILABLE);
+    Files.write(dir.resolve("owner.database"),database);Files.setPosixFilePermissions(dir.resolve("owner.database"),java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+    assertThat(new FilePlatformRecoveryAuthority(dir).pendingTransaction(r)).isEqualTo(recorded);
+    fileEvidence("pg-transaction-binding",Map.of("exactOwnerXid",true,"reopenedBindingEqual",true,"missingOrOtherDatasourceDenied",true,"legacyGateDenied",true,"missingAdmissionCannotDowngrade",true));
+  }
+  @Test void postgresCommitReplyLossIsResolvedFromPersistedXidInFreshJvm()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var admitted=PostgresRecoveryTransactions.observe(nativeDatasource());var dir=fileAuthorityDirectory();
+    try(var proxy=new PostgresCommitFaultProxy()){
+      var ds=proxy.datasource();var source=boundAuthority(dir,ds,admitted);var owner=pgOwner(ds,source,1);var d=owner.auth().prepare(p,request(key));owner.auth().deliver(d.id(),0);
+      proxy.arm(PostgresCommitFaultProxy.Fault.LOSE_REPLY);
+      assertThatThrownBy(()->owner.owner().beginDrain(epoch())).isInstanceOf(org.springframework.transaction.TransactionSystemException.class);
+      assertThat(proxy.intercepted.await(5,TimeUnit.SECONDS)).isTrue();assertThat(proxy.serverCommitObserved).isTrue();assertThat(proxy.commitForwarded).isTrue();
+      var r=resolution(source);var transaction=source.pendingTransaction(r);
+      assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("DRAINING");
+      assertThat(fileChild(dir,"pg-reconcile",resolutionFile(dir,r),0)).isZero();var receipt=new FilePlatformRecoveryAuthority(dir).reconcile(r,null);pgReceipt("lost-commit-reply",receipt);
+      assertThat(receipt.evidence().outcome()).isEqualTo(Outcome.COMMITTED);assertThat(receipt.evidence().ownerEvidenceRef()).isEqualTo("postgres/xid8/"+transaction.xid8());
+      assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.REVOKED);assertThatThrownBy(()->owner.owner().freeze(epoch())).hasMessageContaining("admission generation revoked or differs");
+      fileEvidence("pg-commit-reply-loss",Map.of("realSocketFailure",true,"serverCommitObserved",true,"springCommitFailed",true,"freshJvmResolver",true,"xidOutcome","COMMITTED","oldWorkerDenied",true,"unknownNotificationInjected",false));
+    }
+  }
+  @Test void postgresUnsentCommitIsResolvedAsRollbackWithoutCallerOutcome()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var dir=fileAuthorityDirectory();
+    try(var proxy=new PostgresCommitFaultProxy()){
+      var ownerDs=proxy.datasource();var source=boundAuthority(dir,ownerDs,admitted);var owner=pgOwner(ownerDs,source,1);var d=owner.auth().prepare(p,request(key));owner.auth().deliver(d.id(),0);
+      proxy.arm(PostgresCommitFaultProxy.Fault.DROP_COMMIT);assertThatThrownBy(()->owner.owner().beginDrain(epoch())).isInstanceOf(org.springframework.transaction.TransactionSystemException.class);
+      assertThat(proxy.intercepted.await(5,TimeUnit.SECONDS)).isTrue();assertThat(proxy.commitForwarded).isFalse();
+      var r=resolution(source);var transaction=source.pendingTransaction(r);
+      long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);String status;
+      do{status=db.sql("select pg_xact_status(cast(:x as xid8))").param("x",transaction.xid8()).query(String.class).single();if("in progress".equals(status))Thread.sleep(20);}while("in progress".equals(status)&&System.nanoTime()<until);
+      assertThat(status).isEqualTo("aborted");var resolver=new PostgresRecoveryOutcomeResolver(ds,admitted);
+      try(var proof=resolver.prepare(source,r,pgApproval(r))){var receipt=source.reconcile(r,proof);pgReceipt("unsent-commit",receipt);assertThat(receipt.evidence().outcome()).isEqualTo(Outcome.ROLLED_BACK);}
+      assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("ACTIVE");
+      assertThat(db.sql("select count(*) from ouf_onboarding.storage_recovery_action_audit").query(Long.class).single()).isZero();
+      source.publish(2,fenceProof(3,false));var fresh=pgOwner(ownerDs,source,3);var next=fresh.auth().prepare(p,request(key+"-new"));fresh.auth().deliver(next.id(),1);fresh.owner().beginDrain(epoch());
+      assertThat(db.sql("select outcome from ouf_onboarding.storage_recovery_action_audit").query(String.class).list()).containsExactly("DRAINED");
+      fileEvidence("pg-unsent-commit",Map.of("realSocketFailure",true,"commitNotForwarded",true,"xidOutcome","ROLLED_BACK","noOwnerEffectBeforeResume",true,"separateFreshAdmissionResumed",true,"unknownNotificationInjected",false));
+    }
+  }
+  @Test void postgresDelayedCommitRemainsUnresolvedUntilServerActuallyFinishes()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var dir=fileAuthorityDirectory();
+    try(var proxy=new PostgresCommitFaultProxy()){
+      var ownerDs=proxy.datasource();var source=boundAuthority(dir,ownerDs,admitted);var owner=pgOwner(ownerDs,source,1);var d=owner.auth().prepare(p,request(key));owner.auth().deliver(d.id(),0);
+      proxy.arm(PostgresCommitFaultProxy.Fault.DELAY_COMMIT);assertThatThrownBy(()->owner.owner().beginDrain(epoch())).isInstanceOf(org.springframework.transaction.TransactionSystemException.class);
+      assertThat(proxy.intercepted.await(5,TimeUnit.SECONDS)).isTrue();var r=resolution(source);var resolver=new PostgresRecoveryOutcomeResolver(ds,admitted);
+      assertThatThrownBy(()->resolver.prepare(source,r,pgApproval(r))).hasMessageContaining("not terminal");assertThat(source.inspect(fileBinding(1)).generation()).isOne();
+      proxy.releaseDelayedCommit();assertThat(proxy.serverCommitObserved).isTrue();
+      try(var proof=resolver.prepare(source,r,pgApproval(r))){var receipt=source.reconcile(r,proof);pgReceipt("delayed-commit",receipt);assertThat(receipt.evidence().outcome()).isEqualTo(Outcome.COMMITTED);}
+      assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.REVOKED);
+      fileEvidence("pg-delayed-commit",Map.of("clientLostBeforeServerFinished",true,"inProgressDenied",true,"generationUnchangedUntilTerminal",true,"lateCommitObserved",true,"xidOutcome","COMMITTED"));
+    }
+  }
+  @Test void postgresPreparedTransactionsStayBlockedUntilExplicitTerminalOutcome()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);
+    assertThat(Integer.parseInt(db.sql("show max_prepared_transactions").query(String.class).single())).isGreaterThan(0);
+    for(boolean commit:List.of(true,false)){
+      db.sql("update ouf_onboarding.managed_file_storage_control set epoch=epoch+1,phase='ACTIVE'").update();var dir=fileAuthorityDirectory();var source=boundAuthority(dir,ds,admitted);String gid="ouf-fixture-"+UUID.randomUUID();
+      try{
+        tx.executeWithoutResult(s->{var lease=source.tryAcquire(fileBinding(1));try{db.sql("update ouf_onboarding.managed_file_storage_control set phase='DRAINING'").update();db.sql("prepare transaction '"+gid+"'").update();}finally{lease.abandon();}});
+        var r=resolution(source);var resolver=new PostgresRecoveryOutcomeResolver(ds,admitted);
+        assertThatThrownBy(()->resolver.prepare(source,r,pgApproval(r))).hasMessageContaining("not terminal");assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.RECONCILE_REQUIRED);
+        db.sql((commit?"commit":"rollback")+" prepared '"+gid+"'").update();
+        try(var proof=resolver.prepare(source,r,pgApproval(r))){var receipt=source.reconcile(r,proof);pgReceipt("prepared-"+commit,receipt);assertThat(receipt.evidence().outcome()).isEqualTo(commit?Outcome.COMMITTED:Outcome.ROLLED_BACK);}
+        assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo(commit?"DRAINING":"ACTIVE");
+      }finally{if(db.sql("select count(*) from pg_prepared_xacts where gid=:g").param("g",gid).query(Long.class).single()>0)db.sql("rollback prepared '"+gid+"'").update();}
+    }
+    fileEvidence("pg-prepared",Map.of("preparedInProgressDenied",true,"commitPreparedResolved",true,"rollbackPreparedResolved",true,"noHeuristicOutcome",true));
+  }
+  @Test void postgresResolverRejectsOtherDatabaseAndInvalidApprovalBeforeResolution()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var dir=fileAuthorityDirectory();var source=boundAuthority(dir,ds,admitted);orphanPgTransaction(source,true);var r=resolution(source);
+    var uri=java.net.URI.create(System.getenv("OUF_ONB_DB_URL").substring(5));
+    var other=new org.springframework.jdbc.datasource.DriverManagerDataSource("jdbc:postgresql://"+uri.getHost()+":"+uri.getPort()+"/postgres?connectTimeout=2&socketTimeout=2",System.getenv("OUF_ONB_DB_USER"),System.getenv("OUF_ONB_DB_PASSWORD"));
+    assertThatThrownBy(()->new PostgresRecoveryOutcomeResolver(other,admitted).prepare(source,r,pgApproval(r))).hasMessageContaining("incarnation differs");
+    var bad=new PostgresRecoveryOutcomeResolver.Approval("0".repeat(64),Instant.now().minusSeconds(20),Instant.now().minusSeconds(1));
+    var closed=new java.util.concurrent.atomic.AtomicBoolean();
+    var invalid=new PostgresRecoveryOutcomeResolver.ApprovalLease(){public PostgresRecoveryOutcomeResolver.Approval current(){return bad;}public void close(){closed.set(true);}};
+    assertThatThrownBy(()->new PostgresRecoveryOutcomeResolver(ds,admitted).prepare(source,r,invalid)).hasMessageContaining("Fresh exact platform");assertThat(closed).isTrue();
+    assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.RECONCILE_REQUIRED);
+    fileEvidence("pg-admission-denials",Map.of("otherDatabaseDenied",true,"invalidApprovalDenied",true,"failedPreflightClosesApproval",true,"latchRetained",true));
+  }
+  @Test void postgresRestartCannotRebindARecordedTransactionOrAdmitTheOldStore()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var dir=fileAuthorityDirectory();var source=boundAuthority(dir,ds,admitted);orphanPgTransaction(source,false);var r=resolution(source);
+    String container=System.getenv("OUF_NATIVE_PG_CONTAINER");assertThat(container).matches("[a-f0-9]{12,64}");
+    var restart=new ProcessBuilder("docker","restart",container).redirectErrorStream(true).redirectOutput(evidence.resolve("postgres-restart.log").toFile()).start();assertThat(restart.waitFor(20,TimeUnit.SECONDS)).isTrue();assertThat(restart.exitValue()).isZero();
+    PostgresRecoveryTransactions.Database current=null;long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
+    while(current==null&&System.nanoTime()<until)try{current=PostgresRecoveryTransactions.observe(ds);}catch(IllegalStateException ex){Thread.sleep(50);}
+    assertThat(current).isNotNull();assertThat(current.systemIdentifier()).isEqualTo(admitted.systemIdentifier());assertThat(current.postmasterStartedAt()).isNotEqualTo(admitted.postmasterStartedAt());
+    assertThatThrownBy(()->new PostgresRecoveryOutcomeResolver(ds,admitted).prepare(source,r,pgApproval(r))).hasMessageContaining("incarnation differs");
+    assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.RECONCILE_REQUIRED);
+    var oldAdmission=boundAuthority(fileAuthorityDirectory(),ds,admitted);
+    assertThatThrownBy(()->tx.executeWithoutResult(s->oldAdmission.tryAcquire(fileBinding(1)))).hasMessageContaining("admission or synchronous commit differs");
+    fileEvidence("pg-restart-fence",Map.of("actualPostgresRestart",true,"sameSystemIdentifier",true,"changedPostmaster",true,"oldTransactionResolutionDenied",true,"oldAdmissionDenied",true,"noAutomaticRebind",true));
+  }
+  @Test void postgresPreparedProofRechecksApprovalAndCannotClearANewerLease()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var dir=fileAuthorityDirectory();var source=boundAuthority(dir,ds,admitted);orphanPgTransaction(source,true);var r=resolution(source);var resolver=new PostgresRecoveryOutcomeResolver(ds,admitted);
+    var a=new PostgresRecoveryOutcomeResolver.Approval(FilePlatformRecoveryAuthority.reconciliationFingerprint(r),Instant.now(),Instant.now().plusSeconds(30));var live=new java.util.concurrent.atomic.AtomicBoolean(true);
+    var approval=new PostgresRecoveryOutcomeResolver.ApprovalLease(){public PostgresRecoveryOutcomeResolver.Approval current(){return live.get()?a:null;}public void close(){}};
+    try(var prepared=resolver.prepare(source,r,approval)){live.set(false);assertThatThrownBy(()->source.reconcile(r,prepared)).hasMessageContaining("approval unavailable or changed");}
+    assertThat(source.inspect(fileBinding(1)).generation()).isOne();
+    try(var old=resolver.prepare(source,r,pgApproval(r))){
+      try(var fresh=resolver.prepare(source,r,pgApproval(r))){source.reconcile(r,fresh);}
+      tx.executeWithoutResult(s->{var lease=source.tryAcquire(fileBinding(2));lease.abandon();});var next=source.inspect(fileBinding(2));
+      assertThatThrownBy(()->source.reconcile(r,old)).hasMessageContaining("lease differs");assertThat(source.inspect(fileBinding(2))).isEqualTo(next);
+    }
+    fileEvidence("pg-preflight-recheck",Map.of("revokedApprovalDenied",true,"noGenerationChangeOnDenial",true,"stalePreparedProofCannotClearNewLease",true));
   }
 }

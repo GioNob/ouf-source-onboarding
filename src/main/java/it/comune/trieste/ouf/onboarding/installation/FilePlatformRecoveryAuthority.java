@@ -25,33 +25,58 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
   private static final ObjectMapper JSON=new ObjectMapper().findAndRegisterModules()
       .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS).enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
   private static final String SCHEMA="ouf.platform-storage-authority.v1";
+  private static final String PG_SCHEMA="ouf.platform-storage-authority.pg.v2";
   private static final Set<PosixFilePermission> PRIVATE=PosixFilePermissions.fromString("rw-------");
   private static final Set<PosixFilePermission> DIRECTORY=PosixFilePermissions.fromString("rwx------");
-  private final Path root,guard,state,pending,activeLease;
+  private final Path root,guard,state,pending,activeLease,ownerDatabase;
   private final Object guardKey;
+  private final PostgresRecoveryTransactions transactions;
+  private final PostgresRecoveryTransactions.Database admitted;
   private record Stored(String schema,Proof proof,String sha256) {}
-  private record Marker(UUID id,long generation,String sha256) {}
+  private record Marker(UUID id,long generation,String sha256,PostgresRecoveryTransactions.Transaction transaction) {}
+  private record MarkerPayload(UUID id,long generation,PostgresRecoveryTransactions.Transaction transaction) {}
+  private record StoredMarker(String schema,MarkerPayload marker,String sha256) {}
+  private record StoredDatabase(String schema,PostgresRecoveryTransactions.Database database,String sha256) {}
   private record Recorded(Receipt receipt,String sha256) {}
 
-  public FilePlatformRecoveryAuthority(Path directory){
+  public FilePlatformRecoveryAuthority(Path directory){this(directory,null);}
+  public FilePlatformRecoveryAuthority(Path directory,PostgresRecoveryTransactions transactions){
+    this.transactions=transactions;
     try{
       root=directory.toAbsolutePath().normalize();
       if(!root.equals(root.toRealPath())||!Files.isDirectory(root,NOFOLLOW_LINKS)||!Files.getPosixFilePermissions(root,NOFOLLOW_LINKS).equals(DIRECTORY))throw denied("Protected authority directory required");
       if(!Set.of("ext4","xfs","tmpfs","overlay").contains(Files.getFileStore(root).type()))throw denied("Unqualified authority filesystem");
       guard=root.resolve("authority.lock");state=root.resolve("current.json");pending=root.resolve("current.pending");activeLease=root.resolve("lease.active");
+      ownerDatabase=root.resolve("owner.database");
       guardKey=regular(guard).fileKey();if(guardKey==null)throw denied("Stable authority guard identity required");
+      admitted=Files.exists(ownerDatabase,NOFOLLOW_LINKS)?readDatabase():null;
+      if(transactions!=null&&!transactions.admitted().equals(admitted))throw denied("Protected PostgreSQL admission differs or absent");
     }catch(IOException ex){throw denied("Authority store unavailable",ex);}
   }
   /** One-time trusted provisioning only. Existing guard, including incomplete provisioning,
    * is never overwritten. No runtime method recreates missing current state.
    */
   public static void provision(Path directory,Proof first){
+    provision(directory,first,null);
+  }
+  /** Fresh empty store only. There is no implicit legacy upgrade or database restart rebind. */
+  public static void provisionBound(Path directory,Proof first,PostgresRecoveryTransactions.Database admitted){
+    provision(directory,first,Objects.requireNonNull(admitted));
+  }
+  private static void provision(Path directory,Proof first,PostgresRecoveryTransactions.Database database){
     outside();validate(first,true);if(first.generation()!=1)throw denied("Initial authority generation must be one");
     Path root=directory.toAbsolutePath().normalize();
     try{
       if(!root.equals(root.toRealPath())||!Files.getPosixFilePermissions(root,NOFOLLOW_LINKS).equals(DIRECTORY))throw denied("Protected authority directory required");
       try(var entries=Files.list(root)){if(entries.findAny().isPresent())throw denied("Authority provisioning requires empty directory");}
       try(var channel=FileChannel.open(root.resolve("authority.lock"),Set.of(CREATE_NEW,READ,WRITE,NOFOLLOW_LINKS),PosixFilePermissions.asFileAttribute(PRIVATE))){channel.force(true);}
+      if(database!=null){
+        byte[] encoded=JSON.writeValueAsBytes(new StoredDatabase("ouf.platform-storage-database.v1",database,hashValue(database)));
+        try(var channel=FileChannel.open(root.resolve("owner.database"),Set.of(CREATE_NEW,WRITE,NOFOLLOW_LINKS),PosixFilePermissions.asFileAttribute(PRIVATE))){
+          ByteBuffer bytes=ByteBuffer.wrap(encoded);while(bytes.hasRemaining())channel.write(bytes);channel.force(true);
+        }
+        try(var parent=FileChannel.open(root,READ)){parent.force(true);}
+      }
       var store=new FilePlatformRecoveryAuthority(root);
       try(var held=store.acquire()){if(held==null)throw denied("Authority provision contended");store.write(first);}
     }catch(IOException ex){throw denied("Authority provisioning incomplete; explicit reconciliation required",ex);}
@@ -61,10 +86,17 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
     try{
       Proof proof=read();validate(proof,true);
       if(!binding.installation().equals(proof.installation())||!binding.tenant().equals(proof.tenant()))throw denied("Authority installation binding differs");
+      PostgresRecoveryTransactions.Transaction owner=null;
+      if(admitted!=null){
+        if(transactions==null)throw denied("Bound PostgreSQL owner transaction capture required");
+        owner=transactions.capture();if(!admitted.equals(owner.database()))throw denied("Owner PostgreSQL admission differs");
+      }
       // A killed JVM may release its OS lock before PostgreSQL resolves a sent COMMIT.
       // Force this latch BEFORE granting authority; only known completion clears it.
       try(var marker=FileChannel.open(activeLease,Set.of(CREATE_NEW,WRITE,NOFOLLOW_LINKS),PosixFilePermissions.asFileAttribute(PRIVATE))){
-        ByteBuffer bytes=ByteBuffer.wrap((UUID.randomUUID()+"\n"+proof.generation()+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        UUID id=UUID.randomUUID();var payload=new MarkerPayload(id,proof.generation(),owner);
+        byte[] encoded=owner==null?(id+"\n"+proof.generation()+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8):JSON.writeValueAsBytes(new StoredMarker("ouf.platform-storage-lease.pg.v2",payload,hashValue(payload)));
+        ByteBuffer bytes=ByteBuffer.wrap(encoded);
         while(bytes.hasRemaining())marker.write(bytes);marker.force(true);
       }
       forceDirectory();var finished=new AtomicBoolean();
@@ -129,7 +161,8 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
       if(!m.id().equals(request.leaseId())||!m.sha256().equals(request.leaseSha256())||m.generation()!=request.expectedGeneration())throw denied("Unresolved authority lease differs");
       if(current.generation()!=request.expectedGeneration()&&!current.equals(next))throw denied("Stale authority reconciliation generation");
       if(gate==null)throw denied("Owner reconciliation gate unavailable");
-      try(var owner=gate.tryAcquire(request)){
+      if(m.transaction()!=null&&!(gate instanceof PostgresRecoveryOutcomeResolver.Prepared))throw denied("Verified PostgreSQL outcome resolver required");
+      try(var owner=m.transaction()==null?gate.tryAcquire(request):((PostgresRecoveryOutcomeResolver.Prepared)gate).tryAcquire(request,m.transaction())){
         if(owner==null)throw denied("Owner outcome unresolved or contended");
         Evidence proof=owner.current();validateEvidence(request,proof);
         if(prior!=null&&(!prior.evidence().databaseIdentity().equals(proof.databaseIdentity())||!prior.evidence().ownerEvidenceRef().equals(proof.ownerEvidenceRef())||prior.evidence().outcome()!=proof.outcome()))throw denied("Owner reconciliation evidence differs");
@@ -145,6 +178,19 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
     }catch(IOException ex){throw denied("Authority reconciliation outcome uncertain; reconcile exact command",ex);}
   }
   public static String reconciliationFingerprint(Request request){validateRequest(request);return hashValue(request);}
+  static String identityFingerprint(PostgresRecoveryTransactions.Database database){return hashValue(database);}
+  /** Preflight snapshot only; reconcile rechecks the exact marker under the guard afterwards. */
+  public PostgresRecoveryTransactions.Transaction pendingTransaction(Request request){
+    outside();validateRequest(request);
+    try(var held=acquire(true)){
+      if(held==null)throw denied("Authority transaction inspection contended");
+      Proof p=read();
+      if(!p.installation().equals(request.revokedNext().installation())||!p.tenant().equals(request.revokedNext().tenant()))throw denied("Authority installation binding differs");
+      Marker m=marker();
+      if(!m.id().equals(request.leaseId())||!m.sha256().equals(request.leaseSha256())||m.generation()!=request.expectedGeneration())throw denied("Unresolved authority lease differs");
+      if(m.transaction()==null)throw denied("Legacy lease has no PostgreSQL transaction binding");return m.transaction();
+    }
+  }
   private static void validateRequest(Request r){
     if(r==null||r.commandId()==null||r.leaseId()==null||r.leaseSha256()==null||!r.leaseSha256().matches("[a-f0-9]{64}")||r.expectedGeneration()<1||r.expectedGeneration()==Long.MAX_VALUE||!reference(r.actorRef())||!reference(r.reasonCode())||!reference(r.decisionRef()))throw denied("Invalid reconciliation request");
     validate(r.revokedNext(),false);
@@ -156,12 +202,23 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
   }
   private Marker marker(){
     try{
+      if(admitted!=null){
+        byte[] bytes=bounded(activeLease,2048);var tree=JSON.readTree(bytes);
+        if(!tree.isObject()||tree.size()!=3||!tree.path("marker").isObject()||tree.path("marker").size()!=3||!tree.path("marker").path("generation").isIntegralNumber())throw denied("Invalid bound authority marker");
+        StoredMarker value=JSON.treeToValue(tree,StoredMarker.class);var m=value.marker();
+        if(!"ouf.platform-storage-lease.pg.v2".equals(value.schema())||m.id()==null||m.generation()<1||m.transaction()==null||!admitted.equals(m.transaction().database())||!hashValue(m).equals(value.sha256()))throw denied("Bound authority marker integrity differs");
+        return new Marker(m.id(),m.generation(),hashBytes(bytes),m.transaction());
+      }
       String text=new String(bounded(activeLease,128),java.nio.charset.StandardCharsets.UTF_8);
       String[] parts=text.split("\n",-1);
       if(parts.length!=3||!parts[2].isEmpty()||!parts[1].matches("[1-9][0-9]{0,18}"))throw denied("Invalid unresolved authority marker");
       UUID id=UUID.fromString(parts[0]);if(!id.toString().equals(parts[0]))throw denied("Invalid unresolved authority marker");
-      return new Marker(id,Long.parseLong(parts[1]),hashBytes(text.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+      return new Marker(id,Long.parseLong(parts[1]),hashBytes(text.getBytes(java.nio.charset.StandardCharsets.UTF_8)),null);
     }catch(IOException|IllegalArgumentException ex){throw denied("Unresolved authority marker unavailable or malformed",ex);}
+  }
+  private PostgresRecoveryTransactions.Database readDatabase()throws IOException{
+    StoredDatabase value=JSON.readValue(bounded(ownerDatabase,1024),StoredDatabase.class);
+    if(value.database()==null||!"ouf.platform-storage-database.v1".equals(value.schema())||!hashValue(value.database()).equals(value.sha256()))throw denied("Protected PostgreSQL admission integrity differs");return value.database();
   }
   private Receipt readReceipt(Path path){
     try{
@@ -208,6 +265,8 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
   }
   private Proof read(){
     try{
+      if(admitted!=null&&!admitted.equals(readDatabase()))throw denied("Protected PostgreSQL admission changed");
+      if(admitted==null&&Files.exists(ownerDatabase,NOFOLLOW_LINKS))throw denied("Authority store mode changed");
       regular(state);byte[] bytes;
       try(var channel=FileChannel.open(state,READ,NOFOLLOW_LINKS)){
         ByteBuffer buffer=ByteBuffer.allocate(4097);while(buffer.hasRemaining()&&channel.read(buffer)!=-1){}
@@ -219,13 +278,13 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
       for(String field:List.of("installation","tenant","bundleId","issuedAt","expiresAt"))if(!node.path(field).isTextual())throw denied("Authority state shape invalid");
       for(String field:List.of("bundleVersion","generation"))if(!node.path(field).isIntegralNumber()||!node.path(field).canConvertToLong())throw denied("Authority state shape invalid");
       Stored stored=JSON.treeToValue(tree,Stored.class);validate(stored.proof(),false);
-      if(!SCHEMA.equals(stored.schema())||!hash(stored.proof()).equals(stored.sha256()))throw denied("Authority state integrity differs");
+      if(!(admitted==null?SCHEMA:PG_SCHEMA).equals(stored.schema())||!hash(stored.proof()).equals(stored.sha256()))throw denied("Authority state integrity differs");
       return stored.proof();
     }catch(IOException ex){throw denied("Authority state unavailable or malformed",ex);}
   }
   private void write(Proof proof){
     try{
-      byte[] bytes=JSON.writeValueAsBytes(new Stored(SCHEMA,proof,hash(proof)));if(bytes.length>4096)throw denied("Authority state size invalid");
+      byte[] bytes=JSON.writeValueAsBytes(new Stored(admitted==null?SCHEMA:PG_SCHEMA,proof,hash(proof)));if(bytes.length>4096)throw denied("Authority state size invalid");
       if(Files.exists(pending,NOFOLLOW_LINKS))regular(pending);
       try(var channel=FileChannel.open(pending,Set.of(CREATE,TRUNCATE_EXISTING,WRITE,NOFOLLOW_LINKS),PosixFilePermissions.asFileAttribute(PRIVATE))){
         ByteBuffer buffer=ByteBuffer.wrap(bytes);while(buffer.hasRemaining())channel.write(buffer);channel.force(true);
