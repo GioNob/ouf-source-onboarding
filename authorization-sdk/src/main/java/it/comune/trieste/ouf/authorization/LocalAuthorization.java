@@ -13,6 +13,7 @@ import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 public final class LocalAuthorization {
   public static final int MAX_BYTES=5*1024*1024;
   private final AtomicReference<PolicySnapshot> active=new AtomicReference<>();
+  private final java.util.concurrent.locks.StampedLock publication=new java.util.concurrent.locks.StampedLock();
   private final Clock clock;
   private final Duration maxStaleness;
   private volatile String lastError;
@@ -44,6 +45,9 @@ public final class LocalAuthorization {
       var grants=new HashSet<String>();
       for(var g:bundle.grants())if(!grants.add(g.grantId())||!ids.contains(g.capabilityId()))throw new IllegalArgumentException("INVALID_GRANT_REFERENCE");
       var next=new PolicySnapshot(bundle,hash,clock.instant());
+      long stamp=publication.tryWriteLock();
+      if(stamp==0)throw new IllegalArgumentException("POLICY_PUBLICATION_CONTENDED");
+      try {
       // Validation and parsing happen outside the CAS. A racing stale refresh cannot replace a newer version.
       for(;;){var old=active.get();
         if(old!=null){
@@ -54,10 +58,27 @@ public final class LocalAuthorization {
         if(old!=null&&next.verifiedAt().isBefore(old.verifiedAt()))throw new IllegalArgumentException("OLDER_REFRESH_REJECTED");
         if(active.compareAndSet(old,next))break;
       }
+      }finally{publication.unlockWrite(stamp);}
       lastError=null;return new BundleRefreshResult(true,"INSTALLED");
     }catch(Exception e){lastError=e instanceof IllegalArgumentException?e.getMessage():"BUNDLE_LOAD_FAILED";return new BundleRefreshResult(false,lastError);}
   }
   public void refreshFailure(String code){lastError=code;}
+  /** Nonwaiting local publication fence for one short final mutation. Not a distributed
+   * revocation lease. Caller must close; refresh reports contention, never false success. */
+  public SnapshotLease tryLease(PolicySnapshot expected){
+    long stamp=publication.tryReadLock();
+    if(stamp==0)throw new SecurityException("POLICY_PUBLICATION_CONTENDED");
+    try{requireFresh(expected);if(active.get()!=expected)throw new SecurityException("POLICY_CHANGED");return new SnapshotLease(expected,stamp);}
+    catch(RuntimeException ex){publication.unlockRead(stamp);throw ex;}
+  }
+  public final class SnapshotLease implements AutoCloseable {
+    private final PolicySnapshot snapshot;private final long stamp;
+    private final java.util.concurrent.atomic.AtomicBoolean closed=new java.util.concurrent.atomic.AtomicBoolean();
+    private final Instant deadline=clock.instant().plusSeconds(30);
+    private SnapshotLease(PolicySnapshot snapshot,long stamp){this.snapshot=snapshot;this.stamp=stamp;}
+    public PolicySnapshot current(){if(closed.get()||!clock.instant().isBefore(deadline))throw new SecurityException("POLICY_LEASE_CLOSED_OR_EXPIRED");requireFresh(snapshot);return snapshot;}
+    @Override public void close(){if(closed.compareAndSet(false,true))publication.unlockRead(stamp);}
+  }
   public PolicySnapshot currentSnapshot(){var p=active.get();requireFresh(p);return p;}
   public void requireFresh(PolicySnapshot p){
     if(p==null)throw new SecurityException("NO_POLICY_BUNDLE");

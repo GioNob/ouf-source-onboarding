@@ -32,14 +32,9 @@ class ManagedFileDelegatedUploadApiTest {
     var request=new MockHttpServletRequest("POST",PATH);request.setContent(csv);
     request.addHeader("X-OUF-Managed-File-Receipt","signed");
     UUID asset=UUID.randomUUID();
-    when(files.registerDelegatedUpload(eq("tenant-a"),eq("human:operator"),eq("file_123"),eq("once"),eq(hash),eq((long)csv.length),any()))
+    when(files.registerDelegatedUpload(eq("tenant-a"),eq("human:operator"),eq("file_123"),eq("once"),eq(hash),eq((long)csv.length),eq(storage),any()))
         .thenAnswer(invocation->{
-          @SuppressWarnings("unchecked") Supplier<String> put=invocation.getArgument(6);
-          when(storage.put(any(),eq((long)csv.length),eq("text/csv"))).thenAnswer(call->{
-            assertThat(((java.io.InputStream)call.getArgument(0)).readAllBytes()).isEqualTo(csv);
-            return "object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8";
-          });
-          assertThat(put.get()).startsWith("object://managed-files/");
+          assertThat(java.nio.file.Files.readAllBytes(invocation.getArgument(7))).isEqualTo(csv);
           return Map.of("assetId",asset,"status","STAGED");
         });
     var api=new ManagedFileDelegatedUploadApi(verifier,files,storage);

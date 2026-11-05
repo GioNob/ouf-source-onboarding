@@ -40,3 +40,14 @@ common `it.comune.trieste.ouf.authorization`, and in-repository consumers migrat
 in this tranche. No previously published SDK artifact coordinates are replaced.
 
 R1b: optional trusted role/assurance claims and grant constraints, explicit DENY precedence, resource/detail decision metadata, HTTPS background refresh with SHA-256 and bounded staleness. See owner docs/AUTHORIZATION_R1B.md. Unknown policy fields fail closed.
+
+Local final-mutation publication fence (2026-11-05 candidate): `tryLease(expected)`
+requires the current snapshot by identity and acquires a nonwaiting read stamp.
+`refresh` takes a nonwaiting write stamp only for publication and returns
+POLICY_PUBLICATION_CONTENDED while a lease is held; it must not acknowledge
+revocation as installed. Close every lease. Its current() expires after 30s and
+retains bundle freshness checks; expiry does not unlock a possibly running
+mutation. Abandoned callers can block publication until close/process exit,
+never extend authority. This is local JVM serialization, not global revocation
+propagation, durable issuance, or a new deployment of the SDK to other consumers.
+The candidate source manifest is updated here; no published artifact is replaced.

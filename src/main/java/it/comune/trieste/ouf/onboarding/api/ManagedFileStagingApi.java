@@ -53,9 +53,7 @@ public class ManagedFileStagingApi {
       if(size==0)throw new DomainFailure(HttpStatus.BAD_REQUEST,"ONB_FILE_SIZE_INVALID","File is empty");
       String hash="sha256:"+java.util.HexFormat.of().formatHex(digest.digest());
       if(declaredHash!=null&&!hash.equals(declaredHash))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_FILE_HASH_MISMATCH","Upload checksum mismatch");
-      String ref;
-      try(var source=Files.newInputStream(staged)){ref=storage.put(source,size,"text/csv");}
-      var asset=files.registerOwned(null,ref,hash,"text/csv",size,actor.subject(),"retention://managed-files/30d",principal.tenantId());
+      var asset=files.registerDirectUpload(principal.tenantId(),actor.subject(),request.getHeader("Idempotency-Key"),hash,size,storage,staged);
       return ResponseEntity.created(URI.create("/api/onboarding/v1/managed-files/"+asset.get("asset_id"))).body(asset);
     } catch(NoSuchAlgorithmException e){throw new IllegalStateException("SHA-256 unavailable",e);}
       finally {Files.deleteIfExists(staged);}

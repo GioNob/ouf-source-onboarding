@@ -8,7 +8,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.UUID;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -34,20 +34,20 @@ public class MinioManagedFileStagingStore implements ManagedFileStagingStore {
     String access=Files.readString(accessKeyFile).strip();
     String secret=Files.readString(secretKeyFile).strip();
     if(access.isEmpty()||secret.isEmpty())throw new IllegalArgumentException("staging credentials must not be empty");
-    this.minio=MinioClient.builder().endpoint(endpoint).credentials(access,secret).build();
+    this.minio=MinioClient.builder().endpoint(endpoint).region("us-east-1").credentials(access,secret)
+        .httpClient(new okhttp3.OkHttpClient.Builder().retryOnConnectionFailure(false).callTimeout(java.time.Duration.ofSeconds(60)).build()).build();
   }
 
   // Visible for storage tests without reading any real credentials.
   MinioManagedFileStagingStore(MinioClient minio,String bucket){this.minio=minio;this.bucket=bucket;}
 
-  @Override public String put(InputStream content,long size,String mediaType) throws IOException {
+  @Override public void putReserved(String ref,InputStream content,long size,String mediaType) throws IOException {
     if(content==null||size<=0||size>MAX_BYTES)throw new IllegalArgumentException("file exceeds staging limit");
     if(!"text/csv".equals(mediaType))throw new IllegalArgumentException("unsupported staging media type");
-    String id=UUID.randomUUID().toString();
+    String id=objectId(ref);
     try {
       minio.putObject(PutObjectArgs.builder().bucket(bucket).object("managed-files/"+id)
           .stream(content,size,-1).contentType(mediaType).build());
-      return PREFIX+id;
     } catch(Exception e){throw new DomainFailure(HttpStatus.BAD_GATEWAY,"ONB_STAGING_WRITE_FAILED","Managed file staging write failed");}
   }
 

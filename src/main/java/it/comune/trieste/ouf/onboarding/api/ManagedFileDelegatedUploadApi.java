@@ -48,10 +48,7 @@ public class ManagedFileDelegatedUploadApi {
       final long checkedSize=size;
       var principal=delegated.principal();
       Map<String,Object> asset=files.registerDelegatedUpload(principal.tenantId(),principal.subjectId(),delegated.fileId(),
-          delegated.idempotencyKey(),delegated.expectedHash(),checkedSize,()->{
-            try(var input=Files.newInputStream(spool)){return storage.put(input,checkedSize,"text/csv");}
-            catch(IOException e){throw new DomainFailure(HttpStatus.BAD_GATEWAY,"ONB_STAGING_WRITE_FAILED","Managed file staging write failed");}
-          });
+          delegated.idempotencyKey(),delegated.expectedHash(),checkedSize,storage,spool);
       return ResponseEntity.status(HttpStatus.CREATED).body(asset);
     }catch(NoSuchAlgorithmException e){throw new IllegalStateException("SHA-256 unavailable",e);}
     finally{Files.deleteIfExists(spool);}

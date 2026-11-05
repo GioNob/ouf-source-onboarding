@@ -43,7 +43,7 @@ class MinioManagedFileStagingStoreTest {
   @Test void rejectsOversizedInputBeforeMinioAccess(){
     var minio=mock(MinioClient.class);
     var storage=new MinioManagedFileStagingStore(minio,"ouf-managed-files");
-    assertThatThrownBy(()->storage.put(new ByteArrayInputStream(new byte[1]),10*1024*1024+1L,"text/csv"))
+    assertThatThrownBy(()->storage.putReserved("object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8",new ByteArrayInputStream(new byte[1]),10*1024*1024+1L,"text/csv"))
         .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("limit");
     verifyNoInteractions(minio);
   }

@@ -103,29 +103,17 @@ public class ManagedFileService {
       return row;
     });
   }
-  /** Serialize an upload attempt across retries before writing to object storage. */
-  public Map<String,Object> registerDelegatedUpload(String tenant,String subject,String fileId,String key,String hash,long size,java.util.function.Supplier<String> put){
-    if(tenant==null||tenant.isBlank()||subject==null||subject.isBlank()||fileId==null||!fileId.matches("file_[A-Za-z0-9_-]{1,128}")
-        ||key==null||!key.matches("[A-Za-z0-9_.:-]{1,128}")||hash==null||!hash.matches("sha256:[0-9a-f]{64}")
-        ||size<1||size>MAX_PROFILE_BYTES)throw invalid("ONB_FILE_UPLOAD_INVALID","Invalid delegated upload metadata");
-    return tx.execute(status->{
-      db.sql("select 1 as acquired from pg_advisory_xact_lock(hashtextextended(:i,0))")
-          .param("i",tenant.length()+":"+tenant+subject.length()+":"+subject+key).query(Integer.class).single();
-      var previous=db.sql("select file_id,content_hash,size_bytes,asset_id from ouf_onboarding.managed_file_upload_attempt where tenant_id=:t and subject_id=:s and idempotency_key=:k for update")
-          .param("t",tenant).param("s",subject).param("k",key).query().listOfRows();
-      if(!previous.isEmpty()){
-        var row=previous.get(0);
-        if(!fileId.equals(row.get("file_id"))||!hash.equals(row.get("content_hash"))||size!=((Number)row.get("size_bytes")).longValue())
-          throw conflict("ONB_FILE_UPLOAD_IDEMPOTENCY_CONFLICT","Idempotency key used for different file content or identity");
-        var existing=asset((UUID)row.get("asset_id"));
-        return Map.<String,Object>of("assetId",row.get("asset_id"),"status",existing.get("status"));
-      }
-      String ref=put.get();
-      var asset=registerOwned(null,ref,hash,"text/csv",size,subject,"retention://managed-files/30d",tenant);
-      db.sql("insert into ouf_onboarding.managed_file_upload_attempt(tenant_id,subject_id,file_id,idempotency_key,content_hash,size_bytes,asset_id) values(:t,:s,:f,:k,:h,:z,:a)")
-          .param("t",tenant).param("s",subject).param("f",fileId).param("k",key).param("h",hash).param("z",size).param("a",asset.get("asset_id")).update();
-      return Map.<String,Object>of("assetId",asset.get("asset_id"),"status","STAGED");
-    });
+  /** Durable reservation precedes network I/O; repeats reconcile the same object. */
+  public Map<String,Object> registerDelegatedUpload(String tenant,String subject,String fileId,String key,String hash,long size,
+      ManagedFileStagingStore storage,java.nio.file.Path spool){
+    var asset=new ManagedFileUploadCoordinator(db,tx,this,hashes).upload("DELEGATED",tenant,subject,fileId,key,hash,size,storage,spool);
+    return Map.of("assetId",asset.get("asset_id"),"status",asset.get("status"));
+  }
+  /** Without an explicit key, each HTTP request intentionally identifies a new upload. */
+  public Map<String,Object> registerDirectUpload(String tenant,String subject,String key,String hash,long size,
+      ManagedFileStagingStore storage,java.nio.file.Path spool){
+    return new ManagedFileUploadCoordinator(db,tx,this,hashes).upload("DIRECT",tenant,subject,"file_direct",
+        key==null?UUID.randomUUID().toString():key,hash,size,storage,spool);
   }
   /** The caller's capability alone does not grant access to every staged file. */
   public void requireOwner(UUID assetId,String subject){

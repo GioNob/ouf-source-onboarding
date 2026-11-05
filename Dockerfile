@@ -7,6 +7,9 @@ RUN cd authorization-sdk && sha256sum -c SOURCE_SHA256SUMS && timeout --signal=T
 RUN timeout --signal=TERM --kill-after=30s 15m mvn -B -ntp -DskipTests package
 
 FROM eclipse-temurin:21-jre
+# Update inherited Ubuntu packages before dropping privileges. Keep the image scan blocking.
+RUN apt-get update && apt-get install --no-install-recommends --only-upgrade -y apt libapt-pkg7.0 \
+    && rm -rf /var/lib/apt/lists/*
 # Java is the sole entrypoint; the base-image Pebble Go supervisor is unused.
 RUN rm -f /usr/bin/pebble
 RUN useradd --system --uid 10003 --no-create-home onboarding

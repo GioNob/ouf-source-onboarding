@@ -22,7 +22,7 @@ class ManagedProfileBudgetRuntimeTest {
   final PrincipalContext principal=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.HUMAN,null,"fixture-auth","https://iam.test","ouf",Set.of());
   final OnboardingService.Actor actor=new OnboardingService.Actor("alice","HUMAN_USER",Set.of("ouf.managed-source.file.profile","ouf.onboarding.quarantine.release"));
   @BeforeEach void clean(){db.sql("truncate ouf_onboarding.source,ouf_onboarding.managed_file_asset restart identity cascade").update();}
-  UUID asset(){return(UUID)files.registerDelegatedUpload("tenant-a","alice","file_"+UUID.randomUUID(),"upload:"+UUID.randomUUID(),hashes.ofBytes(csv),csv.length,()->"object://fixture/"+UUID.randomUUID()).get("assetId");}
+  UUID asset(){return(UUID)files.registerOwned(null,"object://fixture/"+UUID.randomUUID(),hashes.ofBytes(csv),"text/csv",csv.length,"alice","retention://30d","tenant-a").get("asset_id");}
   UUID failed(UUID a){
     UUID j=UUID.randomUUID();db.sql("insert into ouf_onboarding.file_profile_job(job_id,asset_id,idempotency_key,state,attempts,error_code,last_error,completed_at) values(:j,:a,'retained-key','FAILED',5,'ONB_FILE_PROFILE_FAILED','Gateway object read failed with status 403',clock_timestamp())").param("j",j).param("a",a).update();
     db.sql("insert into ouf_onboarding.managed_file_quarantine(quarantine_id,asset_id,profile_job_id,reason_code,evidence_ref,safe_detail,correlation_id) values(gen_random_uuid(),:a,:j,'ONB_FILE_PROFILE_FAILED','quarantine://fixture','Gateway object read failed with status 403','fixture')").param("a",a).param("j",j).update();
