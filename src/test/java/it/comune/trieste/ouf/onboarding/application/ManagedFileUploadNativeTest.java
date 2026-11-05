@@ -165,4 +165,70 @@ class ManagedFileUploadNativeTest {
     var unkeyed2=owner().registerDirectUpload("tenant-a","alice",null,HASHES.ofBytes(CSV),CSV.length,store,spool);
     assertThat(unkeyed1.get("asset_id")).isNotEqualTo(unkeyed2.get("asset_id"));assertThat(store.puts).hasValue(3);
   }
+  ManagedFileStorageRecovery recovery(){return new ManagedFileStorageRecovery(db,tx,owner(),HASHES);}
+  long epoch(){return db.sql("select epoch from ouf_onboarding.managed_file_storage_control").query(Long.class).single();}
+  @Test void recoveryDrainReconcilesThenFreezesWithoutAnotherPut(){
+    store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
+    long e=epoch();recovery().beginDrain(e);recovery().beginDrain(e);
+    assertThatThrownBy(()->recovery().freeze(e)).hasMessageContaining("Pending");
+    var result=recovery().reconcile((UUID)intent().get("intent_id"),e,store);
+    assertThat(recovery().reconcile((UUID)intent().get("intent_id"),e,store)).isEqualTo(result);
+    recovery().freeze(e);recovery().freeze(e);
+    assertThat(store.puts).hasValue(1);assertThat(store.gets).hasValue(1);assertThat(assets()).isOne();
+    assertThat(upload().get("assetId")).isEqualTo(result.get("asset_id"));
+  }
+  @Test void missingRecoveryObjectKeepsCutBlockedAndConsumesBudget()throws Exception{
+    crash("BEFORE_PUT");long e=epoch();recovery().beginDrain(e);
+    assertThatThrownBy(()->recovery().reconcile((UUID)intent().get("intent_id"),e,store)).isInstanceOf(DomainFailure.class);
+    assertThatThrownBy(()->recovery().freeze(e)).hasMessageContaining("Pending");
+    assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
+    assertThat(store.puts).hasValue(0);assertThat(assets()).isZero();
+  }
+  @Test void corruptRecoveryObjectCannotAcquireReceipt()throws Exception{
+    crash("BEFORE_PUT");String ref=(String)intent().get("staging_ref");byte[] wrong=CSV.clone();wrong[0]='x';
+    real.putReserved(ref,new ByteArrayInputStream(wrong),wrong.length,"text/csv");
+    long e=epoch();recovery().beginDrain(e);
+    assertThatThrownBy(()->recovery().reconcile((UUID)intent().get("intent_id"),e,store)).hasMessageContaining("bytes differ");
+    assertThatThrownBy(()->recovery().freeze(e)).hasMessageContaining("Pending");assertThat(assets()).isZero();
+  }
+  @Test void recoveryGenerationChangeDuringGetRejectsLatePublication(){
+    store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
+    long e=epoch();recovery().beginDrain(e);
+    var changing=new ManagedFileStagingStore(){
+      public void putReserved(String r,InputStream i,long z,String t){throw new AssertionError("recovery PUT");}
+      public byte[] get(String ref){byte[] b=store.get(ref);db.sql("update ouf_onboarding.managed_file_storage_control set epoch=epoch+1").update();return b;}
+    };
+    assertThatThrownBy(()->recovery().reconcile((UUID)intent().get("intent_id"),e,changing)).hasMessageContaining("generation");
+    assertThatThrownBy(()->recovery().freeze(e)).hasMessageContaining("generation");assertThat(assets()).isZero();
+    assertThatThrownBy(()->recovery().reconcile((UUID)intent().get("intent_id"),epoch(),store)).hasMessageContaining("generation");
+    assertThat(store.gets).hasValue(1);
+  }
+  @Test void recoveryCannotRenewExhaustedBudgetOrEnterAmbientTransaction(){
+    store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
+    long e=epoch();recovery().beginDrain(e);
+    db.sql("update ouf_onboarding.managed_file_upload_intent set reconciliation_reads=128").update();
+    assertThatThrownBy(()->recovery().reconcile((UUID)intent().get("intent_id"),e,store)).hasMessageContaining("budget exhausted");
+    assertThatThrownBy(()->tx.execute(s->{recovery().reconcile((UUID)intent().get("intent_id"),e,store);return null;})).hasMessageContaining("ambient transaction");
+    assertThat(store.gets).hasValue(0);assertThat(assets()).isZero();
+  }
+  @Test void concurrentRecoveryCreatesOneReceipt()throws Exception{
+    store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
+    long e=epoch();recovery().beginDrain(e);UUID id=(UUID)intent().get("intent_id");
+    var barrier=new CyclicBarrier(2);var pool=Executors.newFixedThreadPool(2);
+    var concurrent=new ManagedFileStagingStore(){public void putReserved(String r,InputStream i,long z,String t){throw new AssertionError("recovery PUT");} public byte[] get(String ref){try{barrier.await(10,TimeUnit.SECONDS);}catch(Exception ex){throw new RuntimeException(ex);}return store.get(ref);}};
+    try{
+      var a=pool.submit(()->recovery().reconcile(id,e,concurrent));var b=pool.submit(()->recovery().reconcile(id,e,concurrent));
+      assertThat(a.get(15,TimeUnit.SECONDS)).isEqualTo(b.get(15,TimeUnit.SECONDS));
+      assertThat(assets()).isOne();assertThat(store.puts).hasValue(1);assertThat(store.gets).hasValue(2);recovery().freeze(e);
+    }finally{pool.shutdownNow();}
+  }
+  @Test void drainDuringInFlightPutRejectsAckThenRecoveryUsesSameIntent()throws Exception{
+    store.entered=new CountDownLatch(1);store.release=new CountDownLatch(1);var pool=Executors.newSingleThreadExecutor();
+    long e=epoch();try{
+      var future=pool.submit(this::upload);assertThat(store.entered.await(10,TimeUnit.SECONDS)).isTrue();
+      recovery().beginDrain(e);store.release.countDown();assertThatThrownBy(()->future.get(15,TimeUnit.SECONDS)).hasCauseInstanceOf(DomainFailure.class);
+      assertThat(assets()).isZero();recovery().reconcile((UUID)intent().get("intent_id"),e,store);recovery().freeze(e);
+      assertThat(assets()).isOne();assertThat(store.puts).hasValue(1);
+    }finally{store.release.countDown();pool.shutdownNow();}
+  }
 }
