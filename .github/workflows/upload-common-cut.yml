@@ -1,0 +1,112 @@
+name: Onboarding physical common cut and stale writer recovery
+on:
+  push:
+    branches: [feat/storage-upload-intent-20261105]
+    paths:
+      - .github/workflows/upload-common-cut.yml
+      - scripts/ci-upload-common-cut.py
+      - scripts/readback-upload-common-cut.py
+      - src/main/java/it/comune/trieste/ouf/onboarding/application/ManagedFileStorageRecovery.java
+      - src/test/java/it/comune/trieste/ouf/onboarding/application/UploadCommonCutProcess.java
+  workflow_dispatch:
+permissions: {contents: read, actions: read}
+concurrency:
+  group: upload-common-cut-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native-cut:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      artifact: ${{ steps.evidence.outputs.artifact-id }}
+    env:
+      OUF_ONB_DB_URL: jdbc:postgresql://127.0.0.1:5432/ouf_onboarding
+      OUF_ONB_DB_USER: ouf_onboarding
+      OUF_ONB_DB_PASSWORD: ci-only-password
+      OUF_UPLOAD_S3_URL: http://127.0.0.1:18333
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: GioNob/ouf-deploy
+          ref: 99594c878a3130a353531841e91c53c38741dbd0
+          path: .pairwise/storage-proof
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Compile the actual owner and fresh-process fixture driver
+        run: |
+          set -euo pipefail
+          bash scripts/install-authorization-sdk.sh
+          timeout --signal=TERM --kill-after=30s 10m mvn -B -ntp -DskipTests test-compile dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=target/upload-cut-classpath.txt
+      - name: Bind the exact qualified OCI33
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -B -S scripts/ci-upload-intent-storage.py
+      - name: Drain actual owner and restore the physical common cut from exported backups
+        run: python3 -I -B -S scripts/ci-upload-common-cut.py
+      - name: Preserve sources and complete success or failure evidence
+        if: always()
+        run: |
+          mkdir -p target/upload-cut
+          python3 - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path('target/upload-cut')
+          if Path('target/upload-native/exact-image.json').exists():
+              (root/'exact-image.json').write_bytes(Path('target/upload-native/exact-image.json').read_bytes())
+          paths=[Path('pom.xml'),Path('.github/workflows/upload-common-cut.yml'),*Path('scripts').glob('*upload*.py')]
+          paths+=list(Path('src/main').rglob('*.*'))+list(Path('src/test/java').rglob('*.java'))
+          (root/'source-bindings.json').write_text(json.dumps({str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths) if p.is_file()},sort_keys=True)+'\n')
+          (root/'run.json').write_text(json.dumps({'runId':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'commit':os.environ['GITHUB_SHA'],'storageProofCommit':'99594c878a3130a353531841e91c53c38741dbd0'})+'\n')
+          (root/'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(root.iterdir()) if p.is_file() and p.name!='SHA256SUMS'))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: evidence
+        if: always()
+        with:
+          name: onboarding-common-cut-${{ github.run_id }}
+          path: target/upload-cut/
+          if-no-files-found: error
+          retention-days: 90
+  independent-readback:
+    needs: native-cut
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - name: Acquire the original artifact with exact GitHub metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.native-cut.outputs.artifact }}
+          PRODUCER_RESULT: ${{ needs.native-cut.result }}
+        run: |
+          mkdir -p target/cut-readback
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,subprocess,urllib.request
+          out=pathlib.Path('target/cut-readback');a=os.environ['ARTIFACT_ID'];assert a.isdecimal()
+          base='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']
+          req=urllib.request.Request(base+'/actions/artifacts/'+a,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+          with urllib.request.urlopen(req,timeout=30) as response:meta=json.load(response)
+          assert not meta['expired'] and 0<meta['size_in_bytes']<128*1024*1024
+          assert meta['workflow_run']['id']==int(os.environ['GITHUB_RUN_ID']) and meta['workflow_run']['head_sha']==os.environ['GITHUB_SHA']
+          (out/'artifact.json').write_text(json.dumps(meta,indent=2)+'\n')
+          dest=out/'original.zip'
+          subprocess.run(['curl','--fail','--location','--silent','--show-error','--proto','=https','--tlsv1.2','--connect-timeout','15','--max-time','180','--max-filesize',str(meta['size_in_bytes']),'-H','Authorization: Bearer '+os.environ['GH_TOKEN'],base+'/actions/artifacts/'+a+'/zip','-o',str(dest)],check=True)
+          assert dest.stat().st_size==meta['size_in_bytes']
+          with dest.open('rb') as f:assert hashlib.file_digest(f,'sha256').hexdigest()==meta['digest'].removeprefix('sha256:')
+          assert os.environ['PRODUCER_RESULT']=='success'
+          PY
+      - name: Verify every checksum source binding backup byte and owner receipt
+        run: |
+          python3 -I -B -S scripts/readback-upload-common-cut.py target/cut-readback/original.zip "$GITHUB_SHA" > target/cut-readback/readback.json
+          cat target/cut-readback/readback.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: onboarding-common-cut-readback-${{ github.run_id }}
+          path: target/cut-readback/
+          retention-days: 90

@@ -62,7 +62,7 @@ final class ManagedFileStorageRecovery {
         .param("z",current.get("size_bytes")).param("a",asset.get("asset_id")).update();
       db.sql("update ouf_onboarding.managed_file_upload_intent set state='ACKED',asset_id=:a,acknowledged_at=clock_timestamp() where intent_id=:i")
         .param("a",asset.get("asset_id")).param("i",intentId).update();
-      return asset;
+      return files.asset((UUID)asset.get("asset_id"));
     });
   }
 
