@@ -33,9 +33,10 @@ parent directory. Known transaction commit/rollback clears and forces the latch 
 releasing the OS lock. Process death or an UNKNOWN completion leaves it in place. Thus a
 released OS lock cannot by itself authorize another process while a previously sent PostgreSQL
 COMMIT may still be unresolved. Readers and publishers reject any existing latch after restart.
-No automatic timeout, PID check, new generation or reprovision clears it; governed reconciliation
-of the owner outcome remains a separate, unimplemented recovery path. This favors a durable
-pause over a possible late commit crossing revocation.
+No automatic timeout, PID check, new generation or reprovision clears it. The internal governed
+reconciliation protocol below requires a separately trusted owner-outcome/exclusion gate;
+its operational gate implementation is not installed. This favors a durable pause over a
+possible late commit crossing revocation.
 
 Current state is a versioned, SHA256-checked JSON envelope of at most4096bytes. Shape, types,
 duplicate/trailing fields, installation/tenant references, generation and finite time window
@@ -82,9 +83,63 @@ state, not a claimed kill at a precisely instrumented write boundary. JVM halt/k
 process-crash recovery, not host power-loss survival. The previous physical common-cut and
 independent archive regressions remain separate and still use their sequential file fixture.
 
+## Observation and governed reconciliation
+
+`inspect(binding)` is a bounded read-only projection under the same nonwaiting guard. It
+returns CURRENT, CONTENDED, RECONCILE_REQUIRED, REVOKED, EXPIRED, FENCED or UNAVAILABLE.
+CURRENT is not readiness, an ALLOW, a traffic lease or proof of valid Authorization policy.
+Contention and invalid files never become healthy. Installation/tenant mismatch hides fields;
+the unresolved marker UUID and digest correlate one pause across restarts, without exposing
+the authority bundle, actor, path or raw errors. Inspection never writes files or claims a lease.
+Construction can still fail for an unavailable/unqualified store; operational callers must
+project that failure as unavailable rather than healthy. No MCP/HTTP endpoint is installed.
+
+`PlatformAuthorityReconciliation` defines an internal trusted gate contract, not a verifier
+of arbitrary operator JSON. Its Gate must authenticate an exact finite decision, establish the
+admitted database identity, reconcile the exact lease's COMMITTED or ROLLED_BACK outcome and
+exclude every old owner transaction, including a possibly sent COMMIT, until close. Unresolved
+or unknown outcomes deny. The gate uses bounded nonwaiting acquisition: no network retries,
+sleep or remote operator interaction under the store guard. A production implementation must
+also cover restored databases, prepared transactions and custody loss; none is inferred from
+a PID, time, an unlocked file or an old receipt. This operational gate is still unimplemented.
+
+The provider checks the full request fingerprint, safe actor/reason/decision references, exact
+marker UUID/digest/generation, installation/tenant, and fresh evidence with at most five minutes
+validity. It checks the same held evidence again just before completing. Requests must publish
+exactly the next generation **revoked**. Even expired revoked proofs can be used to complete an
+interrupted safety transition; they never grant authority. A separate fresh publication and
+admission are required later, and old decisions still fail generation checks.
+
+Under the guard the sequence is: persist a checksummed resolution receipt using private staging,
+fsync and atomic rename; persist the revoked generation; recheck the held gate evidence; delete
+and fsync the exact latch. Failure or death before deletion retains the pause. A restarted caller
+can reconcile the identical command with fresh exclusion/evidence; database identity, outcome
+and owner evidence reference must match the first receipt. After completed latch removal,
+an exact retry returns that receipt without a new gate or writes to the authority proof; it is
+a historical command readback, not renewed approval. A changed command, later generation or
+new unresolved lease is rejected. Receipt/current files and their directory are forced again
+when reconciling an uncertain prior persistence result. Incomplete staging never authorizes.
+
+Receipts are private, bounded to 8192 bytes and retained by command UUID. Capacity is 128 per
+store; exhaustion blocks a new resolution and deletes nothing. There is no automatic pruning,
+budget reset or incident acknowledgement/resolution shortcut. This protocol receipt supports
+the external platform audit; it does not replace the authoritative HUMAN decision history.
+Malformation, ambiguous filesystem effects or lost custody leave recovery blocked for intervention.
+
+Nine further native cases qualify the internal protocol: read-only/redacted observation;
+missing, stale, borrowed or unrevoked evidence denial; a real owner transaction still holding
+its PostgreSQL control row after injected UNKNOWN; actual rollback followed by separate new
+generation/admission while an exhausted 128-read budget stays exhausted; separate-JVM halt
+after revoked publication/before latch removal and after completion/before reply; competing
+commands; changed intent and newer-lease protection; receipt capacity/corruption; and final
+evidence expiry after publication. Tests use a synthetic trusted decision/outcome oracle and
+a real PostgreSQL NOWAIT control-row lock. The oracle knows the fixture transaction outcome;
+it is NOT a production database outcome resolver or an actual ambiguous network-COMMIT test.
+This is governed control-path resumption, not reopening storage traffic or a target deployment.
+
 ## Remaining integration
 
 No operational path is installed. Trusted Gateway/THS admission/publication, protected external
-mount and guard custody, platform audit, production startup/recovery tooling, multiple-host
+mount and guard custody, authenticated owner-outcome/exclusion gate, platform audit, production startup/recovery tooling, multiple-host
 revocation, provider-storage rollback, full-owner budget reconstruction and writer custody
 remain open. No permission, admission, merge, target operation or MinIO/source-lock change.
