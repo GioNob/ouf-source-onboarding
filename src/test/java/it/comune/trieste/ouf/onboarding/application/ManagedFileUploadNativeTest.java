@@ -25,10 +25,20 @@ class ManagedFileUploadNativeTest {
   static Path evidence;Path spool;String key;CountingStore store;
   @BeforeAll static void setup()throws Exception{
     var ds=UploadCrashProcess.datasource();db=JdbcClient.create(ds);tx=new TransactionTemplate(new DataSourceTransactionManager(ds));
+    evidence=Path.of("target/upload-native");Files.createDirectories(evidence);
+    Flyway.configure().dataSource(ds).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").target("38").load().migrate();
+    var legacy=owner().registerOwned(null,"object://fixture/pre-v39",HASHES.ofBytes(CSV),"text/csv",CSV.length,"alice","retention://30d","tenant-a");
+    db.sql("insert into ouf_onboarding.managed_file_upload_attempt(tenant_id,subject_id,file_id,idempotency_key,content_hash,size_bytes,asset_id) values('tenant-a','alice','file_fixture','pre-v39',:h,:z,:a)")
+      .param("h",HASHES.ofBytes(CSV)).param("z",CSV.length).param("a",legacy.get("asset_id")).update();
+    String before=db.sql("select row_to_json(u)::text from ouf_onboarding.managed_file_upload_attempt u where idempotency_key='pre-v39'").query(String.class).single();
     Flyway.configure().dataSource(ds).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").load().migrate();
+    String after=db.sql("select row_to_json(u)::text from ouf_onboarding.managed_file_upload_attempt u where idempotency_key='pre-v39'").query(String.class).single();
+    assertThat(after).isEqualTo(before);
+    var replay=owner().registerDelegatedUpload("tenant-a","alice","file_fixture","pre-v39",HASHES.ofBytes(CSV),CSV.length,null,null);
+    assertThat(replay.get("assetId")).isEqualTo(legacy.get("asset_id"));
+    Files.writeString(evidence.resolve("v38-upgrade.json"),JSON.writeValueAsString(Map.of("before",JSON.readTree(before),"after",JSON.readTree(after),"replayedAsset",replay.get("assetId").toString()))+"\n");
     client=UploadCrashProcess.client();real=new MinioManagedFileStagingStore(client,"upload-fixture");
     if(!client.bucketExists(BucketExistsArgs.builder().bucket("upload-fixture").build()))client.makeBucket(MakeBucketArgs.builder().bucket("upload-fixture").build());
-    evidence=Path.of("target/upload-native");Files.createDirectories(evidence);
   }
   @BeforeEach void before()throws Exception{
     db.sql("truncate ouf_onboarding.source,ouf_onboarding.managed_file_asset restart identity cascade").update();
@@ -119,6 +129,25 @@ class ManagedFileUploadNativeTest {
     crash("BEFORE_PUT");db.sql("update ouf_onboarding.managed_file_upload_intent set reconciliation_reads=127 where idempotency_key=:k").param("k",key).update();
     assertThatThrownBy(this::upload).isInstanceOf(DomainFailure.class);assertThat(intent()).containsEntry("reconciliation_reads",128);
     assertThatThrownBy(this::upload).hasMessageContaining("budget exhausted");assertThat(store.gets).hasValue(1);assertThat(store.puts).hasValue(0);
+  }
+  @Test void expiredReconciliationWindowCannotBeRenewedByNewCall(){
+    UUID id=UUID.randomUUID();
+    db.sql("insert into ouf_onboarding.managed_file_upload_intent(intent_id,upload_kind,tenant_id,subject_id,idempotency_key,file_id,content_hash,size_bytes,staging_ref,epoch,state,created_at,reconcile_until) select :i,'DELEGATED','tenant-a','alice',:k,'file_fixture',:h,:z,:r,epoch,'DISPATCHED',clock_timestamp()-interval '25 hours',clock_timestamp()-interval '1 hour' from ouf_onboarding.managed_file_storage_control")
+      .param("i",id).param("k",key).param("h",HASHES.ofBytes(CSV)).param("z",CSV.length).param("r","object://managed-files/"+id).update();
+    assertThatThrownBy(this::upload).hasMessageContaining("budget exhausted");assertThat(store.gets).hasValue(0);assertThat(store.puts).hasValue(0);
+    assertThatThrownBy(()->db.sql("update ouf_onboarding.managed_file_upload_intent set reconcile_until=clock_timestamp()+interval '1 hour'").update()).hasMessageContaining("immutable");
+  }
+  @Test void tenantSubjectAndRouteNamespacesDoNotShareAnIntent(){
+    var first=upload();
+    var tenant=owner().registerDelegatedUpload("tenant-b","alice","file_fixture",key,HASHES.ofBytes(CSV),CSV.length,store,spool);
+    var subject=owner().registerDelegatedUpload("tenant-a","bob","file_fixture",key,HASHES.ofBytes(CSV),CSV.length,store,spool);
+    var direct=owner().registerDirectUpload("tenant-a","alice",key,HASHES.ofBytes(CSV),CSV.length,store,spool);
+    assertThat(Set.of(first.get("assetId"),tenant.get("assetId"),subject.get("assetId"),direct.get("asset_id"))).hasSize(4);assertThat(store.puts).hasValue(4);
+  }
+  @Test void storageFenceCannotRegressOrBeDeleted(){
+    db.sql("update ouf_onboarding.managed_file_storage_control set phase='FROZEN'").update();
+    for(String command:List.of("update ouf_onboarding.managed_file_storage_control set epoch=epoch-1","update ouf_onboarding.managed_file_storage_control set phase='ACTIVE'","delete from ouf_onboarding.managed_file_storage_control"))
+      assertThatThrownBy(()->db.sql(command).update()).isInstanceOf(org.springframework.dao.DataAccessException.class);
   }
   @Test void ambientTransactionCannotReachIntentOrS3(){
     assertThatThrownBy(()->tx.execute(s->upload())).hasMessageContaining("ambient transaction");assertThat(store.puts).hasValue(0);assertThat(assets()).isZero();
