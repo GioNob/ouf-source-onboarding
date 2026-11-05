@@ -17,6 +17,8 @@ public final class PostgresRecoveryOutcomeResolver {
   public interface ApprovalLease extends AutoCloseable {
     /** Local, current authenticated approval and revocation exclusion for this exact command. */
     Approval current();
+    /** Nonwaiting local revocation exclusion, acquired only for the final file mutation. */
+    default void seal(){current();}
     @Override void close();
   }
   private final DataSource dataSource;private final PostgresRecoveryTransactions.Database admitted;
@@ -55,7 +57,7 @@ public final class PostgresRecoveryOutcomeResolver {
     @Override public Lease tryAcquire(Request r){throw denied("Recorded PostgreSQL transaction binding required");}
     Lease tryAcquire(Request r,PostgresRecoveryTransactions.Transaction recorded){
       if(!request.equals(r)||!transaction.equals(recorded)||!acquired.compareAndSet(false,true))throw denied("Prepared PostgreSQL resolution binding differs or consumed");
-      current();return this;
+      approval.seal();current();return this;
     }
     @Override public Evidence current(){
       if(closed.get()||!approved.equals(approval.current()))throw denied("Resolution approval unavailable or changed");

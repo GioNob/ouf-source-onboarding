@@ -17,6 +17,9 @@ import it.comune.trieste.ouf.onboarding.installation.PlatformStorageRecoveryAuth
 import it.comune.trieste.ouf.onboarding.installation.FilePlatformRecoveryAuthority;
 import it.comune.trieste.ouf.onboarding.installation.PostgresRecoveryTransactions;
 import it.comune.trieste.ouf.onboarding.installation.PostgresRecoveryOutcomeResolver;
+import it.comune.trieste.ouf.onboarding.installation.RecoveryPostgresDataSource;
+import it.comune.trieste.ouf.onboarding.api.StorageRecoveryHumanApproval;
+import it.comune.trieste.ouf.onboarding.api.RecoveryHumanIamFixture;
 import static it.comune.trieste.ouf.onboarding.installation.PlatformAuthorityReconciliation.*;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
@@ -1079,6 +1082,90 @@ class ManagedFileUploadNativeTest {
     var oldAdmission=boundAuthority(fileAuthorityDirectory(),ds,admitted);
     assertThatThrownBy(()->tx.executeWithoutResult(s->oldAdmission.tryAcquire(fileBinding(1)))).hasMessageContaining("admission or synchronous commit differs");
     fileEvidence("pg-restart-fence",Map.of("actualPostgresRestart",true,"sameSystemIdentifier",true,"changedPostmaster",true,"oldTransactionResolutionDenied",true,"oldAdmissionDenied",true,"noAutomaticRebind",true));
+  }
+  StorageRecoveryHumanApproval.Command humanCommand(Request r){return new StorageRecoveryHumanApproval.Command(r.commandId(),r.leaseId(),r.leaseSha256(),r.expectedGeneration(),r.reasonCode(),r.revokedNext());}
+  @Test void authenticatedHumanResolvesExactPostgresOutcomeAndPersistsServerActor()throws Exception{
+    recoveryPolicy(operator(),key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var source=boundAuthority(fileAuthorityDirectory(),ds,admitted);orphanPgTransaction(source,true);
+    var iam=new RecoveryHumanIamFixture();var command=humanCommand(resolution(source));
+    try(var approved=iam.approve(command);var proof=new PostgresRecoveryOutcomeResolver(ds,admitted).prepare(source,approved.request(),approved.lease())){
+      var r=approved.request();var changed=new Request(UUID.randomUUID(),r.leaseId(),r.leaseSha256(),r.expectedGeneration(),r.actorRef(),r.reasonCode(),r.decisionRef(),r.revokedNext());
+      assertThatThrownBy(()->source.reconcile(changed,proof)).hasMessageContaining("binding differs");
+      var receipt=source.reconcile(r,proof);assertThat(receipt.request().actorRef()).isEqualTo("operator");assertThat(receipt.evidence().outcome()).isEqualTo(Outcome.ROLLED_BACK);pgReceipt("human-authenticated",receipt);
+      assertThat(source.reconcile(r,null)).isEqualTo(receipt);
+    }
+    assertThat(source.inspect(fileBinding(2)).state()).isEqualTo(State.REVOKED);
+    fileEvidence("human-authenticated",Map.of("realRsaSignature",true,"iamConverterAndBridge",true,"serverActorAndDecision",true,"changedCommandDenied",true,"postgresRollbackResolved",true,"receiptReplay",true,"httpEndpointInstalled",false));
+  }
+  @Test void authenticatedHumanPolicyRevokedAfterPreflightCannotClearOwnerLatch()throws Exception{
+    recoveryPolicy(operator(),key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var source=boundAuthority(fileAuthorityDirectory(),ds,admitted);orphanPgTransaction(source,true);
+    var iam=new RecoveryHumanIamFixture();var command=humanCommand(resolution(source));
+    try(var approved=iam.approve(command);var proof=new PostgresRecoveryOutcomeResolver(ds,admitted).prepare(source,approved.request(),approved.lease())){
+      iam.publish(2,false);assertThatThrownBy(()->source.reconcile(approved.request(),proof)).hasMessageContaining("policy changed");
+    }
+    assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.RECONCILE_REQUIRED);assertThat(source.inspect(fileBinding(1)).generation()).isOne();
+    iam.publish(3,true);
+    try(var approved=iam.approve(command);var proof=new PostgresRecoveryOutcomeResolver(ds,admitted).prepare(source,approved.request(),approved.lease())){source.reconcile(approved.request(),proof);}
+    fileEvidence("human-policy-revoked",Map.of("revokedAfterPreflightDenied",true,"latchRetained",true,"generationUnchangedOnDenial",true,"freshAuthenticatedRequestRequired",true));
+  }
+  final class RestrictedResolver implements AutoCloseable {
+    final String role="ouf_resolver_"+UUID.randomUUID().toString().replace("-","");final com.zaxxer.hikari.HikariDataSource pool;
+    RestrictedResolver(boolean grant)throws Exception{
+      db.sql("create role "+role+" login password 'ci-only-resolver' nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls").update();
+      String database=db.sql("select current_database()").query(String.class).single();assertThat(database).matches("[A-Za-z0-9_]{1,63}");
+      db.sql("grant connect on database "+database+" to "+role).update();
+      if(grant)grant();pool=RecoveryPostgresDataSource.open("127.0.0.1",5432,database,role,"ci-only-resolver",false);
+    }
+    void grant(){db.sql("grant execute on function pg_catalog.pg_control_system() to "+role).update();}
+    void revoke(){db.sql("revoke execute on function pg_catalog.pg_control_system() from "+role).update();}
+    @Override public void close(){pool.close();db.sql("drop owned by "+role).update();db.sql("drop role "+role).update();}
+  }
+  @Test void resolverNeedsOnlyControlIdentityGrantAndCannotReadOrWriteOwnerTables()throws Exception{
+    recoveryPolicy(operator(),key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var source=boundAuthority(fileAuthorityDirectory(),ds,admitted);orphanPgTransaction(source,true);var request=resolution(source);
+    try(var restricted=new RestrictedResolver(false)){
+      var resolver=new PostgresRecoveryOutcomeResolver(restricted.pool,admitted);
+      assertThatThrownBy(()->resolver.prepare(source,request,pgApproval(request))).hasMessageContaining("outcome unavailable");
+      assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.RECONCILE_REQUIRED);restricted.grant();
+      try(var c=restricted.pool.getConnection();var s=c.createStatement()){
+        try(var r=s.executeQuery("select rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls from pg_roles where rolname=current_user")){assertThat(r.next()).isTrue();for(int i=1;i<=5;i++)assertThat(r.getBoolean(i)).isFalse();}
+        for(String sql:List.of("select * from ouf_onboarding.managed_file_storage_control","update ouf_onboarding.managed_file_storage_control set phase='ACTIVE'","select * from ouf_authorization.policy_bundle","create schema forbidden_resolver_schema"))assertThatThrownBy(()->s.execute(sql)).isInstanceOf(java.sql.SQLException.class);
+      }
+      var iam=new RecoveryHumanIamFixture();try(var approved=iam.approve(humanCommand(request));var proof=resolver.prepare(source,approved.request(),approved.lease())){var receipt=source.reconcile(approved.request(),proof);assertThat(receipt.evidence().outcome()).isEqualTo(Outcome.ROLLED_BACK);pgReceipt("least-privilege-human",receipt);}
+    }
+    fileEvidence("pg-least-privilege",Map.of("withoutIdentityGrantDenied",true,"singleControlFunctionGrant",true,"noSuperuserOrAdminRoles",true,"ownerReadWriteDenied",true,"authorizationReadDenied",true,"ddlDenied",true,"authenticatedResolutionSucceeded",true));
+  }
+  @Test void resolverPrivilegeRevocationBlocksCommittedOutcomeUntilExplicitGrantRestored()throws Exception{
+    recoveryPolicy(operator(),key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var source=boundAuthority(fileAuthorityDirectory(),ds,admitted);orphanPgTransaction(source,false);var request=resolution(source);
+    try(var restricted=new RestrictedResolver(true)){
+      var resolver=new PostgresRecoveryOutcomeResolver(restricted.pool,admitted);assertThat(PostgresRecoveryTransactions.observe(restricted.pool)).isEqualTo(admitted);restricted.revoke();
+      assertThatThrownBy(()->resolver.prepare(source,request,pgApproval(request))).hasMessageContaining("outcome unavailable");assertThat(source.inspect(fileBinding(1)).generation()).isOne();restricted.grant();
+      try(var proof=resolver.prepare(source,request,pgApproval(request))){var receipt=source.reconcile(request,proof);assertThat(receipt.evidence().outcome()).isEqualTo(Outcome.COMMITTED);pgReceipt("least-privilege-commit",receipt);}
+    }
+    fileEvidence("pg-privilege-revoked",Map.of("livePermissionRevocationDenied",true,"latchRetained",true,"restrictedCommitResolved",true,"productionGrantIssued",false));
+  }
+  @Test void resolverPoolExhaustionHasFiniteDeadlineAndDoesNotClearLatch()throws Exception{
+    recoveryPolicy(operator(),key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var source=boundAuthority(fileAuthorityDirectory(),ds,admitted);orphanPgTransaction(source,true);var request=resolution(source);
+    long elapsed;
+    try(var restricted=new RestrictedResolver(true)){
+      var resolver=new PostgresRecoveryOutcomeResolver(restricted.pool,admitted);
+      try(var held=restricted.pool.getConnection()){
+        long start=System.nanoTime();assertThatThrownBy(()->resolver.prepare(source,request,pgApproval(request))).hasMessageContaining("outcome unavailable");elapsed=TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-start);assertThat(elapsed).isBetween(800L,4000L);
+      }
+      assertThat(source.inspect(fileBinding(1)).state()).isEqualTo(State.RECONCILE_REQUIRED);
+      try(var proof=resolver.prepare(source,request,pgApproval(request))){source.reconcile(request,proof);}
+      assertThat(restricted.pool.getHikariPoolMXBean().getActiveConnections()).isZero();
+    }
+    fileEvidence("pg-pool-deadline",Map.of("elapsedMillis",elapsed,"maximumMillis",4000,"configuredAcquireMillis",1000,"poolSize",1,"latchRetainedOnTimeout",true,"explicitRetrySucceeded",true,"noActiveConnectionLeak",true));
+  }
+  @Test void resolverSilentTcpPeerCannotBlockConnectionAcquisitionIndefinitely()throws Exception{
+    var stop=new CountDownLatch(1);var accepted=new CountDownLatch(1);
+    try(var server=new java.net.ServerSocket(0,1,java.net.InetAddress.getLoopbackAddress())){
+      Thread worker=Thread.startVirtualThread(()->{try(var socket=server.accept()){accepted.countDown();stop.await(6,TimeUnit.SECONDS);}catch(Exception ignored){}});
+      try(var pool=RecoveryPostgresDataSource.open("127.0.0.1",server.getLocalPort(),"ouf_onboarding","fixture","fixture",false)){
+        long start=System.nanoTime();assertThatThrownBy(pool::getConnection).isInstanceOf(java.sql.SQLException.class);long elapsed=TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-start);
+        assertThat(accepted.await(2,TimeUnit.SECONDS)).isTrue();assertThat(elapsed).isBetween(800L,4000L);assertThat(pool.getHikariPoolMXBean().getActiveConnections()).isZero();
+        fileEvidence("pg-silent-peer",Map.of("actualTcpAcceptedWithoutReply",true,"elapsedMillis",elapsed,"maximumMillis",4000,"configuredLoginSeconds",3,"configuredSocketSeconds",2,"noActiveConnectionLeak",true));
+      }finally{stop.countDown();server.close();worker.join(5000);assertThat(worker.isAlive()).isFalse();}
+    }
   }
   @Test void postgresPreparedProofRechecksApprovalAndCannotClearANewerLease()throws Exception{
     var p=operator();recoveryPolicy(p,key,1,true);var ds=nativeDatasource();var admitted=PostgresRecoveryTransactions.observe(ds);var dir=fileAuthorityDirectory();var source=boundAuthority(dir,ds,admitted);orphanPgTransaction(source,true);var r=resolution(source);var resolver=new PostgresRecoveryOutcomeResolver(ds,admitted);

@@ -9,6 +9,26 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 
 class LocalAuthorizationTest {
+  @Test void finalMutationLeaseExcludesConcurrentPolicyPublicationWithoutAcknowledgingRevocation()throws Exception{
+    var engine=TestAuthorization.runtime("human","HUMAN",Set.of("read"));var snapshot=engine.currentSnapshot();
+    var next=new PolicyBundle("fixture",2,Instant.now(),List.of(),List.of());
+    try(var lease=engine.tryLease(snapshot)){
+      try(var executor=java.util.concurrent.Executors.newSingleThreadExecutor()){
+        executor.submit(()->{assertThatThrownBy(()->TestAuthorization.install(engine,next)).hasMessage("POLICY_PUBLICATION_CONTENDED");}).get(3,java.util.concurrent.TimeUnit.SECONDS);
+      }
+      assertThat(lease.current()).isSameAs(snapshot);
+    }
+    TestAuthorization.install(engine,next);
+    assertThatThrownBy(()->engine.tryLease(snapshot)).hasMessage("POLICY_CHANGED");
+    try(var lease=engine.tryLease(engine.currentSnapshot())){lease.close();lease.close();assertThatThrownBy(lease::current).hasMessage("POLICY_LEASE_CLOSED_OR_EXPIRED");}
+  }
+  @Test void publicationLeaseExpiresWithoutRefreshingAuthority()throws Exception{
+    final Instant[] now={Instant.parse("2026-09-16T00:00:00Z")};
+    Clock clock=new Clock(){public ZoneId getZone(){return ZoneOffset.UTC;}public Clock withZone(ZoneId z){return this;}public Instant instant(){return now[0];}};
+    var engine=new LocalAuthorization(clock,Duration.ofMinutes(5));TestAuthorization.install(engine,new PolicyBundle("test",1,now[0],List.of(),List.of()));
+    try(var lease=engine.tryLease(engine.currentSnapshot())){now[0]=now[0].plusSeconds(30);assertThatThrownBy(lease::current).hasMessage("POLICY_LEASE_CLOSED_OR_EXPIRED");}
+    TestAuthorization.install(engine,new PolicyBundle("test",2,now[0],List.of(),List.of()));
+  }
   @Test void noBundleAndUnverifiedPrincipalFailClosed(){
     var runtime=new LocalAuthorization(Clock.systemUTC(),Duration.ofMinutes(5));
     assertThatThrownBy(runtime::currentSnapshot).hasMessage("NO_POLICY_BUNDLE");
