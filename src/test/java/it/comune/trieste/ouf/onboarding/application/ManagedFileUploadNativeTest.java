@@ -727,7 +727,7 @@ class ManagedFileUploadNativeTest {
     assertThat(fileChild(dir,"publish",proposal,1)).isZero();assertThatThrownBy(()->policyRecovery(guarded).freeze(epoch())).hasMessageContaining("admission generation revoked or differs");
     fileEvidence("cross-process-commit",Map.of("blockedDuringOwnerCommit",true,"publishedAfterCommit",true,"generation",2,"revoked",true));
   }
-  @Test void killedFileLeaseHolderReleasesOsLockWithoutRegranting()throws Exception{
+  @Test void killedFileLeaseHolderLeavesDurableUnresolvedLatch()throws Exception{
     var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var source=fileAuthority(dir,fenceProof(1,false));var guarded=authority(platformFence(source));
     var d=guarded.prepare(p,request(key));guarded.deliver(d.id(),0);var child=fileProcess(dir,"hold",null,0);
     try{
@@ -735,8 +735,12 @@ class ManagedFileUploadNativeTest {
       assertThat(Files.exists(dir.resolve("child-ready"))).isTrue();assertThat(child.isAlive()).isTrue();
       assertThatThrownBy(()->policyRecovery(guarded).beginDrain(epoch())).hasMessageContaining("unavailable or contended");
       child.destroyForcibly();assertThat(child.waitFor(5,TimeUnit.SECONDS)).isTrue();
-      policyRecovery(guarded).beginDrain(epoch());assertThat(fileProof(new FilePlatformRecoveryAuthority(dir)).generation()).isOne();
-      fileEvidence("killed-holder",Map.of("ownerDeniedWhileHeld",true,"holderKilled",true,"lockReleased",true,"generationUnchanged",true,"existingAuthorityOnly",true));
+      assertThat(Files.exists(dir.resolve("lease.active"))).isTrue();
+      assertThatThrownBy(()->policyRecovery(guarded).beginDrain(epoch())).hasMessageContaining("Unresolved prior authority lease");
+      assertThatThrownBy(()->fileProof(new FilePlatformRecoveryAuthority(dir))).hasMessageContaining("Unresolved prior authority lease");
+      assertThatThrownBy(()->new FilePlatformRecoveryAuthority(dir).publish(1,fenceProof(2,true))).hasMessageContaining("Unresolved prior authority lease");
+      assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("ACTIVE");
+      fileEvidence("killed-holder",Map.of("ownerDeniedWhileHeld",true,"holderKilled",true,"durableLatchPresent",true,"ownerDeniedAfterDeath",true,"publisherDeniedAfterRestart",true,"noAutomaticRegrant",true));
     }finally{if(child.isAlive()){child.destroyForcibly();child.waitFor(5,TimeUnit.SECONDS);}}
   }
   @Test void fileRevocationSurvivesPublisherCrashAndLogicalAuthorizationReplay()throws Exception{
@@ -773,7 +777,7 @@ class ManagedFileUploadNativeTest {
     Files.writeString(dir.resolve("current.pending"),"incomplete");Files.setPosixFilePermissions(dir.resolve("current.pending"),java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
     assertThat(fileProof(new FilePlatformRecoveryAuthority(dir)).generation()).isOne();source.publish(1,fenceProof(2,true));assertThat(Files.exists(dir.resolve("current.pending"))).isFalse();
     Files.move(dir.resolve("authority.lock"),dir.resolve("old.lock"));Files.createFile(dir.resolve("authority.lock"),java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")));
-    assertThatThrownBy(()->fileProof(source)).hasMessageContaining("lock unavailable");fileEvidence("pending-and-guard",Map.of("pendingNeverUsedAsAuthority",true,"replacementPublished",true,"staleGuardRejected",true));
+    assertThatThrownBy(()->fileProof(source)).hasMessageContaining("guard replaced");fileEvidence("pending-and-guard",Map.of("pendingNeverUsedAsAuthority",true,"replacementPublished",true,"staleGuardRejected",true));
   }
   @Test void fileAuthorityRejectsExpiryAmbientPublicationAndInsecurePermissions()throws Exception{
     var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var first=fenceProof(1,false);var source=fileAuthority(dir,first);
@@ -782,5 +786,17 @@ class ManagedFileUploadNativeTest {
     assertThatThrownBy(()->source.publish(1,expired)).hasMessageContaining("expired or future");assertThat(fileProof(source)).isEqualTo(first);
     Files.setPosixFilePermissions(dir.resolve("current.json"),java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-rw-"));assertThatThrownBy(()->fileProof(source)).hasMessageContaining("regular authority file");
     fileEvidence("invalid-publication",Map.of("expiredRejected",true,"ambientTransactionRejected",true,"insecurePermissionsRejected",true,"generationUnchanged",true));
+  }
+  @Test void unknownTransactionCompletionKeepsDurableAuthorityLatch()throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);Path dir=fileAuthorityDirectory();var source=fileAuthority(dir,fenceProof(1,false));var fence=platformFence(source);
+    tx.executeWithoutResult(s->{
+      var previous=TransactionSynchronizationManager.getSynchronizations();fence.lockCurrent();
+      // Fault injection of Spring's uncertain completion notification; no real DB failure claimed.
+      var added=new ArrayList<>(TransactionSynchronizationManager.getSynchronizations());added.removeAll(previous);assertThat(added).hasSize(1);
+      added.getFirst().afterCompletion(TransactionSynchronization.STATUS_UNKNOWN);
+    });
+    assertThat(Files.exists(dir.resolve("lease.active"))).isTrue();
+    assertThatThrownBy(()->fileProof(new FilePlatformRecoveryAuthority(dir))).hasMessageContaining("Unresolved prior authority lease");
+    fileEvidence("unknown-completion",Map.of("unknownCompletionInjected",true,"durableLatchPresent",true,"restartStillDenied",true,"automaticClearAbsent",true));
   }
 }

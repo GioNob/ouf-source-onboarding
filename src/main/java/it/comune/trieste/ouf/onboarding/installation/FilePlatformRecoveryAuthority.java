@@ -26,7 +26,7 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
   private static final String SCHEMA="ouf.platform-storage-authority.v1";
   private static final Set<PosixFilePermission> PRIVATE=PosixFilePermissions.fromString("rw-------");
   private static final Set<PosixFilePermission> DIRECTORY=PosixFilePermissions.fromString("rwx------");
-  private final Path root,guard,state,pending;
+  private final Path root,guard,state,pending,activeLease;
   private final Object guardKey;
   private record Stored(String schema,Proof proof,String sha256) {}
 
@@ -35,7 +35,7 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
       root=directory.toAbsolutePath().normalize();
       if(!root.equals(root.toRealPath())||!Files.isDirectory(root,NOFOLLOW_LINKS)||!Files.getPosixFilePermissions(root,NOFOLLOW_LINKS).equals(DIRECTORY))throw denied("Protected authority directory required");
       if(!Set.of("ext4","xfs","tmpfs","overlay").contains(Files.getFileStore(root).type()))throw denied("Unqualified authority filesystem");
-      guard=root.resolve("authority.lock");state=root.resolve("current.json");pending=root.resolve("current.pending");
+      guard=root.resolve("authority.lock");state=root.resolve("current.json");pending=root.resolve("current.pending");activeLease=root.resolve("lease.active");
       guardKey=regular(guard).fileKey();if(guardKey==null)throw denied("Stable authority guard identity required");
     }catch(IOException ex){throw denied("Authority store unavailable",ex);}
   }
@@ -58,11 +58,20 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
     try{
       Proof proof=read();validate(proof,true);
       if(!binding.installation().equals(proof.installation())||!binding.tenant().equals(proof.tenant()))throw denied("Authority installation binding differs");
+      // A killed JVM may release its OS lock before PostgreSQL resolves a sent COMMIT.
+      // Force this latch BEFORE granting authority; only known completion clears it.
+      try(var marker=FileChannel.open(activeLease,Set.of(CREATE_NEW,WRITE,NOFOLLOW_LINKS),PosixFilePermissions.asFileAttribute(PRIVATE))){
+        ByteBuffer bytes=ByteBuffer.wrap((UUID.randomUUID()+"\n"+proof.generation()+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        while(bytes.hasRemaining())marker.write(bytes);marker.force(true);
+      }
+      forceDirectory();var finished=new AtomicBoolean();
       return new PlatformStorageRecoveryAuthorityFence.Lease(){
         public Proof proof(){return proof;}
-        public void close(){held.close();}
+        public void close(){if(finished.compareAndSet(false,true))try{Files.delete(activeLease);forceDirectory();}catch(IOException ex){throw denied("Authority completion latch unresolved",ex);}finally{held.close();}}
+        public void abandon(){if(finished.compareAndSet(false,true))held.close();}
       };
-    }catch(RuntimeException ex){held.close();throw ex;}
+    }catch(IOException ex){held.close();throw denied("Authority lease unavailable",ex);}
+    catch(RuntimeException ex){held.close();throw ex;}
   }
   /** Persist an already-approved proof with expected generation; no policy/identity issuance.
    * Lost result reconciles by identical proof, never by extending its deadline.
@@ -89,8 +98,10 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
       if(lock==null){channel.close();return null;}
       Held held=new Held(channel,lock);
       if(!guardKey.equals(regular(guard).fileKey())){held.close();throw denied("Authority guard replaced");}
+      if(Files.exists(activeLease,NOFOLLOW_LINKS)){held.close();throw denied("Unresolved prior authority lease; platform reconciliation required");}
       return held;
-    }catch(IOException|RuntimeException ex){if(channel!=null)try{channel.close();}catch(IOException ignored){}throw denied("Authority lock unavailable",ex);}
+    }catch(IOException ex){if(channel!=null)try{channel.close();}catch(IOException ignored){}throw denied("Authority lock unavailable",ex);}
+    catch(RuntimeException ex){if(channel!=null)try{channel.close();}catch(IOException ignored){}throw ex;}
   }
   private Proof read(){
     try{
@@ -117,9 +128,10 @@ public final class FilePlatformRecoveryAuthority implements PlatformStorageRecov
         ByteBuffer buffer=ByteBuffer.wrap(bytes);while(buffer.hasRemaining())channel.write(buffer);channel.force(true);
       }
       Files.move(pending,state,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
-      try(var directory=FileChannel.open(root,READ)){directory.force(true);}
+      forceDirectory();
     }catch(IOException ex){throw denied("Authority publication outcome uncertain; reconcile exact proof",ex);}
   }
+  private void forceDirectory()throws IOException{try(var directory=FileChannel.open(root,READ)){directory.force(true);}}
   private BasicFileAttributes regular(Path path)throws IOException{
     var a=Files.readAttributes(path,BasicFileAttributes.class,NOFOLLOW_LINKS);
     if(!a.isRegularFile()||!Files.getPosixFilePermissions(path,NOFOLLOW_LINKS).equals(PRIVATE)||!Files.getOwner(path,NOFOLLOW_LINKS).equals(Files.getOwner(root,NOFOLLOW_LINKS)))throw denied("Private regular authority file required");

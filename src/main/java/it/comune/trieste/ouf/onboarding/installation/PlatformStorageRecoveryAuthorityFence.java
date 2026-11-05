@@ -26,6 +26,8 @@ public final class PlatformStorageRecoveryAuthorityFence implements StorageRecov
   public interface Lease extends AutoCloseable {
     Proof proof();
     @Override void close();
+    /** Unknown database completion must retain exclusion or a durable unresolved latch. */
+    default void abandon(){throw new IllegalStateException("Unknown owner completion; platform reconciliation required");}
   }
   private record Held(Lease lease,Proof proof) {}
   private final Binding binding;
@@ -51,7 +53,7 @@ public final class PlatformStorageRecoveryAuthorityFence implements StorageRecov
         @Override public void resume(){TransactionSynchronizationManager.bindResource(PlatformStorageRecoveryAuthorityFence.this,held);}
         @Override public void afterCompletion(int status){
           try{TransactionSynchronizationManager.unbindResourceIfPossible(PlatformStorageRecoveryAuthorityFence.this);}
-          finally{lease.close();}
+          finally{if(status==STATUS_COMMITTED||status==STATUS_ROLLED_BACK)lease.close();else lease.abandon();}
         }
       });
       registered=true;

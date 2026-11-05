@@ -28,6 +28,15 @@ lease is held. Recovery-control operations serialize per store; nested independe
 may be denied as contended. This deliberate control-plane tradeoff avoids unsafe overlapping
 JVM locks; it is not a shared read lock or a distributed lease.
 
+Before returning any read lease, the provider forces a private `lease.active` latch and its
+parent directory. Known transaction commit/rollback clears and forces the latch before
+releasing the OS lock. Process death or an UNKNOWN completion leaves it in place. Thus a
+released OS lock cannot by itself authorize another process while a previously sent PostgreSQL
+COMMIT may still be unresolved. Readers and publishers reject any existing latch after restart.
+No automatic timeout, PID check, new generation or reprovision clears it; governed reconciliation
+of the owner outcome remains a separate, unimplemented recovery path. This favors a durable
+pause over a possible late commit crossing revocation.
+
 Current state is a versioned, SHA256-checked JSON envelope of at most4096bytes. Shape, types,
 duplicate/trailing fields, installation/tenant references, generation and finite time window
 are validated; no cached ALLOW fallback exists. Missing, corrupted, expired or unavailable
@@ -45,17 +54,19 @@ support fails; an uncertain publication requires reconciliation of the exact pro
 This is a current-state projection, not a replacement for the platform's approval/revocation
 audit. Later generations may reflect a separately approved new authorization; the provider
 does not decide whether to issue it. Old worker admission and decisions remain generation-
-bound. Process death releases the OS lock; it does not renew a decision, grant or budget.
+bound. Process death releases the OS lock but retains the unresolved latch; it does not renew
+a decision, grant or budget. The adapter invokes `abandon` on UNKNOWN completion; providers
+without this operation retain their exclusion and fail rather than treating UNKNOWN as rollback.
 
 ## Native qualification
 
-Eight added cases use PostgreSQL and distinct real JVMs on the Linux runner:
+Nine added cases use PostgreSQL and distinct real JVMs on the Linux runner:
 
 - Reopen/read after process restart, durable revocation and exact idempotent publication.
 - A child publisher is denied inside the actual owner's post-audit/pre-commit interval;
   the same publication succeeds after commit and the old worker is denied afterwards.
-- A child holds the guard; the owner is denied until the child is forcibly killed. The OS
-  releases the lock and the original still-valid authority remains unchanged, without regrant.
+- A child holds the guard; the owner is denied. After the child is forcibly killed, the
+  durable unresolved latch continues blocking owner and publisher even after provider restart.
 - Publisher halts with exit86 after durable publication but before a response. A reopened
   provider reconciles the exact result. Logical Authorization replay restores DELIVERED,
   but fresh prepare, redelivery and owner use remain denied, with the same postmaster.
@@ -63,6 +74,8 @@ Eight added cases use PostgreSQL and distinct real JVMs on the Linux runner:
 - Corruption, oversize, absent state, reprovision attempts and symlink state are rejected.
 - A synthetic incomplete pending file never authorizes; a stale instance rejects guard replacement.
 - Expired proposals, publication within an owner transaction and insecure permissions deny.
+- An injected UNKNOWN transaction-completion notification preserves the latch across reopen;
+  no actual database/network failure is claimed for that injected case.
 
 Receipts and child logs are archived. The pending-file test is a constructed interrupted
 state, not a claimed kill at a precisely instrumented write boundary. JVM halt/kill proves
