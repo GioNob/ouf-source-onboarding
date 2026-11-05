@@ -13,6 +13,7 @@ import java.time.Instant;
 import it.comune.trieste.ouf.authorization.*;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 import it.comune.trieste.ouf.onboarding.authorization.*;
+import it.comune.trieste.ouf.onboarding.installation.PlatformStorageRecoveryAuthorityFence;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -594,4 +595,96 @@ class ManagedFileUploadNativeTest {
     assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("ACTIVE");
     assertThat(db.sql("select count(*) from ouf_onboarding.storage_recovery_action_audit").query(Long.class).single()).isZero();
   }
+  PlatformStorageRecoveryAuthorityFence platformFence(PlatformStorageRecoveryAuthorityFence.CurrentAuthority current){
+    return new PlatformStorageRecoveryAuthorityFence(new PlatformStorageRecoveryAuthorityFence.Binding("lab-installation","platform-tenant",1),current);
+  }
+  @Test void platformFenceRequiresTransactionAndAvailableLease(){
+    var missing=platformFence(binding->null);
+    assertThatThrownBy(missing::lockCurrent).hasMessageContaining("requires owner transaction");
+    assertThatThrownBy(()->tx.execute(s->missing.lockCurrent())).hasMessageContaining("unavailable or contended");
+    assertThat(TransactionSynchronizationManager.hasResource(missing)).isFalse();
+  }
+  @Test void platformLeaseIsReusedAndHeldThroughActualCommit(){
+    var p=operator();delivered(p,key);var platform=new PlatformRecoveryAuthorityLab(fenceProof(1,false));var fence=platformFence(platform);
+    tx.executeWithoutResult(s->{
+      assertThat(fence.lockCurrent()).isSameAs(fence.lockCurrent());assertThat(platform.acquired).hasValue(1);
+      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization(){
+        @Override public void afterCommit(){assertThat(platform.held()).isTrue();assertThat(platform.closed).hasValue(0);}
+      });
+    });
+    assertThat(platform.closed).hasValue(1);assertThat(platform.held()).isFalse();assertThat(TransactionSynchronizationManager.hasResource(fence)).isFalse();
+    policyRecovery(authority(fence)).beginDrain(epoch());assertThat(platform.acquired).hasValue(2);assertThat(platform.closed).hasValue(2);
+  }
+  @Test void platformLeaseIsReleasedOnOwnerRollback(){
+    var p=operator();delivered(p,key);var platform=new PlatformRecoveryAuthorityLab(fenceProof(1,false));var fence=platformFence(platform);
+    assertThatThrownBy(()->tx.executeWithoutResult(s->{authority(fence).lockCurrent(runtime.sessionId(),epoch(),"DRAIN");throw new IllegalStateException("fixture rollback");})).hasMessageContaining("fixture rollback");
+    assertThat(platform.closed).hasValue(1);assertThat(platform.held()).isFalse();assertThat(TransactionSynchronizationManager.hasResource(fence)).isFalse();
+    policyRecovery(authority(fence)).beginDrain(epoch());assertThat(platform.closed).hasValue(2);
+  }
+  @Test void mismatchedPlatformAdmissionClosesLeaseWithoutAuthority(){
+    var p=operator();recoveryPolicy(p,key,1,true);
+    for(var proof:List.of(fenceProof(2,false),fenceProof(1,true),new StorageRecoveryAuthorityFence.Proof("other","platform-tenant",key,1,1,Instant.now().minusSeconds(1),Instant.now().plusSeconds(600),false))){
+      var platform=new PlatformRecoveryAuthorityLab(proof);var fence=platformFence(platform);
+      assertThatThrownBy(()->authority(fence).prepare(p,request(key))).hasMessageContaining("admission generation revoked or differs");
+      assertThat(platform.closed).hasValue(1);assertThat(platform.held()).isFalse();assertThat(TransactionSynchronizationManager.hasResource(fence)).isFalse();
+    }
+  }
+  @Test void concurrentPlatformRevocationCannotCrossOwnerCommit()throws Exception{
+    var p=operator();delivered(p,key);var platform=new PlatformRecoveryAuthorityLab(fenceProof(1,false));var fence=platformFence(platform);
+    var next=fenceProof(2,true);var entered=new CountDownLatch(1);var release=new CountDownLatch(1);var pool=Executors.newSingleThreadExecutor();
+    try{
+      var held=pool.submit(()->tx.executeWithoutResult(s->{authority(fence).lockCurrent(runtime.sessionId(),epoch(),"DRAIN");entered.countDown();try{if(!release.await(10,TimeUnit.SECONDS))throw new AssertionError("fixture timeout");}catch(InterruptedException e){throw new RuntimeException(e);}}));
+      assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();assertThat(platform.advance(next)).isFalse();
+      release.countDown();held.get(10,TimeUnit.SECONDS);assertThat(platform.advance(next)).isTrue();
+      assertThatThrownBy(()->policyRecovery(authority(fence)).beginDrain(epoch())).hasMessageContaining("admission generation revoked or differs");
+      assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("ACTIVE");
+    }finally{release.countDown();pool.shutdownNow();}
+  }
+  @Test void platformLeaseSuspendsAndResumesWithNestedIndependentTransaction(){
+    var p=operator();recoveryPolicy(p,key,1,true);var platform=new PlatformRecoveryAuthorityLab(fenceProof(1,false));var fence=platformFence(platform);
+    var nested=new TransactionTemplate(tx.getTransactionManager());nested.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    tx.executeWithoutResult(s->{
+      var outer=fence.lockCurrent();nested.executeWithoutResult(inner->{fence.lockCurrent();assertThat(platform.acquired).hasValue(2);});
+      assertThat(platform.closed).hasValue(1);assertThat(fence.lockCurrent()).isSameAs(outer);assertThat(platform.held()).isTrue();
+    });
+    assertThat(platform.closed).hasValue(2);assertThat(platform.held()).isFalse();assertThat(TransactionSynchronizationManager.hasResource(fence)).isFalse();
+  }
+  // Privileged fixture-only logical replay, with normal INSERT/immutability guards left enabled.
+  // Scope is Authorization tables + delivery/action projection, not whole-owner or cluster restore.
+  static final List<String> LOGICAL_TABLES=List.of("ouf_authorization.policy_bundle","ouf_authorization.active_policy_bundle","ouf_authorization.authorization_decision_audit","ouf_authorization.storage_recovery_decision","ouf_onboarding.storage_recovery_authority_projection","ouf_authorization.storage_recovery_delivery_audit","ouf_onboarding.storage_recovery_action_audit");
+  Map<String,String> logicalSnapshot(){
+    var snapshot=new LinkedHashMap<String,String>();
+    for(String table:LOGICAL_TABLES)snapshot.put(table,db.sql("select coalesce(jsonb_agg(to_jsonb(r) order by to_jsonb(r)::text),'[]'::jsonb)::text from "+table+" r").query(String.class).single());
+    return snapshot;
+  }
+  void restoreLogical(Map<String,String> snapshot){
+    tx.executeWithoutResult(s->{
+      db.sql("truncate "+String.join(",",LOGICAL_TABLES)+" cascade").update();
+      for(String table:LOGICAL_TABLES)db.sql("insert into "+table+" select * from jsonb_populate_recordset(null::"+table+",cast(:rows as jsonb))").param("rows",snapshot.get(table)).update();
+    });
+  }
+  void logicalRollbackWithLiveWorker(boolean revoked)throws Exception{
+    var p=operator();recoveryPolicy(p,key,1,true);var platform=new PlatformRecoveryAuthorityLab(fenceProof(1,false));var fence=platformFence(platform);var guarded=authority(fence);
+    var decision=guarded.prepare(p,request(key));guarded.deliver(decision.id(),0);
+    store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");var owner=policyRecovery(guarded);long e=epoch();owner.beginDrain(e);
+    db.sql("update ouf_onboarding.managed_file_upload_intent set reconciliation_reads=128").update();
+    var before=logicalSnapshot();var originalIntent=new LinkedHashMap<>(intent());var postmaster=StorageRecoveryRuntime.databaseStartedAt(db);UUID session=runtime.sessionId();
+    assertThat(guarded.revoke(p,decision.id(),1)).isEqualTo(2);
+    if(revoked)recoveryPolicy(p,key,2,false);
+    assertThat(platform.advance(fenceProof(2,revoked))).isTrue();
+    restoreLogical(before);assertThat(logicalSnapshot()).isEqualTo(before);
+    assertThat(StorageRecoveryRuntime.databaseStartedAt(db)).isEqualTo(postmaster);assertThat(runtime.sessionId()).isEqualTo(session);
+    assertThat(policyRegistry().active().orElseThrow().version()).isOne();
+    assertThat(db.sql("select state from ouf_authorization.storage_recovery_decision").query(String.class).single()).isEqualTo("DELIVERED");
+    assertThatThrownBy(()->guarded.prepare(p,request(key+"-after-rollback"))).hasMessageContaining("admission generation revoked or differs");
+    assertThatThrownBy(()->guarded.deliver(decision.id(),1)).hasMessageContaining("admission generation revoked or differs");
+    assertThatThrownBy(()->owner.beginDrain(e)).hasMessageContaining("admission generation revoked or differs");
+    assertThatThrownBy(()->owner.reconcile((UUID)originalIntent.get("intent_id"),e,store)).hasMessageContaining("admission generation revoked or differs");
+    assertThatThrownBy(()->owner.freeze(e)).hasMessageContaining("admission generation revoked or differs");
+    assertThat(logicalSnapshot()).isEqualTo(before);assertThat(intent()).isEqualTo(originalIntent);assertThat(store.gets).hasValue(0);assertThat(assets()).isZero();assertThat(platform.held()).isFalse();
+    Files.writeString(evidence.resolve("logical-rollback-"+revoked+".json"),JSON.writeValueAsString(Map.of("scope","Authorization tables and owner delivery/action projection only","postmasterBefore",postmaster.toString(),"postmasterAfter",StorageRecoveryRuntime.databaseStartedAt(db).toString(),"runtimeSession",session,"externalGeneration",2,"externalRevoked",revoked,"snapshot",before,"snapshotAfterDeniedAttempts",logicalSnapshot(),"reconciliationReads",intent().get("reconciliation_reads"),"getCalls",store.gets.get()))+"\n");
+    System.out.println("LOGICAL_ROLLBACK_PASS "+JSON.writeValueAsString(Map.of("externalRevoked",revoked,"postmasterUnchanged",true,"runtimeUnchanged",true,"restoredSnapshotUnchanged",true,"deniedAttempts",5,"reconciliationReads",128,"getCalls",0,"snapshotSha256",HASHES.of(before))));
+  }
+  @Test void logicalAuthorizationRollbackCannotUndoIndependentRevocationInLiveWorker()throws Exception{logicalRollbackWithLiveWorker(true);}
+  @Test void logicalAuthorizationRollbackCannotReuseLiveWorkerAfterGenerationOnlyChange()throws Exception{logicalRollbackWithLiveWorker(false);}
 }

@@ -1,5 +1,8 @@
 # Storage recovery decision delivery — same-database integration
 
+See [platform lease binding](STORAGE_RECOVERY_PLATFORM_LEASE.md) for the explicit current-authority
+adapter, transaction completion lifecycle and scoped logical Authorization rollback qualification.
+
 `StorageRecoveryAuthorization` connects the existing Authorization policy registry to
 the private storage recovery owner. `PolicyStorageRecoveryGate` consumes its delivered
 decision inside the owner transaction. Neither class is a Spring bean or an endpoint;

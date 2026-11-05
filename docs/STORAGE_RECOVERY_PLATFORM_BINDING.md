@@ -1,5 +1,10 @@
 # Storage recovery platform binding — internal integration contract
 
+Current increment: [transaction-held platform lease and scoped logical rollback](STORAGE_RECOVERY_PLATFORM_LEASE.md)
+defines the explicit adapter and qualification with an unchanged JVM/postmaster. It covers
+Authorization/projection table replay; full-owner rollback and production provider remain open.
+The original physical-incarnation contract below remains applicable.
+
 This contract tightens the existing private owner boundary. It is not a new frozen PET
 capability, a grant issuer, an endpoint, or an installed production adapter. Authorization
 continues to own policy decisions; Gateway owns identity/routing; THS owns protected HUMAN
