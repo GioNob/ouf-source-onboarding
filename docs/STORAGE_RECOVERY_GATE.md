@@ -4,6 +4,10 @@ This change prepares and exercises an internal adapter boundary; it does not ins
 production authorization adapter, grant authority, expose an endpoint, or revoke writers.
 The four-argument `ManagedFileStorageRecovery` constructor now denies every operation.
 Only an explicitly supplied trusted `StorageRecoveryGate` can admit the internal protocol.
+It also requires a `StorageRecoveryRuntime` created by trusted startup for the configured
+installation, with a new random session and the observed PostgreSQL postmaster start time.
+The five-argument constructor with an adapter but without this runtime binding denies access.
+See [platform binding and restore boundary](STORAGE_RECOVERY_PLATFORM_BINDING.md).
 
 ## Contract basis
 
@@ -28,6 +32,9 @@ epoch, non-revoked decision, evidence references and a positive finite authority
 of at most 24 hours, against the database clock. Drain may precede quiescence; reconcile
 and freeze require current quiescence evidence. The evidence record is an internal
 adapter result, never a client-supplied proof or a signature verifier.
+The evidence must also match the installation/runtime session. Quiescence has a separate
+runtime-session binding; rebinding authority alone cannot refresh custody. A PostgreSQL
+restart/physical restore invalidates a worker that remains alive, even before gate lookup.
 
 Reconciliation checks and locks the evidence before reserving the existing durable
 128-read/24-hour intent budget. It persists READ_RESERVED, commits, and performs GET
@@ -62,6 +69,10 @@ roles, restricted the same S3 identity to Read/List, restarted them and verified
 actual PUT denials. The fixture authority and audit tables are included in the named
 PostgreSQL recovery snapshot and verified by independent artifact readback. This is
 evidence for the fixture identity and owner only, not proof of all deployment writers.
+The subsequent drill revokes a current synthetic decision outside the owner backup after
+the named cut. PITR restores its old unrevoked projection, which a new JVM still rejects.
+Fresh attestation from the revoked or missing current decision is refused. A JVM retained
+across the original database destruction and restore also rejects the changed database.
 
 UDP/Ingestion, mixed rollout, target identity lifecycle, governed reopening, operational
 binding and representative RPO/RTO remain open. MinIO/source-lock, release gates,

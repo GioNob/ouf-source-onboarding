@@ -9,13 +9,15 @@ import java.util.UUID;
  * and custody evidence with locks held until the caller's transaction commits, in the same
  * database/transaction as the owner. No network I/O, polling or cached allow decisions here.
  * Revocation and custody changes must conflict with those locks. Lock order: control, gate, intent.
+ * Bind current platform attestation to the trusted installation and fresh runtime session.
+ * Restored local projections cannot mint/rebind authority; quiescence needs its own current binding.
  */
 interface StorageRecoveryGate {
   String SCOPE="onboarding:managed-file-storage";
   enum Action { DRAIN, RECONCILE, FREEZE }
   record Evidence(UUID sessionId, String scope, long epoch, String decisionRef, String quiescenceRef,
                   Instant issuedAt, Instant expiresAt, boolean revoked, boolean quiescent,
-                  Set<Action> actions) {
+                  Set<Action> actions, String installationRef, UUID runtimeSessionId, UUID quiescenceRuntimeSessionId) {
     public Evidence { actions=actions==null?Set.of():Set.copyOf(actions); }
   }
   Evidence lock(Action action, long expectedEpoch, UUID intentId);

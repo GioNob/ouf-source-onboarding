@@ -39,7 +39,7 @@ def verify(archive,root,commit):
         require(sha((root/name).read_bytes())==digest,'SOURCE:'+name)
     require(j('run')['commit']==commit and j('run')['storageProofCommit']=='99594c878a3130a353531841e91c53c38741dbd0','PRODUCER_BINDINGS')
     receipt=j('receipt');require(receipt['status']=='PASS' and receipt['targetOperations']==0 and receipt['releaseAdmitted'] is False,'TERMINAL_PASS')
-    for field in ('namedPhysicalRecovery','actualOwnerTablesPreserved','pendingReconciledWithoutPut','staleApplicationWriterBlocked','staleS3PutDenied','missingWalBlocksS3'):
+    for field in ('namedPhysicalRecovery','actualOwnerTablesPreserved','pendingReconciledWithoutPut','staleApplicationWriterBlocked','staleS3PutDenied','missingWalBlocksS3','freshRuntimeAttestationRequired','revokedAuthorityRestoreBlocked','currentAuthorityOutsideOwnerBackup','liveWorkerDatabaseRestoreBlocked'):
         require(receipt[field] is True,field)
     cut=j('common-cut');require(cut['schema']=='ouf.onboarding-common-cut.v1' and cut['targetName']=='ouf_onboarding_upload_frozen_v39','NAMED_CUT')
     require(cut['sourceStopped'] and cut['storageStopped'] and cut['systemIdentifier']==receipt['systemIdentifier'],'SOURCE_CUT_IDENTITY')
@@ -69,6 +69,28 @@ def verify(archive,root,commit):
     require([a['outcome'] for a in sorted(audit,key=lambda a:a['id'])]==['DRAINED','READ_RESERVED','ACKED','FROZEN']
             and all(a['session_id']==gate[0]['session_id'] and a['decision_ref']==gate[0]['decision_ref']
                     and a['quiescence_ref']==gate[0]['quiescence_ref'] for a in audit),'ATOMIC_LAB_AUDIT')
+    restart=j('authority-restart');restored=j('authority-restore');live=j('authority-after-cut')
+    require(live=={'installationRef':'lab-installation','decisionRef':'lab-only/decision','epoch':1,'revision':2,'revoked':True},'CURRENT_REVOKED_AUTHORITY')
+    require(receipt['currentAuthoritySha256']==sha(data['authority-after-cut.json'])
+            and restored['currentAuthoritySha256']=='sha256:'+receipt['currentAuthoritySha256'],'CURRENT_AUTHORITY_BYTES')
+    require(gate[0]['installation_ref']=='lab-installation'
+            and restart['oldRuntime']==draining['storage_recovery_lab_gate'][0]['runtime_session_id']
+            and restart['currentRuntime']==gate[0]['runtime_session_id']==gate[0]['quiescence_runtime_session_id']
+            and restart['oldRuntime']!=restart['currentRuntime'],'FRESH_RUNTIME_BINDING')
+    require(all(restart[k] is True for k in ('oldAuthorityRejected','unprovenCustodyRejected','freshCustodyAfterNativeDenials'))
+            and restart['readsBeforeFreshEvidence']==restart['readsAfterRejectedAttempts']==0,'RESTART_BLOCKED_BEFORE_BUDGET')
+    require(restored['restoredRuntime']==gate[0]['runtime_session_id'] and restored['currentRuntime']!=restored['restoredRuntime']
+            and restored['restoredProjectionRevoked'] is False and restored['currentDecisionRevoked'] is True
+            and restored['currentRevision']==2
+            and all(restored[k] is True for k in ('replayRejected','freshAttestationRejected','missingAuthorityRejected')),'RESTORE_AUTHORITY_REJECTED')
+    revoked=j('revoked-after-cut-owner');expected_revoked=json.loads(json.dumps(frozen))
+    expected_revoked['storage_recovery_lab_gate'][0]['revoked']=True
+    require(revoked==expected_revoked,'REVOCATION_AFTER_NAMED_CUT')
+    ordered=sorted(audit,key=lambda a:a['id'])
+    require(ordered[0]['runtime_session_id']==restart['oldRuntime'] and ordered[0]['quiescence_runtime_session_id'] is None
+            and all(a['runtime_session_id']==a['quiescence_runtime_session_id']==restart['currentRuntime'] for a in ordered[1:]),'AUDIT_RUNTIME_BINDING')
+    worker=j('authority-live-runtime')
+    require(worker['originalDatabaseStartedAt']!=worker['restoredDatabaseStartedAt'] and worker['liveWorkerRejected'] is True,'LIVE_WORKER_DATABASE_BINDING')
     require(not base['managed_file_upload_intent'] and not base['managed_file_asset'],'BASE_PRECEDES_INTENTS')
     require(frozen==j('restored-owner')==j('restored-after-s3'),'EXACT_OWNER_AFTER_RESTORE')
     require(frozen['managed_file_storage_control']==[{'singleton':True,'epoch':1,'phase':'FROZEN'}],'PERSISTENT_FROZEN_CONTROL')
@@ -101,7 +123,7 @@ def verify(archive,root,commit):
     require(j('db-before-s3')=={'status':'PASS','restoredS3Started':0,'systemIdentifier':cut['systemIdentifier']},'DB_GATE_BEFORE_S3')
     commands=[json.loads(line) for line in data['commands.jsonl'].splitlines()]
     phases=[c['args'][-1] for c in commands if c['args'][0]=='java' and c['returncode']==0]
-    require(phases==['init','seed-drain','reconcile-freeze','verify-db','verify-s3'],'FRESH_JVM_PHASES')
+    require(phases==['init','seed-drain','reconcile-freeze','revoke-after-cut','watch-live-runtime','verify-db','verify-s3'],'FRESH_JVM_PHASES')
     states=[state for group in j('stops') for state in group.values()]
     require(len(states)==14 and all(s['Status']=='exited' and s['ExitCode']==0 and not s['OOMKilled'] for s in states),'CLEAN_NATIVE_STOPS')
     require(sum(v['bytes'] for v in objects.values())==receipt['objectBytes'],'OBJECT_BYTE_COUNT')
@@ -116,7 +138,11 @@ def negative_probes(archive,root,commit):
            ('receipt.json','TERMINAL_PASS',lambda x:x.update(status='BLOCKED')),
            ('common-cut.json','COMPONENT_BINDING',lambda x:x['components'].update(wal='0'*64)),
            ('restored-owner.json','EXACT_OWNER_AFTER_RESTORE',lambda x:x['managed_file_storage_control'][0].update(phase='ACTIVE')),
-           ('missing-wal.json','NEGATIVE_WAL_GATE',lambda x:x.update(restoredS3Started=1))]
+           ('missing-wal.json','NEGATIVE_WAL_GATE',lambda x:x.update(restoredS3Started=1)),
+           ('authority-restart.json','RESTART_BLOCKED_BEFORE_BUDGET',lambda x:x.update(oldAuthorityRejected=False)),
+           ('authority-restore.json','RESTORE_AUTHORITY_REJECTED',lambda x:x.update(freshAttestationRejected=False)),
+           ('revoked-after-cut-owner.json','REVOCATION_AFTER_NAMED_CUT',lambda x:x['storage_recovery_lab_gate'][0].update(revoked=False)),
+           ('authority-live-runtime.json','LIVE_WORKER_DATABASE_BINDING',lambda x:x.update(liveWorkerRejected=False))]
     with tempfile.TemporaryDirectory() as directory:
         for name,expected,change in cases:
             data=dict(original);value=json.loads(data[name]);change(value);data[name]=json.dumps(value).encode()

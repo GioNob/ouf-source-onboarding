@@ -32,10 +32,13 @@ def digest(path):
     with path.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
 def inventory(root):
     return {str(p.relative_to(root)):{'bytes':p.stat().st_size,'sha256':digest(p)} for p in sorted(root.rglob('*')) if p.is_file()}
-def java(phase,stage='source'):
-    env={**os.environ,'OUF_CUT_STAGE':stage}
+def java_command(phase,stage='source'):
+    env={**os.environ,'OUF_CUT_STAGE':stage,'OUF_LAB_AUTHORITY_PATH':str(WORK/'current-authority.json')}
     cp='target/test-classes:target/classes:'+Path('target/upload-cut-classpath.txt').read_text().strip()
-    return run(['java','-cp',cp,'it.comune.trieste.ouf.onboarding.application.UploadCommonCutProcess',phase],env=env,timeout=120)
+    return ['java','-cp',cp,'it.comune.trieste.ouf.onboarding.application.UploadCommonCutProcess',phase],env
+def java(phase,stage='source'):
+    args,env=java_command(phase,stage)
+    return run(args,env=env,timeout=120)
 def ready(name):
     deadline=time.monotonic()+60
     for _ in range(120):
@@ -90,7 +93,7 @@ def main():
     PROOF.mkdir(parents=True,exist_ok=True);WORK.mkdir();WORK.chmod(0o755)
     export=WORK/'export';export.mkdir();export.chmod(0o777)
     wal=export/'wal';wal.mkdir();wal.chmod(0o777)
-    states=[]
+    states=[];watch=None;watch_output=None
     receipt={'status':'BLOCKED','targetOperations':0,'releaseAdmitted':False}
     try:
         docker('pull','postgres:17.11-alpine',timeout=180)
@@ -125,6 +128,15 @@ def main():
         target_lsn=sql("select pg_create_restore_point('%s')"%TARGET)
         segment=sql("select pg_walfile_name('%s'::pg_lsn)"%target_lsn)
         assert 'pg_wal/'+segment not in base_index
+        # This decision file is outside export/recovered/positive and is never extracted from a backup.
+        java('revoke-after-cut');authority_hash=digest(WORK/'current-authority.json')
+        watch_args,watch_env=java_command('watch-live-runtime')
+        watch_output=(PROOF/'live-runtime-watch.log').open('wb')
+        watch=subprocess.Popen(watch_args,stdout=watch_output,stderr=subprocess.STDOUT,env=watch_env)
+        deadline=time.monotonic()+30
+        while not (WORK/'watch-ready').exists():
+            if watch.poll() is not None or time.monotonic()>deadline:raise RuntimeError('Live-runtime watcher did not become ready')
+            time.sleep(.1)
         sql("update ouf_onboarding.cut_canary set value='after-cut'; select pg_switch_wal()")
         deadline=time.monotonic()+30
         while not (wal/segment).exists():
@@ -164,7 +176,14 @@ def main():
         positive=WORK/'positive';shutil.copytree(recovered/'base',positive)
         start_restore(PG,positive,recovered/'wal',image['Id']);ready(PG)
         assert sql('select system_identifier::text from pg_control_system()')==system_id
+        (WORK/'watch-resume').write_text('restored')
+        code=watch.wait(timeout=30);watch_output.close();watch_output=None
+        with (PROOF/'commands.jsonl').open('a') as f:
+            f.write(json.dumps({'args':watch_args,'returncode':code,'stdout':(PROOF/'live-runtime-watch.log').read_text(),'stderr':''})+'\n')
+        assert code==0,'Live worker accepted changed database or watcher failed'
+        watch=None
         java('verify-db','restored')
+        assert digest(WORK/'current-authority.json')==authority_hash
         write(PROOF/'db-before-s3.json',{'status':'PASS','restoredS3Started':0,'systemIdentifier':system_id})
         restored_storage=WORK/'restored-storage';shutil.copytree(recovered/'cold',restored_storage)
         for r in ROLES:own(restored_storage/r,'65532:65532')
@@ -177,8 +196,16 @@ def main():
             missingWalBlocksS3=True,objects=2,objectBytes=36,cleanStorageStops=12,cleanPostgresStops=2,
             targetName=TARGET,systemIdentifier=system_id,postgresImageId=image['Id'],
             backupFiles=sum(map(len,(base_index,wal_index,cold_index))),
+            freshRuntimeAttestationRequired=True,revokedAuthorityRestoreBlocked=True,
+            currentAuthorityOutsideOwnerBackup=True,currentAuthoritySha256=authority_hash,
+            liveWorkerDatabaseRestoreBlocked=True,
             scope='synthetic Onboarding owner only; no UDP/Ingestion or operational binding')
     finally:
+        if watch is not None and watch.poll() is None:
+            watch.terminate()
+            try:watch.wait(timeout=5)
+            except subprocess.TimeoutExpired:watch.kill();watch.wait(timeout=5)
+        if watch_output is not None:watch_output.close()
         write(PROOF/'stops.json',states);write(PROOF/'receipt.json',receipt)
         for name in [PG,*('ouf-upload-native-'+r for r in reversed(ROLES))]:
             result=docker('inspect',name,check=False)

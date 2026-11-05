@@ -23,6 +23,7 @@ class ManagedFileUploadNativeTest {
   static final byte[] CSV="\uFEFFid;name\r\n1;Trieste\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
   static JdbcClient db;static TransactionTemplate tx;static MinioClient client;static MinioManagedFileStagingStore real;
   static Path evidence;Path spool;String key;CountingStore store;
+  StorageRecoveryRuntime runtime;
   @BeforeAll static void setup()throws Exception{
     var ds=UploadCrashProcess.datasource();db=JdbcClient.create(ds);tx=new TransactionTemplate(new DataSourceTransactionManager(ds));
     evidence=Path.of("target/upload-native");Files.createDirectories(evidence);
@@ -43,7 +44,7 @@ class ManagedFileUploadNativeTest {
   @BeforeEach void before()throws Exception{
     db.sql("truncate ouf_onboarding.source,ouf_onboarding.managed_file_asset restart identity cascade").update();
     db.sql("update ouf_onboarding.managed_file_storage_control set epoch=epoch+1,phase='ACTIVE'").update();
-    StorageRecoveryLabGate.init(db,epoch(),true);
+    runtime=StorageRecoveryRuntime.start("lab-installation",db);StorageRecoveryLabGate.init(db,epoch(),true,runtime);
     spool=Files.createTempFile("ouf-upload-fixture-",".csv");Files.write(spool,CSV);key=UUID.randomUUID().toString();store=new CountingStore();
   }
   @AfterEach void proof(TestInfo info)throws Exception{
@@ -167,7 +168,8 @@ class ManagedFileUploadNativeTest {
     var unkeyed2=owner().registerDirectUpload("tenant-a","alice",null,HASHES.ofBytes(CSV),CSV.length,store,spool);
     assertThat(unkeyed1.get("asset_id")).isNotEqualTo(unkeyed2.get("asset_id"));assertThat(store.puts).hasValue(3);
   }
-  ManagedFileStorageRecovery recovery(){return new ManagedFileStorageRecovery(db,tx,owner(),HASHES,new StorageRecoveryLabGate(db));}
+  ManagedFileStorageRecovery recovery(){return recovery(runtime);}
+  ManagedFileStorageRecovery recovery(StorageRecoveryRuntime binding){return new ManagedFileStorageRecovery(db,tx,owner(),HASHES,new StorageRecoveryLabGate(db),binding);}
   long epoch(){return db.sql("select epoch from ouf_onboarding.managed_file_storage_control").query(Long.class).single();}
   @Test void recoveryDrainReconcilesThenFreezesWithoutAnotherPut(){
     store.loseReply=true;assertThatThrownBy(this::upload).hasMessageContaining("reconciliation");
@@ -275,7 +277,7 @@ class ManagedFileUploadNativeTest {
     for(String change:List.of("scope='tenant-a:profile'","actions='DRAIN'","epoch=epoch+1","revoked=true",
         "issued_at=clock_timestamp()+interval '1 minute'","expires_at=clock_timestamp()-interval '1 second'",
         "expires_at=issued_at+interval '25 hours'","decision_ref=''")){
-      StorageRecoveryLabGate.init(db,e,true);gateUpdate(change);
+      StorageRecoveryLabGate.init(db,e,true,runtime);gateUpdate(change);
       assertThatThrownBy(()->recovery().reconcile(id,e,store)).isInstanceOf(DomainFailure.class);
     }
     assertThat(intent()).containsEntry("reconciliation_reads",0);assertThat(store.gets).hasValue(0);assertThat(assets()).isZero();
@@ -329,7 +331,7 @@ class ManagedFileUploadNativeTest {
       public Evidence lock(Action a,long epoch,UUID intent){return delegate.lock(a,epoch,intent);}
       public void record(Evidence p,Action a,UUID intent,String outcome){delegate.record(p,a,intent,outcome);if("ACKED".equals(outcome))throw new IllegalStateException("fixture audit unavailable");}
     };
-    var guarded=new ManagedFileStorageRecovery(db,tx,owner(),HASHES,failing);
+    var guarded=new ManagedFileStorageRecovery(db,tx,owner(),HASHES,failing,runtime);
     assertThatThrownBy(()->guarded.reconcile(id,e,store)).hasMessageContaining("audit unavailable");
     assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
     assertThat(db.sql("select outcome from ouf_onboarding.storage_recovery_lab_audit order by id").query(String.class).list()).containsExactly("DRAINED","READ_RESERVED");
@@ -353,7 +355,7 @@ class ManagedFileUploadNativeTest {
         if("ACKED".equals(outcome)){delayed.incrementAndGet();db.sql("select pg_sleep(3)").query().listOfRows();}
       }
     };
-    assertThatThrownBy(()->new ManagedFileStorageRecovery(db,tx,owner(),HASHES,slow).reconcile(id,e,store)).hasMessageContaining("expired before transition completion");
+    assertThatThrownBy(()->new ManagedFileStorageRecovery(db,tx,owner(),HASHES,slow,runtime).reconcile(id,e,store)).hasMessageContaining("expired before transition completion");
     assertThat(delayed).hasValue(1);assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
     assertThat(db.sql("select outcome from ouf_onboarding.storage_recovery_lab_audit order by id").query(String.class).list()).containsExactly("DRAINED","READ_RESERVED");
   }
@@ -369,5 +371,49 @@ class ManagedFileUploadNativeTest {
       release.countDown();held.get(15,TimeUnit.SECONDS);
       assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("ACTIVE");
     }finally{release.countDown();pool.shutdownNow();}
+  }
+  @Test void adapterWithoutTrustedRuntimeBindingIsDenied(){
+    var unbound=new ManagedFileStorageRecovery(db,tx,owner(),HASHES,new StorageRecoveryLabGate(db));
+    assertThatThrownBy(()->unbound.beginDrain(epoch())).hasMessageContaining("runtime binding unavailable");
+    assertThat(db.sql("select phase from ouf_onboarding.managed_file_storage_control").query(String.class).single()).isEqualTo("ACTIVE");
+  }
+  @Test void freshRuntimeCannotReusePersistedAuthorityOrSpendIntentBudget(){
+    UUID id=pendingRecovery();var replacement=StorageRecoveryRuntime.start("lab-installation",db);
+    assertThat(replacement.sessionId()).isNotEqualTo(runtime.sessionId());
+    assertThatThrownBy(()->recovery(replacement).reconcile(id,epoch(),store)).hasMessageContaining("runtime binding differs");
+    assertThatThrownBy(()->recovery(replacement).freeze(epoch())).hasMessageContaining("runtime binding differs");
+    assertThat(store.gets).hasValue(0);assertThat(assets()).isZero();assertThat(intent()).containsEntry("reconciliation_reads",0);
+  }
+  @Test void installationBindingIsIndependentOfMatchingRuntimeNonce(){
+    UUID id=pendingRecovery();gateUpdate("installation_ref='another-installation'");
+    assertThatThrownBy(()->recovery().reconcile(id,epoch(),store)).hasMessageContaining("runtime binding differs");
+    assertThat(store.gets).hasValue(0);assertThat(intent()).containsEntry("reconciliation_reads",0);
+  }
+  void bindRuntimeOnly(StorageRecoveryRuntime binding){
+    db.sql("update ouf_onboarding.storage_recovery_lab_gate set runtime_session_id=:r").param("r",binding.sessionId()).update();
+  }
+  @Test void freshAuthorityBindingDoesNotRenewOldQuiescence(){
+    UUID id=pendingRecovery();var replacement=StorageRecoveryRuntime.start("lab-installation",db);bindRuntimeOnly(replacement);
+    assertThatThrownBy(()->recovery(replacement).reconcile(id,epoch(),store)).hasMessageContaining("quiescence");
+    assertThatThrownBy(()->recovery(replacement).freeze(epoch())).hasMessageContaining("quiescence");
+    assertThat(store.gets).hasValue(0);assertThat(intent()).containsEntry("reconciliation_reads",0);
+  }
+  @Test void reboundAuthorityAndCustodyDoNotResetExhaustedIntentBudget(){
+    UUID id=pendingRecovery();db.sql("update ouf_onboarding.managed_file_upload_intent set reconciliation_reads=128").update();
+    var replacement=StorageRecoveryRuntime.start("lab-installation",db);bindRuntimeOnly(replacement);
+    db.sql("update ouf_onboarding.storage_recovery_lab_gate set quiescence_runtime_session_id=:r").param("r",replacement.sessionId()).update();
+    assertThatThrownBy(()->recovery(replacement).reconcile(id,epoch(),store)).hasMessageContaining("budget exhausted");
+    assertThat(intent()).containsEntry("reconciliation_reads",128);assertThat(store.gets).hasValue(0);
+  }
+  @Test void matchingFreshBindingCannotOverrideRevocation(){
+    UUID id=pendingRecovery();var replacement=StorageRecoveryRuntime.start("lab-installation",db);bindRuntimeOnly(replacement);
+    db.sql("update ouf_onboarding.storage_recovery_lab_gate set revoked=true,quiescence_runtime_session_id=:r").param("r",replacement.sessionId()).update();
+    assertThatThrownBy(()->recovery(replacement).reconcile(id,epoch(),store)).hasMessageContaining("authority denied");
+    assertThat(intent()).containsEntry("reconciliation_reads",0);assertThat(store.gets).hasValue(0);
+  }
+  @Test void runtimeBindingChangeDuringGetRejectsLateAck(){
+    UUID id=pendingRecovery();long e=epoch();var replacement=StorageRecoveryRuntime.start("lab-installation",db);
+    assertThatThrownBy(()->recovery().reconcile(id,e,changedDuringGet(()->bindRuntimeOnly(replacement)))).hasMessageContaining("runtime binding differs");
+    assertThat(assets()).isZero();assertThat(intent()).containsEntry("state","DISPATCHED").containsEntry("reconciliation_reads",1);
   }
 }

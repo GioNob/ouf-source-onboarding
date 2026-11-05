@@ -21,14 +21,19 @@ final class ManagedFileStorageRecovery {
   private final ManagedFileService files;
   private final CanonicalHash hashes;
   private final StorageRecoveryGate gate;
+  private final StorageRecoveryRuntime runtime;
 
   ManagedFileStorageRecovery(JdbcClient db, TransactionTemplate tx, ManagedFileService files, CanonicalHash hashes) {
     this(db,tx,files,hashes,null);
   }
 
   ManagedFileStorageRecovery(JdbcClient db, TransactionTemplate tx, ManagedFileService files, CanonicalHash hashes, StorageRecoveryGate gate) {
+    this(db,tx,files,hashes,gate,null);
+  }
+
+  ManagedFileStorageRecovery(JdbcClient db, TransactionTemplate tx, ManagedFileService files, CanonicalHash hashes, StorageRecoveryGate gate, StorageRecoveryRuntime runtime) {
     this.db=db; this.tx=new TransactionTemplate(tx.getTransactionManager()); this.tx.setTimeout(12);
-    this.files=files; this.hashes=hashes; this.gate=gate;
+    this.files=files; this.hashes=hashes; this.gate=gate; this.runtime=runtime;
   }
 
   void beginDrain(long expectedEpoch) {
@@ -102,17 +107,23 @@ final class ManagedFileStorageRecovery {
   private record Reservation(Map<String,Object> row, StorageRecoveryGate.Evidence evidence) {}
   private StorageRecoveryGate.Evidence authorize(StorageRecoveryGate.Action action,long epoch,UUID intentId) {
     if(gate==null)throw blocked("Storage recovery authority adapter unavailable");
+    if(runtime==null)throw blocked("Storage recovery runtime binding unavailable");
+    if(!runtime.databaseStartedAt().equals(StorageRecoveryRuntime.databaseStartedAt(db)))
+      throw blocked("Storage recovery database binding differs; restart and current attestation required");
     var evidence=gate.lock(action,epoch,intentId);
     var now=db.sql("select clock_timestamp()").query(OffsetDateTime.class).single().toInstant();
     if(evidence==null || evidence.sessionId()==null || !StorageRecoveryGate.SCOPE.equals(evidence.scope())
         || evidence.revoked() || !reference(evidence.decisionRef())
         || !evidence.actions().contains(action))throw blocked("Storage recovery authority denied");
+    if(!runtime.installationRef().equals(evidence.installationRef()) || !runtime.sessionId().equals(evidence.runtimeSessionId()))
+      throw blocked("Storage recovery runtime binding differs; current platform attestation required");
     if(evidence.epoch()!=epoch)throw blocked("Storage recovery authority generation differs");
     if(evidence.issuedAt()==null || evidence.expiresAt()==null || evidence.issuedAt().isAfter(now)
         || !now.isBefore(evidence.expiresAt()) || !evidence.issuedAt().isBefore(evidence.expiresAt())
         || Duration.between(evidence.issuedAt(),evidence.expiresAt()).compareTo(Duration.ofHours(24))>0)
       throw blocked("Storage recovery authority expired or invalid duration");
-    if(action!=DRAIN && (!evidence.quiescent() || !reference(evidence.quiescenceRef())))
+    if(action!=DRAIN && (!evidence.quiescent() || !reference(evidence.quiescenceRef())
+        || !runtime.sessionId().equals(evidence.quiescenceRuntimeSessionId())))
       throw blocked("Current storage quiescence evidence required");
     return evidence;
   }
