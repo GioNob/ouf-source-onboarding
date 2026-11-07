@@ -12,7 +12,7 @@ public final class ManagedProfileFailurePolicy {
       "Gateway object exceeds the registered size","Staged size does not match downloaded content",
       "Staged content hash does not match downloaded content","Onboarding workload token is invalid",
       "Onboarding workload token is unavailable","CSV must be valid UTF-8 text","CSV must be UTF-8 text",
-      "headers must be non-empty and unique","invalid CSV","row limit exceeded","column limit exceeded",
+      "headers must be non-empty and unique","invalid CSV","CSV row exceeds declared headers","row limit exceeded","column limit exceeded",
       "file size outside profiling limits","unsupported media type");
   public static Decision classify(Exception failure,Duration legacyDelay){
     if(legacyDelay==null||legacyDelay.isNegative())throw new IllegalArgumentException("ONB_RETRY_DELAY_INVALID");
