@@ -66,7 +66,7 @@ public final class ManagedFileExecutionProposal {
     Map<String,Object> resolution=object(udp,"resolution"),policy=object(resolution,"governedIdentity");
     GovernedIdentityProposal.validate(resolution,policy,sourceId,classes,mapped);
     require(tenant.equals(policy.get("tenantId")));
-    for(Object raw:list(policy.get("signals"),1,32)){
+    for(Object raw:list(policy.get("signals"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> signal=map(raw);require((text(signal,"id")+"@"+publication).equals(signal.get("semanticRef")));
     }
     Map<String,Object> materialization=object(udp,"materialization");

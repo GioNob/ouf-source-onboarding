@@ -114,6 +114,12 @@ class ManagedFileExecutionProposalTest {
       object(object(c,"extractionProfile"),"projection").put("FILE",fields);
       object(c,"semanticMapping").put("propertyMappings",mappings);c.put("dataAccessPolicies",labels);
       object(p.udp(),"materialization").put("properties",properties);
+      var signals=new ArrayList<Map<String,Object>>();
+      for(var property:properties){
+        String iri=(String)property.get("propertyIri");
+        signals.add(Map.of("id",iri,"semanticRef",iri+"@"+PUBLICATION,"comparator","TEXT_V1","excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","urn:fixture:reviewed-assertion"));
+      }
+      object(object(p.udp(),"resolution"),"governedIdentity").put("signals",signals);
       var wide=new ManagedFileExecutionProposal.Proposal(p.semanticBindings(),PUBLICATION,p.udp(),new ManagedFileExecutionProposal.Limits(100,count,1000));
       if(count>1024){assertThatThrownBy(()->compile(c,wide)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");continue;}
       var compiled=compile(c,wide);var runtime=object(object(compiled,"extractionProfile"),"runtime");
