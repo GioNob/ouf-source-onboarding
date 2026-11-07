@@ -44,4 +44,15 @@ class ManagedWideProfileTest {
     assertThat(elapsed).isLessThan(60000);
     System.out.println("OUF_WIDE_PROFILE_PROBE={\"columns\":1024,\"rows\":10000,\"inputBytes\":"+input.length+",\"elapsedMs\":"+elapsed+",\"maxHeapBytes\":"+Runtime.getRuntime().maxMemory()+",\"nativeJvm\":true,\"syntheticInput\":true}");
   }
+
+  @Test void streamingRetainsExactTypesDistinctCountsAndLexicalSamples() {
+    var p=new ManagedFileProfiler().profile("id;amount;optional;note\n1;1.5;; alpha \n2;2;true;beta\n3;3.5;false;alpha\n".getBytes(StandardCharsets.UTF_8),"text/csv");
+    assertThat(p.columns()).containsExactly(
+        new ManagedFileProfiler.ColumnProfile("id","LONG",false,3),
+        new ManagedFileProfiler.ColumnProfile("amount","DECIMAL",false,3),
+        new ManagedFileProfiler.ColumnProfile("optional","BOOLEAN",true,2),
+        new ManagedFileProfiler.ColumnProfile("note","STRING",false,2));
+    assertThat(p.candidateKeys()).containsExactly("id","amount");
+    assertThat(p.sample().getFirst()).containsEntry("note"," alpha ");
+  }
 }
