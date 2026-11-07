@@ -35,12 +35,12 @@ public final class ManagedFileExecutionProposal {
     long size=integer(asset.get("size_bytes"),1,10_485_760);
     Limits limits=proposal.limits();require(limits!=null);
     integer(limits.maxRows(),1,1_000_000);integer(limits.maxColumns(),1,10_000);integer(limits.maxCellChars(),1,1_000_000);
-    List<?> fields=list(object(extraction,"projection").get("FILE"),1,32);
+    List<?> fields=list(object(extraction,"projection").get("FILE"),1,ManagedFileLimits.MAX_COLUMNS);
     require(fields.size()<=limits.maxColumns() && new HashSet<>(fields).size()==fields.size());
     Set<String> mapped=new LinkedHashSet<>(),mappedFields=new LinkedHashSet<>(),classes=new LinkedHashSet<>();
     Map<String,String> declaredDatatypes=new HashMap<>();
     for(Object raw:list(semantic.get("targetClasses"),1,32))classes.add(iri(text(map(raw),"classIri")));
-    for(Object raw:list(semantic.get("propertyMappings"),1,32)){
+    for(Object raw:list(semantic.get("propertyMappings"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> mapping=map(raw);String field=text(mapping,"sourceField");
       require(fields.contains(field) && mappedFields.add(field) && DATATYPES.containsKey(text(mapping,"transform"))
           && mapped.add(iri(text(mapping,"targetPropertyIri"))));
@@ -74,12 +74,12 @@ public final class ManagedFileExecutionProposal {
     text(materialization,"policyRef");integer(materialization.get("checkpointInterval"),1,1_000_000);
     list(materialization.get("bitemporalProperties"),0,0);
     Map<String,String> labels=new HashMap<>();
-    for(Object raw:list(config.get("dataAccessPolicies"),1,32)){
+    for(Object raw:list(config.get("dataAccessPolicies"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> label=map(raw);require("PROPERTY".equals(label.get("scope")));
       require(labels.put(text(label,"target"),text(label,"label"))==null);
     }
     require(labels.keySet().equals(mapped));Set<String> properties=new HashSet<>();
-    for(Object raw:list(materialization.get("properties"),1,32)){
+    for(Object raw:list(materialization.get("properties"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> property=map(raw);keys(property,"sourceField","propertyIri","datatype","accessLabel","authorityOrder");
       String iri=text(property,"propertyIri");
       require(mapped.contains(iri) && properties.add(iri) && iri.equals(property.get("sourceField"))

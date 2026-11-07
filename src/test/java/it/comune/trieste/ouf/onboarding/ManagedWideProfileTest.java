@@ -45,6 +45,25 @@ class ManagedWideProfileTest {
     System.out.println("OUF_WIDE_PROFILE_PROBE={\"columns\":1024,\"rows\":10000,\"inputBytes\":"+input.length+",\"elapsedMs\":"+elapsed+",\"maxHeapBytes\":"+Runtime.getRuntime().maxMemory()+",\"nativeJvm\":true,\"syntheticInput\":true}");
   }
 
+  @Test void denseHighCardinalityStaysWithinTheSameHeapAndKeepsExactCounts() {
+    StringBuilder csv=new StringBuilder(10*1024*1024);
+    for(int c=0;c<1024;c++)csv.append(c==0?"":";").append("campo_").append(c);
+    csv.append('\n');
+    for(int r=0;r<2000;r++){
+      for(int c=0;c<1024;c++)csv.append(c==0?"":";").append(r);
+      csv.append('\n');
+    }
+    byte[] bytes=csv.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    csv=null;
+    assertThat(bytes.length).isLessThanOrEqualTo(10*1024*1024);
+    long start=System.nanoTime();
+    var result=new ManagedFileProfiler().profile(bytes,"text/csv");
+    assertThat(result.columns()).hasSize(1024).allSatisfy(c->assertThat(c.distinctValues()).isEqualTo(2000));
+    assertThat(result.candidateKeys()).hasSize(1024);
+    long elapsed=(System.nanoTime()-start)/1_000_000;
+    assertThat(elapsed).isLessThan(60_000);
+    System.out.println("OUF_DENSE_PROFILE_PROBE={\"columns\":1024,\"rows\":2000,\"inputBytes\":"+bytes.length+",\"elapsedMs\":"+elapsed+",\"maxHeapBytes\":"+Runtime.getRuntime().maxMemory()+"}");
+  }
   @Test void streamingRetainsExactTypesDistinctCountsAndLexicalSamples() {
     var p=new ManagedFileProfiler().profile("id;amount;optional;note\n1;1.5;; alpha \n2;2;true;beta\n3;3.5;false;alpha\n".getBytes(StandardCharsets.UTF_8),"text/csv");
     assertThat(p.columns()).containsExactly(

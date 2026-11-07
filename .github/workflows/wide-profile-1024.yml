@@ -28,7 +28,7 @@ jobs:
       - name: Actual profiler, owned pages and complete idempotent draft
         run: >-
           mvn -B -ntp -DargLine=-Xmx384m
-          -Dtest=ManagedWideProfileTest,ManagedWideProfileRuntimeTest,ManagedFileProfilerBomTest,ManagedFileMcpApiTest,ManagedProfileBudgetRuntimeTest,ManagedProfileFailureRuntimeTest
+          -Dtest=ManagedFileExecutionProposalTest,ManagedWideProfileTest,ManagedWideProfileRuntimeTest,ManagedFileProfilerBomTest,ManagedFileMcpApiTest,ManagedProfileBudgetRuntimeTest,ManagedProfileFailureRuntimeTest
           test
       - uses: actions/upload-artifact@v4
         if: always()
