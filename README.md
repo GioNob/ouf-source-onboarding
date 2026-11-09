@@ -76,3 +76,18 @@ e non costituiscono ancora tool chatbot o una directory utenti IAM.
 ## Chatbot e THS per i permessi
 
 Configurazione IAM, sessione, chiavi, ciclo proposta/conferma e collaudo: [guida operativa](docs/PERMISSION_PROPOSALS.md).
+
+Il rinnovo nominale usa `scripts/r4a_human_grant_lifecycle.py --operation renew`
+con le fasi `plan`, `draft` (include la preview owner), `preview`, `publish`,
+`verify`. Richiede manifest esplicito, nuova scadenza e file di stato privato;
+conserva gli ID e modifica solo `validUntil` di grant già scaduti. Il publish
+richiede `--confirm-publish` e `--reviewed-draft-hash` dalla preview approvata.
+Un esito HTTP ambiguo non viene rigiocato; il file di stato conserva la fase
+per la riconciliazione owner. La disponibilità dello script non attesta un
+rinnovo sul VPS.
+
+Cleanup dopo l'E2E: i grant di ruolo con `allowedDataLabels`/`allowedDetailLevels`
+non vuoti non coprono la risoluzione delle capability su un `ResourceContext`
+senza etichette. Decidere il contratto tra `OufRoleCatalogue` e
+`GrantConstraints.matches()`; il rinnovo nominale non modifica tale semantica.
+
