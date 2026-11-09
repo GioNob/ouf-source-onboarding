@@ -175,7 +175,7 @@ def review(base, token, state):
                  lifecycle.normalize_grant(expected[change["grantId"]][side])
                  for side in ("before", "after")), "RENEW_PREVIEW_GRANT_CONTENT_CHANGED")
     need(isinstance(value.get("draftHash"), str)
-         and re.fullmatch(r"[0-9a-f]{64}", value["draftHash"]), "RENEW_PREVIEW_HASH_INVALID")
+         and re.fullmatch(r"sha256:[0-9a-f]{64}", value["draftHash"]), "RENEW_PREVIEW_HASH_INVALID")
     return value
 
 

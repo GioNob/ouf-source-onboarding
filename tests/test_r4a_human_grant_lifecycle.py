@@ -139,7 +139,7 @@ class RenewalOwner:
             before = {g["grantId"]: g for g in self.current["policy"]["grants"]}
             value = {"draftId": self.draft["id"], "revision": self.draft["revision"],
                      "baseActiveRef": self.draft["baseActiveRef"], "addedCapabilities": [],
-                     "removedCapabilities": [], "draftHash": renew.policy_hash(self.draft["policy"]),
+                     "removedCapabilities": [], "draftHash": "sha256:" + renew.policy_hash(self.draft["policy"]),
                      "grantChanges": [{"grantId": g["grantId"], "before": before[g["grantId"]],
                                        "after": copy.deepcopy(g)}
                                       for g in self.draft["policy"]["grants"] if g != before[g["grantId"]]]}
@@ -307,6 +307,25 @@ def test_full_draft_check_catches_other_tenant_or_unselected_changes(renewal_cas
         run_phase(renewal_case, "preview")
 
 
+@pytest.mark.parametrize("invalid_hash", ["a" * 64, "sha256:" + "a" * 63, "sha256:" + "A" * 64],
+                         ids=["missing-prefix", "wrong-length", "uppercase"])
+def test_preview_validates_and_preserves_owner_hash(renewal_case, owner, capsys, invalid_hash):
+    run_phase(renewal_case, "plan")
+    capsys.readouterr()
+    owner.preview_edit = lambda value: value.update(draftHash=invalid_hash)
+    with pytest.raises(ValueError, match="RENEW_PREVIEW_HASH_INVALID"):
+        run_phase(renewal_case, "draft")
+
+    owner_hash = "sha256:" + "0123456789abcdef" * 4
+    owner.preview_edit = lambda value: value.update(draftHash=owner_hash)
+    run_phase(renewal_case, "preview")
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["draftId"] == owner.draft["id"]
+    assert preview["draftHash"] == owner_hash
+    assert human.lifecycle.read_state(renewal_case.args.state_file)["previewHash"] == owner_hash
+    assert owner.calls.count(("POST", "/policies")) == 1
+
+
 def test_preview_failure_keeps_id_and_resumes_without_new_draft(renewal_case, owner):
     run_phase(renewal_case, "plan")
     owner.fail = "/policies/40c0e7a5-2123-4807-a147-35697149e319:preview"
@@ -346,7 +365,7 @@ def test_publish_checks_active_and_fresh_owner_preview(renewal_case, owner):
     run_phase(renewal_case, "draft")
     renewal_case.args.confirm_publish = True
     renewal_case.args.reviewed_draft_hash = human.lifecycle.read_state(renewal_case.args.state_file)["previewHash"]
-    owner.preview_edit = lambda value: value.update(draftHash="0" * 64)
+    owner.preview_edit = lambda value: value.update(draftHash="sha256:" + "0" * 64)
     with pytest.raises(ValueError, match="RENEW_REVIEWED_HASH_MISMATCH"):
         run_phase(renewal_case, "publish")
     owner.current["policyRef"] = "test-bundle:99"
