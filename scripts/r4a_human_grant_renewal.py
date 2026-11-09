@@ -1,4 +1,4 @@
-"""Expiry-only HUMAN renewal through the existing Authorization owner API.
+"""Expiry-only HUMAN and SERVICE renewal through the Authorization owner API.
 
 Finite operator workflow: no automatic retries of mutations. An interrupted
 create/publish is retained in the private state and requires reconciliation.
@@ -19,6 +19,7 @@ from uuid import UUID
 import r4a_service_grant_lifecycle as lifecycle
 
 SCHEMA = "ouf.human-grant-renewal.v1"
+SERVICE_SCHEMA = "ouf.service-grant-renewal.v1"
 
 
 def need(condition, code):
@@ -39,18 +40,36 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
-def selectors(path):
+def selectors(path, grant_type="HUMAN"):
     rows = json.loads(path.read_text())
     need(isinstance(rows, list) and 0 < len(rows) <= 100, "RENEW_MANIFEST_INVALID")
+    fields = {"grantId", "capabilityId"}
+    if grant_type == "SERVICE":
+        fields.add("servicePrincipalId")
     ids = set()
     for row in rows:
-        need(isinstance(row, dict) and set(row) == {"grantId", "capabilityId"},
-             "RENEW_MANIFEST_INVALID")
-        need(all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9._-]+", v)
-                 for v in row.values()), "RENEW_MANIFEST_INVALID")
+        need(isinstance(row, dict) and set(row) == fields, "RENEW_MANIFEST_INVALID")
+        need(all(isinstance(row[k], str) and re.fullmatch(r"[A-Za-z0-9._-]+", row[k])
+                 for k in ("grantId", "capabilityId")), "RENEW_MANIFEST_INVALID")
+        if grant_type == "SERVICE":
+            principal = row["servicePrincipalId"]
+            need(isinstance(principal, str) and bool(principal.strip()), "RENEW_MANIFEST_INVALID")
         need(row["grantId"] not in ids, "RENEW_DUPLICATE_GRANT_ID")
         ids.add(row["grantId"])
     return sorted(rows, key=lambda row: row["grantId"])
+
+
+def state_schema(grant_type):
+    return SERVICE_SCHEMA if grant_type == "SERVICE" else SCHEMA
+
+
+def matches_grant(old, selection, scope, grant_type):
+    if old.get("tenantId") != "ouf-lab" or old.get("capabilityId") != selection["capabilityId"]:
+        return False
+    if grant_type == "SERVICE":
+        return (old.get("subjectId") is None and old.get("organizationId") is None
+                and old.get("servicePrincipalId") == selection["servicePrincipalId"])
+    return old.get("subjectId") == scope["subjectId"] and old.get("servicePrincipalId") is None
 
 
 def policy_hash(policy, published=False):
@@ -63,6 +82,7 @@ def policy_hash(policy, published=False):
 
 
 def make_plan(current, scope):
+    grant_type = scope.get("grantType", "HUMAN")
     policy = current["policy"]
     need(current["policyRef"] == f"{policy['bundleId']}:{policy['version']}",
          "RENEW_ACTIVE_REF_MISMATCH")
@@ -77,12 +97,9 @@ def make_plan(current, scope):
         gid, cid = selection["grantId"], selection["capabilityId"]
         old = grants.get(gid)
         need(old is not None, "RENEW_GRANT_MISSING=" + gid)
-        need(old.get("subjectId") == scope["subjectId"]
-             and old.get("tenantId") == "ouf-lab"
-             and old.get("servicePrincipalId") is None
-             and old.get("capabilityId") == cid, "RENEW_GRANT_IDENTITY_MISMATCH=" + gid)
-        need(cid in caps and "HUMAN" in caps[cid].get("allowedActors", []),
-             "RENEW_HUMAN_CAPABILITY_REQUIRED=" + gid)
+        need(matches_grant(old, selection, scope, grant_type), "RENEW_GRANT_IDENTITY_MISMATCH=" + gid)
+        need(cid in caps and grant_type in caps[cid].get("allowedActors", []),
+             f"RENEW_{grant_type}_CAPABILITY_REQUIRED=" + gid)
         need(instant(old["validFrom"]) < instant(old["validUntil"]) <= now,
              "RENEW_EXPIRED_GRANT_REQUIRED=" + gid)
         updated = {**deepcopy(old), "validUntil": scope["validUntil"]}
@@ -91,7 +108,7 @@ def make_plan(current, scope):
     candidate["grants"] = [replacements.get(g["grantId"], g) for g in candidate["grants"]]
     candidate["version"] = int(policy["version"]) + 1
     return {
-        "schema": SCHEMA, "phase": "PLANNED", "scope": scope,
+        "schema": state_schema(grant_type), "phase": "PLANNED", "scope": scope,
         "baseActiveRef": current["policyRef"], "baselineHash": policy_hash(policy),
         "targetPolicyRef": f"{candidate['bundleId']}:{candidate['version']}",
         "candidate": candidate, "changes": changes,
@@ -201,13 +218,16 @@ def verify(base, token, state):
          policy_hash(state["candidate"], published=True), "RENEW_ACTIVE_NOT_EXPECTED")
 
 
-def run(args, login):
+def run(args, login, *, grant_type="HUMAN"):
+    need(grant_type in ("HUMAN", "SERVICE"), "RENEW_GRANT_TYPE_INVALID")
     need(args.grants_file is not None and args.state_file is not None
          and args.valid_until is not None, "RENEW_MANIFEST_EXPIRY_STATE_REQUIRED")
     need(args.valid_from is None, "RENEW_VALID_FROM_MUST_NOT_CHANGE")
     instant(args.valid_until)
     scope = {"subjectId": args.subject_id, "validUntil": args.valid_until,
-             "grants": selectors(args.grants_file)}
+             "grants": selectors(args.grants_file, grant_type)}
+    if grant_type == "SERVICE":
+        scope["grantType"] = grant_type
     if args.mode == "publish":
         need(args.confirm_publish, "CONFIRM_PUBLISH_REQUIRED")
         need(bool(args.reviewed_draft_hash), "REVIEWED_DRAFT_HASH_REQUIRED")
@@ -217,7 +237,7 @@ def run(args, login):
     with state_lock(path):
         state = lifecycle.read_state(path) if path.exists() or path.is_symlink() else None
         if state:
-            need(state.get("schema") == SCHEMA and state.get("scope") == scope,
+            need(state.get("schema") == state_schema(grant_type) and state.get("scope") == scope,
                  "RENEW_STATE_SCOPE_MISMATCH")
         if args.mode == "plan":
             need(state is None or state["phase"] == "PLANNED", "RENEW_PLAN_ALREADY_DISPATCHED")

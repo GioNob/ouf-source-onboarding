@@ -78,16 +78,33 @@ e non costituiscono ancora tool chatbot o una directory utenti IAM.
 Configurazione IAM, sessione, chiavi, ciclo proposta/conferma e collaudo: [guida operativa](docs/PERMISSION_PROPOSALS.md).
 
 Il rinnovo nominale usa `scripts/r4a_human_grant_lifecycle.py --operation renew`
-con le fasi `plan`, `draft` (include la preview owner), `preview`, `publish`,
-`verify`. Richiede manifest esplicito, nuova scadenza e file di stato privato;
-conserva gli ID e modifica solo `validUntil` di grant già scaduti. Il publish
-richiede `--confirm-publish` e `--reviewed-draft-hash` dalla preview approvata.
-Un esito HTTP ambiguo non viene rigiocato; il file di stato conserva la fase
-per la riconciliazione owner. La disponibilità dello script non attesta un
-rinnovo sul VPS.
+per HUMAN e `scripts/r4a_service_grant_expiry_renewal.py` per SERVICE. Entrambi
+usano il Device Flow dell'amministratore HUMAN indicato da `--subject-id` e le
+fasi `plan`, `draft` (con preview owner), `preview`, `publish`, `verify`.
+Il manifest SERVICE (`--grants-file`) indica `grantId`, `capabilityId` e
+`servicePrincipalId`. Sono ammessi i grant del tenant `ouf-lab` con soggetto e
+organizzazione nulli e capability che ammette SERVICE. Il rinnovo modifica solo
+`validUntil` di grant già scaduti. Ogni rinnovo usa un file di stato privato.
+Il publish richiede `--confirm-publish` e l'hash completo `sha256:…` della
+preview approvata in `--reviewed-draft-hash`. In caso di esito ambiguo lo stato
+conserva la fase per la riconciliazione con l'owner.
 
-Cleanup dopo l'E2E: i grant di ruolo con `allowedDataLabels`/`allowedDetailLevels`
-non vuoti non coprono la risoluzione delle capability su un `ResourceContext`
-senza etichette. Decidere il contratto tra `OufRoleCatalogue` e
-`GrantConstraints.matches()`; il rinnovo nominale non modifica tale semantica.
+### Difetti emersi nell'E2E Teatri
+
+- Una challenge scaduta non si può rinnovare.
+- Il refresh del token THS richiede una correzione.
+- Sul VPS sono stati rilevati oltre 150 container fermi.
+- I grant HUMAN e SERVICE coinvolti avevano scadenze fisse il 25–26 ottobre, senza avvisi.
+- La risoluzione delle capability usa un contesto senza etichette. I grant di ruolo con `allowedDataLabels` o `allowedDetailLevels` non vuoti vengono scartati. Va definito il contratto tra `OufRoleCatalogue` e `GrantConstraints.matches()`.
+- Il corpo del 403 viene nascosto al chiamante.
+- Nelle verifiche non sono emersi eventi di login in Keycloak.
+- Gli strumenti MCP di acquisizione e di stato e storico Ingestion restituiscono `authorization denied`.
+- Corretto nella PR #55 il controllo dell'hash di preview che rifiutava il prefisso `sha256:`.
+- Il ricaricamento della policy non è visibile nei log.
+- Il `503 ONB_PERSISTENCE_FAILURE` non compare nei log di Onboarding.
+- Il connettore MCP non espone il clone di una versione di Onboarding.
+- Il 403 di readiness non compare nei log di Ingestion.
+- Un 403 di una dipendenza porta la review in `BLOCKED` senza ripresa. Dopo il ripristino dell'accesso serve clonare e riapprovare.
+- Nei log manca un evento di conclusione del run.
+- `ouf-udp` non registra nei log la ricezione degli handoff.
 

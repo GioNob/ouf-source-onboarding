@@ -81,6 +81,7 @@ def test_preview_requires_exact_added_grant(monkeypatch):
 
 
 import r4a_human_grant_renewal as renew
+import r4a_service_grant_expiry_renewal as service_renewal
 SUBJECT = "b93d8cf6-cd14-4ee6-91d7-84cd76c4f500"
 UNTIL = "2026-12-31T23:00:00Z"
 MANIFEST = Path(__file__).parents[1] / "catalogue/teatri-human-grant-renewal-20261109.json"
@@ -437,4 +438,99 @@ def test_expired_proposal_cannot_be_published(renewal_case, owner, monkeypatch):
     with pytest.raises(ValueError, match="RENEW_NEW_EXPIRY_NOT_FUTURE"):
         run_phase(renewal_case, "publish")
     assert not any(path.endswith(":publish") for _, path in owner.calls)
+
+
+@pytest.fixture
+def service_case(renewal_case, tmp_path):
+    case = renewal_case
+    capability = "ouf.object-storage.content.read"
+    selections = [{"grantId": "grant-managed-file-read-" + service, "capabilityId": capability,
+                   "servicePrincipalId": "spiffe://ouf-lab/workload/" + service}
+                  for service in ("ingestion", "onboarding")]
+    policy = case.current["policy"]
+    policy["capabilities"].append({"capabilityId": capability, "operation": "READ",
+                                    "requiredScope": capability, "allowedActors": ["SERVICE"]})
+    for selector in selections:
+        policy["grants"].append({**selector, "tenantId": "ouf-lab", "subjectId": None,
+                                 "organizationId": None, "validFrom": "2026-09-26T00:00:00Z",
+                                 "validUntil": "2026-10-26T00:00:00Z",
+                                 "constraints": {"effect": "ALLOW", "resourceType": "managed-file"}})
+    case.scope.update(grantType="SERVICE", grants=selections)
+    case.args.grants_file = tmp_path / "service-grants.json"
+    case.args.grants_file.write_text(json.dumps(selections))
+    return case
+
+
+def test_service_cli_uses_governed_review_and_changes_only_expiry(service_case, monkeypatch, capsys):
+    case = service_case
+    api = RenewalOwner(case.current)
+    monkeypatch.setattr(renew.lifecycle, "active", api.active)
+    monkeypatch.setattr(renew.lifecycle, "request", api.request)
+    logins = []
+
+    def login(subject):
+        logins.append(subject)
+        return "not-a-live-token"
+
+    monkeypatch.setattr(service_renewal, "human_token", login)
+    args = ["--subject-id", SUBJECT, "--grants-file", str(case.args.grants_file),
+            "--valid-until", UNTIL, "--state-file", str(case.args.state_file)]
+
+    def cli(mode, *flags):
+        monkeypatch.setattr(sys, "argv", ["service-renewal", mode, *args, *flags])
+        service_renewal.main()
+
+    cli("plan")
+    assert not api.calls
+    capsys.readouterr()
+    cli("draft")
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["status"] == "OWNER_PREVIEW"
+    assert {c["grantId"] for c in preview["changes"]} == {g["grantId"] for g in case.scope["grants"]}
+    assert all(c["field"] == "validUntil" and c["after"] == UNTIL for c in preview["changes"])
+    assert not any(path.endswith(":publish") for _, path in api.calls)
+
+    expected = copy.deepcopy(case.current["policy"])
+    expected["version"] += 1
+    for grant in expected["grants"][-2:]:
+        grant["validUntil"] = UNTIL
+    assert api.draft["policy"] == expected
+    state = human.lifecycle.read_state(case.args.state_file)
+    assert state["schema"] == renew.SERVICE_SCHEMA
+    with pytest.raises(ValueError, match="RENEW_REVIEWED_HASH_MISMATCH"):
+        cli("publish", "--confirm-publish", "--reviewed-draft-hash", preview["draftHash"][7:])
+    assert not any(path.endswith(":publish") for _, path in api.calls)
+    cli("publish", "--confirm-publish", "--reviewed-draft-hash", preview["draftHash"])
+    cli("verify")
+    assert api.current["policyRef"] == "test-bundle:13"
+    assert logins and set(logins) == {SUBJECT}
+
+
+@pytest.mark.parametrize("field,value", [("subjectId", SUBJECT), ("organizationId", "org"),
+    ("tenantId", "another-tenant"), ("servicePrincipalId", "spiffe://ouf-lab/workload/other"),
+    ("capabilityId", "other.capability")])
+def test_service_renewal_rejects_wrong_grant_identity(service_case, field, value):
+    service_case.current["policy"]["grants"][-1][field] = value
+    with pytest.raises(ValueError, match="RENEW_GRANT_IDENTITY_MISMATCH"):
+        renew.make_plan(service_case.current, service_case.scope)
+
+
+def test_service_renewal_requires_service_actor(service_case):
+    service_case.current["policy"]["capabilities"][-1]["allowedActors"] = ["HUMAN"]
+    with pytest.raises(ValueError, match="RENEW_SERVICE_CAPABILITY_REQUIRED"):
+        renew.make_plan(service_case.current, service_case.scope)
+
+
+@pytest.mark.parametrize("change", ["missing-principal", "blank-principal", "extra-field"])
+def test_service_manifest_requires_exact_selectors(service_case, change):
+    selector = service_case.scope["grants"][0].copy()
+    if change == "missing-principal":
+        del selector["servicePrincipalId"]
+    elif change == "blank-principal":
+        selector["servicePrincipalId"] = " "
+    else:
+        selector["validFrom"] = "2026-09-26T00:00:00Z"
+    service_case.args.grants_file.write_text(json.dumps([selector]))
+    with pytest.raises(ValueError, match="RENEW_MANIFEST_INVALID"):
+        renew.selectors(service_case.args.grants_file, "SERVICE")
 
