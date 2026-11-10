@@ -89,6 +89,32 @@ Il publish richiede `--confirm-publish` e l'hash completo `sha256:…` della
 preview approvata in `--reviewed-draft-hash`. In caso di esito ambiguo lo stato
 conserva la fase per la riconciliazione con l'owner.
 
+Il controllo delle scadenze legge il bundle `ACTIVE` ogni cinque minuti. Le
+finestre `DUE_30D` (oltre 7 e fino a 30 giorni), `DUE_7D` ed `EXPIRED` sono
+disgiunte. L'ingresso in una finestra produce `AUTH_GRANT_EXPIRY` nei log con
+conteggio e dipendenza potenziale, una volta per grant, finestra e processo.
+Il report HUMAN `GET /api/trusted-human/v1/authorization/policies/active/grant-expiry`
+usa l'autorità amministrativa esistente e mostra solo i grant del tenant del
+chiamante. Le sette dipendenze Teatri note sono mappate esplicitamente. Gli
+altri grant risultano `UNMAPPED` e le scadenze di un `DENY` sono segnalate
+separatamente. Una scadenza configurata non prova un diniego effettivo.
+
+Le metriche `ouf.authorization.grant.expiry.count` (tag `window`),
+`ouf.authorization.grant.expiry.scan.available` e
+`ouf.authorization.grant.expiry.scan.last.success.unixtime` distinguono zero
+scadenze da una lettura fallita o da un monitor fermo. Gli avvisi sono nei log
+e nelle metriche per il sistema di monitoraggio.
+
+Rete di sicurezza: se entro il 15 dicembre 2026 il pilota SERVICE non ha provato
+rinnovo automatico, aggiornamento senza interruzione, diniego alla generazione
+ritirata e avviso anticipato, preparare il rinnovo dei cinque grant HUMAN e dei
+due SERVICE introdotti dalle policy v62/v63. Usare gli script di questa PR con
+manifest esatto, preview e verifica. Oggi gli script accettano solo grant già
+scaduti. Prima del 15 dicembre va qualificata l'opzione di rinnovo preventivo,
+vincolata alla scadenza attuale attesa `2026-12-31T23:00:00Z` e a una nuova
+scadenza successiva. Scadenza ponte e pubblicazione richiedono decisione HUMAN
+e si verificano sul bundle effettivamente attivo.
+
 ### Difetti emersi nell'E2E Teatri
 
 - Una challenge scaduta non si può rinnovare.
