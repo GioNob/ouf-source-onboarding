@@ -73,7 +73,8 @@ class AuthorizationGrantExpiryTest {
     when(registry.active()).thenReturn(Optional.of(active));
     when(registry.load("fixture", 63)).thenReturn(
         policy(63, serviceGrant(INGESTION, "ouf-lab", Instant.now().plus(Duration.ofDays(20)), null)));
-    try (var meters = new SimpleMeterRegistry()) {
+    var meters = new SimpleMeterRegistry();
+    try {
       var monitor = new AuthorizationGrantExpiryMonitor(registry, meters);
       monitor.checkActivePolicy();
       monitor.checkActivePolicy();
@@ -98,6 +99,8 @@ class AuthorizationGrantExpiryTest {
           .isEqualTo(1);
       assertThat(output.getAll()).contains("AUTH_GRANT_EXPIRY window=DUE_7D")
           .doesNotContain("fixture-ingestion");
+    } finally {
+      meters.close();
     }
   }
 }
