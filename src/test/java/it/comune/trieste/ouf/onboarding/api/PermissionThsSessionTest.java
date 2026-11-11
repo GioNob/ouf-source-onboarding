@@ -88,7 +88,7 @@ class PermissionThsSessionTest {
     @Test
     void refreshesAnExpiredClientAndServesThePageWithoutExposingTokens() throws Exception {
         var session = session(REGISTRATION, "expired-token", true, "accepted-refresh");
-        mvc.perform(get(PAGE).session(session)).andExpect(status().isOk())
+        mvc.perform(get(PAGE).param("scope", "not-a-client-scope").session(session)).andExpect(status().isOk())
                 .andExpect(content().string(not(containsString("renewed-access"))))
                 .andExpect(content().string(not(containsString("renewed-refresh"))));
         var saved = clients.<OAuth2AuthorizedClient>loadAuthorizedClient(REGISTRATION, SUBJECT);
@@ -250,7 +250,8 @@ class PermissionThsSessionTest {
 
         private void token(HttpExchange exchange) throws IOException {
             var body = new String(exchange.getRequestBody().readAllBytes(), UTF_8);
-            if (body.contains("grant_type=refresh_token") && body.contains("refresh_token=accepted-refresh")) {
+            if (body.contains("grant_type=refresh_token") && body.contains("refresh_token=accepted-refresh")
+                    && !body.contains("scope=")) {
                 reply(exchange, 200, """
                         {"access_token":"renewed-access","refresh_token":"renewed-refresh","token_type":"Bearer","expires_in":300}
                         """);

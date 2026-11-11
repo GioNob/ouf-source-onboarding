@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -73,6 +74,8 @@ public class PermissionThsSecurity {
         http.oauth2Login(o -> o.loginPage(LOGIN).authorizedClientRepository(repository)
                 .authorizationEndpoint(e -> e.authorizationRequestResolver(resolver)));
         var manager = new DefaultOAuth2AuthorizedClientManager(registrations, repository);
+        // Use the client's existing authorization. A page or API parameter cannot request scopes.
+        manager.setContextAttributesMapper(request -> Map.of());
         manager.setAuthorizedClientProvider(OAuth2AuthorizedClientProviderBuilder.builder()
                 .refreshToken(r -> r.clockSkew(Duration.ZERO)).build());
 
