@@ -1,0 +1,37 @@
+{
+  "tenantId": "ouf-lab",
+  "role": {
+    "roleId": "teatri-managed-onboarding",
+    "displayName": "Teatri - onboarding gestito",
+    "permissions": [
+      {
+        "capabilityId": "ouf.onboarding.configuration.write",
+        "constraints": null
+      },
+      {
+        "capabilityId": "ouf.managed-source.file.upload",
+        "constraints": null
+      },
+      {
+        "capabilityId": "ouf.managed-source.file.profile",
+        "constraints": null
+      },
+      {
+        "capabilityId": "ouf.managed-source.preview",
+        "constraints": null
+      },
+      {
+        "capabilityId": "ouf.managed-source.onboarding.create",
+        "constraints": null
+      }
+    ]
+  },
+  "assignment": {
+    "assignmentId": "teatri-managed-onboarding-ouf-admin",
+    "roleId": "teatri-managed-onboarding",
+    "subjectId": "b93d8cf6-cd14-4ee6-91d7-84cd76c4f500",
+    "externalRoleRef": null,
+    "validFrom": "2026-09-25T00:00:00Z",
+    "validUntil": "2036-09-15T07:13:50.968730Z"
+  }
+}

@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.onboarding.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileLimits;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileChatHandoff;
 import it.comune.trieste.ouf.onboarding.application.OnboardingService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -60,6 +61,15 @@ public class ManagedFileMcpApi {
     String owner=caller.principal().subjectId();
     try{
       JsonNode selection=json.readTree(raw).required("Arguments");
+      if("COLUMNS".equals(selection.path("view").asText())){
+        Set<String> allowed=Set.of("view","assetId","profileId","offset","limit");
+        for(var keys=selection.fieldNames();keys.hasNext();)if(!allowed.contains(keys.next()))throw new IllegalArgumentException("invalid column page query");
+        if(!selection.path("assetId").isTextual()||!selection.path("profileId").isTextual())throw new IllegalArgumentException("exact asset and profile required");
+        int offset=pageInteger(selection,"offset",0),limit=pageInteger(selection,"limit",ManagedFileLimits.COLUMN_PAGE_SIZE);
+        UUID asset=UUID.fromString(selection.get("assetId").asText()),profile=UUID.fromString(selection.get("profileId").asText());
+        files.requireTenantOwner(asset,caller.principal().tenantId(),owner);
+        return files.previewColumns(asset,profile,offset,limit);
+      }
       if(selection.has("view")){
         if(!selection.path("view").isTextual()||!"ASSETS".equals(selection.path("view").asText())||selection.size()>3)throw new IllegalArgumentException("invalid owner asset query");
         for(var keys=selection.fieldNames();keys.hasNext();)if(!Set.of("view","limit","afterAssetId").contains(keys.next()))throw new IllegalArgumentException("invalid owner asset query");
@@ -90,7 +100,14 @@ public class ManagedFileMcpApi {
     }
     return files.preview(asset,UUID.fromString(args.get("profileId").asText()));
   }
+  private static int pageInteger(JsonNode selection,String key,int fallback){
+    if(!selection.has(key))return fallback;
+    JsonNode value=selection.get(key);
+    if(!value.isIntegralNumber()||!value.canConvertToInt())throw new IllegalArgumentException("invalid column page bounds");
+    return value.intValue();
+  }
   @PostMapping("/create") public Map<String,Object> create(@RequestBody byte[] raw,HttpServletRequest request){
+    if(raw.length>ManagedFileLimits.MAX_MAPPING_ENVELOPE_BYTES)throw new IllegalArgumentException("managed mapping envelope too large");
     String cap="ouf.managed-source.onboarding.create";
     var delegated=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),cap,raw);
     try {
@@ -103,7 +120,7 @@ public class ManagedFileMcpApi {
           ||draft.name()==null||draft.name().isBlank()||draft.owner()==null||draft.owner().isBlank()
           ||draft.targetClassIri()==null||draft.targetClassIri().isBlank()
           ||draft.semanticRefs()==null||draft.semanticRefs().isEmpty()||draft.semanticRefs().size()>32
-          ||draft.sourceObjectKeyFields()==null||draft.fields()==null||draft.fields().isEmpty()||draft.fields().size()>256)
+          ||draft.sourceObjectKeyFields()==null||draft.fields()==null||draft.fields().isEmpty()||draft.fields().size()>ManagedFileLimits.MAX_COLUMNS)
           throw new IllegalArgumentException("explicit field and identity decisions required");
       var actor=new OnboardingService.Actor(delegated.principal().subjectId(),"HUMAN_USER",Set.of(cap));
       List<ManagedFileService.FieldDecision> fields=draft.fields().stream()
@@ -119,7 +136,7 @@ public class ManagedFileMcpApi {
     return switch(detail) {
       case "CSV must be valid UTF-8 text","CSV must be UTF-8 text" -> "CSV_ENCODING_INVALID";
       case "headers must be non-empty and unique" -> "CSV_HEADERS_INVALID";
-      case "invalid CSV" -> "CSV_SYNTAX_INVALID";
+      case "invalid CSV","CSV row exceeds declared headers" -> "CSV_SYNTAX_INVALID";
       case "row limit exceeded","column limit exceeded","file size outside profiling limits" -> "PROFILE_LIMIT_EXCEEDED";
       case "unsupported media type" -> "MEDIA_TYPE_UNSUPPORTED";
       case "Staged size does not match downloaded content","Gateway object exceeds the registered size","expected object size is outside intake limits" -> "FILE_SIZE_MISMATCH";

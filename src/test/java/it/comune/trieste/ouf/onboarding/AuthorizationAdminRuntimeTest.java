@@ -111,4 +111,20 @@ class AuthorizationAdminRuntimeTest {
   var node=json.readTree(raw);String actual=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.writeValueAsBytes(node.get("bundle"))));
   assertThat(node.get("contentHash").asText()).isEqualTo(actual);
  }
+ @Test void grantExpiryReportsOnlyTheActivePolicyToHumanAdministrators()throws Exception{
+  register();String id=create(1).get("id").asText();http.perform(post(root+"/policies/"+id+":publish").with(actor("HUMAN",true)).header("If-Match","\"0\"")).andExpect(status().isOk());
+  create(2);
+  String endpoint=root+"/policies/active/grant-expiry";
+  http.perform(get(endpoint).with(actor("SERVICE",false))).andExpect(status().isForbidden());
+  long audits=db.sql("select count(*) from ouf_authorization.admin_audit").query(Long.class).single();
+  var response=http.perform(get(endpoint).with(actor("HUMAN",false))).andExpect(status().isOk())
+      .andExpect(header().string("Cache-Control",org.hamcrest.Matchers.containsString("no-store")))
+      .andReturn().getResponse().getContentAsString();
+  var report=json.readTree(response);
+  assertThat(report.path("policyRef").asText()).isEqualTo("admin-test:1");
+  assertThat(report.path("findings").size()).isEqualTo(2);
+  assertThat(report.path("findings").get(0).path("window").asText()).isEqualTo("DUE_7D");
+  assertThat(response).doesNotContain("subjectId","servicePrincipalId");
+  assertThat(db.sql("select count(*) from ouf_authorization.admin_audit").query(Long.class).single()).isEqualTo(audits);
+ }
 }
