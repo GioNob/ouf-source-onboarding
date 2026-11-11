@@ -5,6 +5,7 @@ create/publish is retained in the private state and requires reconciliation.
 """
 from __future__ import annotations
 
+from calendar import monthrange
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -38,6 +39,35 @@ def instant(value):
 
 def utcnow():
     return datetime.now(timezone.utc)
+
+
+def utc_expiry(value):
+    match = re.fullmatch(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})"
+                         r"(?:\.([0-9]{1,9}))?(?:Z|\+00:00)", value)
+    need(match is not None, "RENEW_PREVENTIVE_EXPIRY_UTC_REQUIRED")
+    seconds = instant(match[1] + "Z")
+    nanos = int((match[2] or "").ljust(9, "0"))
+    return seconds, nanos
+
+
+def canonical_utc_expiry(value):
+    seconds, nanos = utc_expiry(value)
+    # Match the owner's Instant representation, preserving nanoseconds.
+    digits = f"{nanos:09d}".rstrip("0")
+    fraction = "." + digits.ljust(((len(digits) + 2) // 3) * 3, "0") if digits else ""
+    return seconds.isoformat(timespec="seconds").removesuffix("+00:00") + fraction + "Z"
+
+
+def preventive_expiry(scope, now):
+    expected = utc_expiry(scope["expectedCurrentValidUntil"])
+    new = utc_expiry(scope["validUntil"])
+    need(new > expected, "RENEW_NEW_EXPIRY_NOT_LATER")
+    need(new > (now.replace(microsecond=0), now.microsecond * 1000), "RENEW_NEW_EXPIRY_NOT_FUTURE")
+    year = now.year + 1
+    limit = now.replace(year=year, day=min(now.day, monthrange(year, now.month)[1]))
+    need(new <= (limit.replace(microsecond=0), limit.microsecond * 1000),
+         "RENEW_NEW_EXPIRY_OVER_TWELVE_MONTHS")
+    return expected
 
 
 def selectors(path, grant_type="HUMAN"):
@@ -89,8 +119,12 @@ def make_plan(current, scope):
     caps = {c["capabilityId"]: c for c in policy["capabilities"]}
     grants = {g["grantId"]: g for g in policy["grants"]}
     need(len(grants) == len(policy["grants"]), "RENEW_DUPLICATE_ACTIVE_GRANT")
-    end, now = instant(scope["validUntil"]), utcnow()
-    need(end > now, "RENEW_NEW_EXPIRY_NOT_FUTURE")
+    now = utcnow()
+    expected = None
+    if "expectedCurrentValidUntil" in scope:
+        expected = preventive_expiry(scope, now)
+    else:
+        need(instant(scope["validUntil"]) > now, "RENEW_NEW_EXPIRY_NOT_FUTURE")
     candidate = deepcopy(policy)
     changes = []
     for selection in scope["grants"]:
@@ -100,8 +134,13 @@ def make_plan(current, scope):
         need(matches_grant(old, selection, scope, grant_type), "RENEW_GRANT_IDENTITY_MISMATCH=" + gid)
         need(cid in caps and grant_type in caps[cid].get("allowedActors", []),
              f"RENEW_{grant_type}_CAPABILITY_REQUIRED=" + gid)
-        need(instant(old["validFrom"]) < instant(old["validUntil"]) <= now,
-             "RENEW_EXPIRED_GRANT_REQUIRED=" + gid)
+        if expected is None:
+            need(instant(old["validFrom"]) < instant(old["validUntil"]) <= now,
+                 "RENEW_EXPIRED_GRANT_REQUIRED=" + gid)
+        else:
+            need(utc_expiry(old["validUntil"]) == expected,
+                 "RENEW_CURRENT_EXPIRY_MISMATCH=" + gid)
+            need(utc_expiry(old["validFrom"]) < expected, "RENEW_INVALID_VALIDITY")
         updated = {**deepcopy(old), "validUntil": scope["validUntil"]}
         changes.append({"grantId": gid, "before": deepcopy(old), "after": updated})
     replacements = {c["grantId"]: c["after"] for c in changes}
@@ -220,18 +259,31 @@ def verify(base, token, state):
 
 def run(args, login, *, grant_type="HUMAN"):
     need(grant_type in ("HUMAN", "SERVICE"), "RENEW_GRANT_TYPE_INVALID")
-    need(args.grants_file is not None and args.state_file is not None
-         and args.valid_until is not None, "RENEW_MANIFEST_EXPIRY_STATE_REQUIRED")
+    need(args.grants_file is not None and args.state_file is not None,
+         "RENEW_MANIFEST_EXPIRY_STATE_REQUIRED")
     need(args.valid_from is None, "RENEW_VALID_FROM_MUST_NOT_CHANGE")
-    instant(args.valid_until)
-    scope = {"subjectId": args.subject_id, "validUntil": args.valid_until,
-             "grants": selectors(args.grants_file, grant_type)}
+    scope = {"subjectId": args.subject_id}
+    preventive = args.expected_current_valid_until is not None or args.new_valid_until is not None
+    if preventive:
+        need(args.expected_current_valid_until is not None and args.new_valid_until is not None,
+             "RENEW_PREVENTIVE_EXPIRY_PAIR_REQUIRED")
+        need(args.valid_until is None, "RENEW_EXPIRY_FLAGS_CONFLICT")
+        scope["expectedCurrentValidUntil"] = canonical_utc_expiry(args.expected_current_valid_until)
+        scope["validUntil"] = canonical_utc_expiry(args.new_valid_until)
+    else:
+        need(args.valid_until is not None, "RENEW_MANIFEST_EXPIRY_STATE_REQUIRED")
+        instant(args.valid_until)
+        scope["validUntil"] = args.valid_until
+    scope["grants"] = selectors(args.grants_file, grant_type)
     if grant_type == "SERVICE":
         scope["grantType"] = grant_type
     if args.mode == "publish":
         need(args.confirm_publish, "CONFIRM_PUBLISH_REQUIRED")
         need(bool(args.reviewed_draft_hash), "REVIEWED_DRAFT_HASH_REQUIRED")
-        need(instant(args.valid_until) > utcnow(), "RENEW_NEW_EXPIRY_NOT_FUTURE")
+        if preventive:
+            preventive_expiry(scope, utcnow())
+        else:
+            need(instant(args.valid_until) > utcnow(), "RENEW_NEW_EXPIRY_NOT_FUTURE")
     base, path = lifecycle.DEFAULT_BASE, args.state_file
     token = login(args.subject_id)
     with state_lock(path):

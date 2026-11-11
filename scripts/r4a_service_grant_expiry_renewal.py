@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Renew expired nominal SERVICE grants through the HUMAN Authorization owner API."""
+"""Renew nominal SERVICE grant expiry through the HUMAN Authorization owner API."""
 from __future__ import annotations
 
 import argparse
@@ -16,7 +16,9 @@ def main():
     parser.add_argument("--subject-id", required=True, help="HUMAN administrator subject for Device Flow")
     parser.add_argument("--grants-file", type=Path, required=True,
                         help="JSON list of grantId, capabilityId and servicePrincipalId selectors")
-    parser.add_argument("--valid-until", required=True)
+    parser.add_argument("--valid-until", help="New expiry for already expired grants")
+    parser.add_argument("--expected-current-valid-until", help="Current expiry in UTC for preventive renewal")
+    parser.add_argument("--new-valid-until", help="New expiry in UTC for preventive renewal")
     parser.add_argument("--state-file", type=Path, required=True)
     parser.add_argument("--confirm-publish", action="store_true")
     parser.add_argument("--reviewed-draft-hash", help="Complete sha256: hash from the approved preview")

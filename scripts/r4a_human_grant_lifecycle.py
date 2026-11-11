@@ -104,6 +104,8 @@ def main():
     parser.add_argument("--grants-file", type=Path, help="JSON list of grantId/capabilityId pairs")
     parser.add_argument("--valid-from")
     parser.add_argument("--valid-until")
+    parser.add_argument("--expected-current-valid-until", help="Current expiry in UTC for preventive renewal")
+    parser.add_argument("--new-valid-until", help="New expiry in UTC for preventive renewal")
     parser.add_argument("--state-file", type=Path)
     parser.add_argument("--confirm-publish", action="store_true")
     parser.add_argument("--reviewed-draft-hash", help="Required with renew publish after HUMAN review")
@@ -116,6 +118,8 @@ def main():
         if not SUBJECT_RE.fullmatch(args.subject_id):
             raise ValueError("INVALID_SUBJECT_ID")
         return renewal.run(args, human_token)
+    if args.expected_current_valid_until is not None or args.new_valid_until is not None:
+        raise ValueError("RENEW_PREVENTIVE_REQUIRES_RENEW_OPERATION")
     args.valid_from = args.valid_from or "2026-09-25T00:00:00Z"
     args.valid_until = args.valid_until or "2026-10-25T00:00:00Z"
     wanted = (manifest(args.grants_file, args.subject_id, args.valid_from, args.valid_until)

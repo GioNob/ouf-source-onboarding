@@ -84,7 +84,11 @@ fasi `plan`, `draft` (con preview owner), `preview`, `publish`, `verify`.
 Il manifest SERVICE (`--grants-file`) indica `grantId`, `capabilityId` e
 `servicePrincipalId`. Sono ammessi i grant del tenant `ouf-lab` con soggetto e
 organizzazione nulli e capability che ammette SERVICE. Il rinnovo modifica solo
-`validUntil` di grant già scaduti. Ogni rinnovo usa un file di stato privato.
+`validUntil`. Per i grant già scaduti si usa `--valid-until`. Il rinnovo
+preventivo richiede `--expected-current-valid-until` e `--new-valid-until` in
+UTC, da ripetere in ogni fase. La scadenza attuale deve coincidere con quella
+attesa e la nuova deve essere successiva, entro 12 mesi dall'esecuzione.
+Ogni rinnovo usa un file di stato privato.
 Il publish richiede `--confirm-publish` e l'hash completo `sha256:…` della
 preview approvata in `--reviewed-draft-hash`. In caso di esito ambiguo lo stato
 conserva la fase per la riconciliazione con l'owner.
@@ -109,11 +113,9 @@ Rete di sicurezza: se entro il 15 dicembre 2026 il pilota SERVICE non ha provato
 rinnovo automatico, aggiornamento senza interruzione, diniego alla generazione
 ritirata e avviso anticipato, preparare il rinnovo dei cinque grant HUMAN e dei
 due SERVICE introdotti dalle policy v62/v63. Usare gli script di questa PR con
-manifest esatto, preview e verifica. Oggi gli script accettano solo grant già
-scaduti. Prima del 15 dicembre va qualificata l'opzione di rinnovo preventivo,
-vincolata alla scadenza attuale attesa `2026-12-31T23:00:00Z` e a una nuova
-scadenza successiva. Scadenza ponte e pubblicazione richiedono decisione HUMAN
-e si verificano sul bundle effettivamente attivo.
+manifest esatto, preview e verifica. Per il rinnovo preventivo la scadenza
+attuale attesa è `2026-12-31T23:00:00Z`. Scadenza ponte e pubblicazione
+richiedono decisione HUMAN e si verificano sul bundle effettivamente attivo.
 
 ### Difetti emersi nell'E2E Teatri
 

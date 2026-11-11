@@ -107,7 +107,8 @@ def renewal_case(monkeypatch, tmp_path):
     current = {"policyRef": "test-bundle:12", "policy": policy}
     args = SimpleNamespace(mode="plan", grants_file=MANIFEST, valid_until=UNTIL,
                            valid_from=None, state_file=tmp_path / "renewal.json",
-                           subject_id=SUBJECT, confirm_publish=False, reviewed_draft_hash=None)
+                           subject_id=SUBJECT, confirm_publish=False, reviewed_draft_hash=None,
+                           expected_current_valid_until=None, new_valid_until=None)
     scope = {"grants": selections, "subjectId": SUBJECT, "validUntil": UNTIL}
     return SimpleNamespace(current=current, args=args, scope=scope)
 
@@ -533,4 +534,119 @@ def test_service_manifest_requires_exact_selectors(service_case, change):
     service_case.args.grants_file.write_text(json.dumps([selector]))
     with pytest.raises(ValueError, match="RENEW_MANIFEST_INVALID"):
         renew.selectors(service_case.args.grants_file, "SERVICE")
+
+
+@pytest.fixture(params=["HUMAN", "SERVICE"])
+def preventive_cli(request, monkeypatch):
+    is_service = request.param == "SERVICE"
+    case = request.getfixturevalue("service_case" if is_service else "renewal_case")
+    module = service_renewal if is_service else human
+    monkeypatch.setattr(module, "human_token", lambda subject: "not-a-live-token")
+    selected = {g["grantId"] for g in case.scope["grants"]}
+    grants = [g for g in case.current["policy"]["grants"] if g["grantId"] in selected]
+    api = RenewalOwner(case.current)
+    monkeypatch.setattr(renew.lifecycle, "active", api.active)
+    monkeypatch.setattr(renew.lifecycle, "request", api.request)
+    common = ["--subject-id", SUBJECT, "--grants-file", str(case.args.grants_file),
+              "--state-file", str(case.args.state_file)]
+    if not is_service:
+        common += ["--operation", "renew"]
+
+    def cli(mode, *flags):
+        monkeypatch.setattr(sys, "argv", ["grant-renewal", mode, *common, *flags])
+        module.main()
+
+    return cli, api, grants, case.args.state_file
+
+
+def preventive_flags(expected=UNTIL, new="2027-03-31T23:00:00Z"):
+    return ("--expected-current-valid-until", expected, "--new-valid-until", new)
+
+
+def set_active_expiry(api, grants, valid_until):
+    ids = {grant["grantId"] for grant in grants}
+    for grant in api.current["policy"]["grants"]:
+        if grant["grantId"] in ids:
+            grant["validUntil"] = valid_until
+
+
+def test_preventive_renewal_keeps_review_fences_and_shows_both_expiries(preventive_cli, capsys):
+    cli, api, grants, _ = preventive_cli
+    set_active_expiry(api, grants, UNTIL)
+    new = "2027-11-09T00:00:00Z"  # Exactly 12 calendar months after the fixture clock.
+    flags = preventive_flags(new=new)
+    cli("plan", *flags)
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["status"] == "RENEW_PLAN_NO_OWNER_WRITES"
+    assert plan["changes"] == [{"grantId": grant["grantId"], "field": "validUntil",
+                               "before": UNTIL, "after": new}
+                              for grant in sorted(grants, key=lambda grant: grant["grantId"])]
+    assert not api.calls
+    expected = copy.deepcopy(api.current["policy"])
+    expected["version"] += 1
+    for grant in expected["grants"]:
+        if grant["grantId"] in {selected["grantId"] for selected in grants}:
+            grant["validUntil"] = new
+
+    cli("draft", *flags)
+    assert api.draft["policy"] == expected
+    capsys.readouterr()
+    cli("preview", *flags)
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["changes"] == plan["changes"]
+    with pytest.raises(ValueError, match="RENEW_REVIEWED_HASH_MISMATCH"):
+        cli("publish", *flags, "--confirm-publish", "--reviewed-draft-hash", preview["draftHash"][7:])
+    assert not any(path.endswith(":publish") for _, path in api.calls)
+    cli("publish", *flags, "--confirm-publish", "--reviewed-draft-hash", preview["draftHash"])
+    cli("verify", *flags)
+    assert api.current["policyRef"] == "test-bundle:13"
+
+
+def test_preventive_renewal_rejects_different_current_expiry(preventive_cli):
+    cli, api, grants, state_file = preventive_cli
+    set_active_expiry(api, grants, UNTIL)
+    set_active_expiry(api, grants[-1:], "2026-12-31T23:00:00.000000001Z")
+    with pytest.raises(ValueError, match="RENEW_CURRENT_EXPIRY_MISMATCH"):
+        cli("plan", *preventive_flags())
+    assert not api.calls and not state_file.exists()
+
+
+@pytest.mark.parametrize("new,reason", [
+    (UNTIL, "RENEW_NEW_EXPIRY_NOT_LATER"),
+    ("2027-11-09T00:00:00.000000001Z", "RENEW_NEW_EXPIRY_OVER_TWELVE_MONTHS"),
+    ("2027-03-31T23:00:00+01:00", "RENEW_PREVENTIVE_EXPIRY_UTC_REQUIRED"),
+])
+def test_preventive_renewal_rejects_invalid_new_expiry(preventive_cli, new, reason):
+    cli, api, grants, state_file = preventive_cli
+    set_active_expiry(api, grants, UNTIL)
+    with pytest.raises(ValueError, match=reason):
+        cli("plan", *preventive_flags(new=new))
+    assert not api.calls and not state_file.exists()
+
+
+@pytest.mark.parametrize("flags,reason", [
+    ((), "RENEW_MANIFEST_EXPIRY_STATE_REQUIRED"),
+    (("--expected-current-valid-until", UNTIL), "RENEW_PREVENTIVE_EXPIRY_PAIR_REQUIRED"),
+    (("--new-valid-until", "2027-03-31T23:00:00Z"), "RENEW_PREVENTIVE_EXPIRY_PAIR_REQUIRED"),
+    (preventive_flags() + ("--valid-until", UNTIL), "RENEW_EXPIRY_FLAGS_CONFLICT"),
+])
+def test_preventive_renewal_rejects_missing_or_mixed_flags(preventive_cli, flags, reason):
+    cli, api, grants, state_file = preventive_cli
+    set_active_expiry(api, grants, UNTIL)
+    with pytest.raises(ValueError, match=reason):
+        cli("plan", *flags)
+    assert not api.calls and not state_file.exists()
+
+
+def test_legacy_expiry_mode_still_accepts_only_expired_grants(preventive_cli, capsys):
+    cli, api, grants, state_file = preventive_cli
+    cli("plan", "--valid-until", UNTIL)
+    plan = json.loads(capsys.readouterr().out)
+    assert len(plan["changes"]) == len(grants)
+    assert all(change["after"] == UNTIL for change in plan["changes"])
+    state_file.unlink()
+    set_active_expiry(api, grants, UNTIL)
+    with pytest.raises(ValueError, match="RENEW_EXPIRED_GRANT_REQUIRED"):
+        cli("plan", "--valid-until", "2027-03-31T23:00:00Z")
+    assert not api.calls and not state_file.exists()
 
