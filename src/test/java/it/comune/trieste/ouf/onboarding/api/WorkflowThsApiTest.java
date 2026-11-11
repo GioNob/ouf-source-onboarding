@@ -1,7 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
 import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -12,13 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.client.*;
-import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
-import org.springframework.security.oauth2.client.registration.ClientRegistration;
-import org.springframework.security.oauth2.core.*;
-import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
+import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.web.csrf.*;
 
 class WorkflowThsApiTest {
@@ -36,8 +29,8 @@ class WorkflowThsApiTest {
       try(var stream=exchange.getResponseBody()){stream.write(out);}
     });server.start();
     try{
-      var clients=mock(OAuth2AuthorizedClientService.class);var request=session(clients);
-      var json=new ObjectMapper();var api=new WorkflowThsApi(clients,json,"http://127.0.0.1:"+server.getAddress().getPort());
+      var request=session();
+      var json=new ObjectMapper();var api=new WorkflowThsApi(json,"http://127.0.0.1:"+server.getAddress().getPort());
       assertThat(api.card("semantic",id,request).getBody().toString()).contains("csrf-test",hash).doesNotContain("private-human-token");
       assertThat(bearer.get()).isEqualTo("Bearer private-human-token");assertThat(posts).hasValue(0);
       assertThatThrownBy(()->api.action("semantic",id,"decision",json.writeValueAsBytes(Map.of("decision","APPROVED","expectedContentHash","b".repeat(64))),request)).hasMessageContaining("THS_REVIEW_STALE_CARD");
@@ -53,19 +46,17 @@ class WorkflowThsApiTest {
       assertThat(posts).hasValue(3);
       request.removeAttribute("ouf.permissionThsSession");
       assertThatThrownBy(()->api.card("semantic",id,request)).hasMessageContaining("THS_SESSION_REQUIRED");
-    }finally{SecurityContextHolder.clearContext();server.stop(0);}
+    }finally{server.stop(0);}
   }
   @Test void gatewayOriginCannotBeSuppliedByTheBrowser(){
-    assertThatThrownBy(()->new WorkflowThsApi(mock(OAuth2AuthorizedClientService.class),new ObjectMapper(),"http://elsewhere.example")).hasMessage("THS_WORKFLOW_GATEWAY_INVALID");
-    assertThatThrownBy(()->new WorkflowThsApi(mock(OAuth2AuthorizedClientService.class),new ObjectMapper(),"https://gateway.example/arbitrary")).hasMessage("THS_WORKFLOW_GATEWAY_INVALID");
+    assertThatThrownBy(()->new WorkflowThsApi(new ObjectMapper(),"http://elsewhere.example")).hasMessage("THS_WORKFLOW_GATEWAY_INVALID");
+    assertThatThrownBy(()->new WorkflowThsApi(new ObjectMapper(),"https://gateway.example/arbitrary")).hasMessage("THS_WORKFLOW_GATEWAY_INVALID");
   }
-  private MockHttpServletRequest session(OAuth2AuthorizedClientService clients){
-    var registration=ClientRegistration.withRegistrationId("ouf-ths").clientId("test").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE).redirectUri("http://localhost/callback").authorizationUri("http://localhost/auth").tokenUri("http://localhost/token").build();
+  private MockHttpServletRequest session(){
     var access=new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER,"private-human-token",Instant.now().minusSeconds(1),Instant.now().plusSeconds(60));
-    when(clients.loadAuthorizedClient("ouf-ths","test-human")).thenReturn(new OAuth2AuthorizedClient(registration,"test-human",access));
-    var principal=new DefaultOAuth2User(List.of(new SimpleGrantedAuthority("ROLE_USER")),Map.of("sub","test-human"),"sub");
-    SecurityContextHolder.getContext().setAuthentication(new OAuth2AuthenticationToken(principal,principal.getAuthorities(),"ouf-ths"));
+
     var request=new MockHttpServletRequest();request.setAttribute("ouf.permissionThsSession",Boolean.TRUE);
+    request.setAttribute(PermissionThsSecurity.REQUEST_ACCESS_TOKEN,access);
     request.setAttribute(CsrfToken.class.getName(),new DefaultCsrfToken("X-CSRF-TOKEN","_csrf","csrf-test"));return request;
   }
 }

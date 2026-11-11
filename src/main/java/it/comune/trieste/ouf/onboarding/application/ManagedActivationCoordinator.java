@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 /** One bounded, explicitly HUMAN-requested activation attempt; domain owners retain every completed phase. */
 @Component
 public class ManagedActivationCoordinator {
+  public static final int INGESTION_READINESS_TIMEOUT_SECONDS = 35;
   private final ManagedOnboardingReviewService reviews;private final ObjectMapper json;private final URI gateway;
   private final java.util.concurrent.Semaphore admission=new java.util.concurrent.Semaphore(2);
   private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).followRedirects(HttpClient.Redirect.NEVER).build();
@@ -30,7 +31,7 @@ public class ManagedActivationCoordinator {
     try{
       if(!admitted)throw new Failure("ONB_READINESS_CAPACITY_PAUSED",true);
       if(!Boolean.TRUE.equals(claim.progress().get("ingestionCompatibilityObserved"))){
-        var proof=post("/api/trusted-human/v1/ingestion/onboarding-readiness",Map.of("sourceId",claim.source(),"onboardingVersionId",claim.version(),"configurationHash",claim.hash()),bearer,35);
+        var proof=post("/api/trusted-human/v1/ingestion/onboarding-readiness",Map.of("sourceId",claim.source(),"onboardingVersionId",claim.version(),"configurationHash",claim.hash()),bearer,INGESTION_READINESS_TIMEOUT_SECONDS);
         if(!"PASS".equals(proof.get("status"))||!Boolean.TRUE.equals(proof.get("attestationSubmitted"))||!claim.source().equals(proof.get("sourceId"))||!claim.version().toString().equals(proof.get("onboardingVersionId"))||!claim.hash().equals(proof.get("configurationHash")))throw new Failure("ONB_READINESS_COMPATIBILITY_UNPROVEN",false);
       }
       reviews.activationPhase(claim,"CHECKING_IDENTITY");

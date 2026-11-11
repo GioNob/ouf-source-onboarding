@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import it.comune.trieste.ouf.authorization.PrincipalContext;
@@ -9,18 +10,30 @@ import it.comune.trieste.ouf.onboarding.authorization.PermissionProposalService;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
@@ -48,7 +61,10 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.web.SpringJUnitWebConfig;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.context.WebApplicationContext;
+import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -57,6 +73,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -65,7 +82,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup;
 
 @SpringJUnitWebConfig(PermissionThsSessionTest.Config.class)
-@TestPropertySource(properties = "ouf.authorization.ths.enabled=true")
+@TestPropertySource(properties = {"ouf.authorization.ths.enabled=true",
+        "ouf.workflow.ths.gateway-base-url=http://127.0.0.1"})
 class PermissionThsSessionTest {
     private static final String REGISTRATION = "ouf-ths";
     private static final String LOGIN = "/oauth2/authorization/" + REGISTRATION;
@@ -78,10 +96,13 @@ class PermissionThsSessionTest {
     @Autowired OAuth2AuthorizedClientService clients;
     @Autowired ClientRegistrationRepository registrations;
     @Autowired PermissionProposalService proposals;
+    @Autowired Clock clock;
+    @Autowired StubIssuer issuer;
     MockMvc mvc;
 
     @BeforeEach
     void setUp() {
+        when(clock.instant()).thenReturn(Instant.now());
         mvc = webAppContextSetup(context).apply(springSecurity()).build();
     }
 
@@ -169,14 +190,143 @@ class PermissionThsSessionTest {
         assertThat(session.isInvalid()).isFalse();
     }
 
+    @Test
+    void aThreeHundredSecondTokenDoesNotRefreshAtAgeOneHundred() throws Exception {
+        var now = clock.instant();
+        var session = session(REGISTRATION, "original-access", now.minusSeconds(100), now.plusSeconds(200),
+                "accepted-refresh");
+        var attempts = issuer.refreshAttempts.get();
+        mvc.perform(get(PAGE).session(session)).andExpect(status().isOk());
+        assertThat(savedAccessToken()).isEqualTo("original-access");
+        assertThat(issuer.refreshAttempts.get()).isEqualTo(attempts);
+    }
+
+    @Test
+    void refreshesAtAgeOneHundredSixtyAndLaterRequestsUseTheRenewedToken() throws Exception {
+        var now = clock.instant();
+        var session = session(REGISTRATION, "original-access", now.minusSeconds(160), now.plusSeconds(140),
+                "accepted-refresh");
+        mvc.perform(get(workflowCard()).session(session)).andExpect(status().isOk());
+        assertThat(issuer.lastOwnerBearer.get()).isEqualTo("Bearer original-access");
+        assertThat(savedAccessToken()).isEqualTo("renewed-access");
+
+        mvc.perform(get(workflowCard()).session(session)).andExpect(status().isOk());
+        assertThat(issuer.lastOwnerBearer.get()).isEqualTo("Bearer renewed-access");
+    }
+
+    @Test
+    void aRequestAdmittedBeforeRefreshForwardsItsOriginalBearerAfterRefreshCompletes() throws Exception {
+        var now = clock.instant();
+        var session = session(REGISTRATION, "original-access", now.minusSeconds(100), now.plusSeconds(200),
+                "accepted-refresh");
+        var hold = new RequestHold(new CountDownLatch(1), new CountDownLatch(1));
+        issuer.hold.set(hold);
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var activation = executor.submit(() -> mvc.perform(post(workflowCard() + "/activate")
+                    .session(session).with(csrf().asHeader()).header("X-Test-Hold-Request", "true")
+                    .contentType(MediaType.APPLICATION_JSON).content(
+                            "{\"configurationHash\":\"sha256:" + "a".repeat(64) + "\",\"expectedVersion\":1}"))
+                    .andExpect(status().isOk()).andReturn());
+            try {
+                assertThat(hold.admitted().await(10, TimeUnit.SECONDS)).isTrue();
+                when(clock.instant()).thenReturn(now.plusSeconds(60));
+                mvc.perform(get(PAGE).session(session)).andExpect(status().isOk());
+                assertThat(savedAccessToken()).isEqualTo("renewed-access");
+            } finally {
+                hold.release().countDown();
+                issuer.hold.set(null);
+            }
+            activation.get(10, TimeUnit.SECONDS);
+            assertThat(issuer.lastOwnerBearer.get()).isEqualTo("Bearer original-access");
+            assertThat(issuer.lastOwnerMethod.get()).isEqualTo("POST");
+            assertThat(issuer.lastOwnerPath.get()).endsWith("/review/activate");
+        }
+    }
+
+    @Test
+    void aFailedRefreshKeepsTheLiveTokenAndRetriesOnTheNextRequest() throws Exception {
+        var now = clock.instant();
+        var session = session(REGISTRATION, "original-access", now.minusSeconds(160), now.plusSeconds(140),
+                "rejected-refresh");
+        var attempts = issuer.refreshAttempts.get();
+        for (int request = 1; request <= 2; request++) {
+            mvc.perform(get(workflowCard()).session(session)).andExpect(status().isOk());
+            assertThat(session.isInvalid()).isFalse();
+            assertThat(savedAccessToken()).isEqualTo("original-access");
+            assertThat(issuer.lastOwnerBearer.get()).isEqualTo("Bearer original-access");
+            assertThat(issuer.refreshAttempts.get()).isEqualTo(attempts + request);
+        }
+    }
+
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void aNewOneHundredTwentySecondTokenLogsTheConfigurationErrorWithoutBlocking(CapturedOutput output)
+            throws Exception {
+        var now = clock.instant();
+        var session = session(REGISTRATION, "original-access", now.minusSeconds(160), now.plusSeconds(140),
+                "short-refresh");
+        mvc.perform(get(PAGE).session(session)).andExpect(status().isOk());
+        var token = clients.<OAuth2AuthorizedClient>loadAuthorizedClient(REGISTRATION, SUBJECT).getAccessToken();
+        assertThat(token.getTokenValue()).isEqualTo("short-access");
+        assertThat(output.getAll()).contains("THS_ACCESS_TOKEN_HALF_LIFE_TOO_SHORT halfLifeMs=60000 minimumMs=105000");
+        assertThat(output.getAll()).doesNotContain("short-access", "short-refresh");
+        var timing = new ThsAccessTokenRefresh(clock);
+        when(clock.instant()).thenReturn(token.getIssuedAt().plusSeconds(14));
+        assertThat(timing.refreshDue(token)).isFalse();
+        when(clock.instant()).thenReturn(token.getIssuedAt().plusSeconds(15));
+        assertThat(timing.refreshDue(token)).isTrue();
+    }
+
+    @Test
+    void aTokenWithoutIssuedAtUsesTheStrictOneHundredFiftySecondFallback() {
+        var now = clock.instant();
+        var token = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, "legacy-access", null,
+                now.plusSeconds(150));
+        var timing = new ThsAccessTokenRefresh(clock);
+        assertThat(timing.refreshDue(token)).isFalse();
+        when(clock.instant()).thenReturn(now.plusNanos(1));
+        assertThat(timing.refreshDue(token)).isTrue();
+    }
+
+    @Test
+    void aTokenWithoutIssuedAtUsesTheLifetimeObservedAtIssuance() {
+        var now = clock.instant();
+        var access = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, "observed-access", null,
+                now.plusSeconds(300));
+        var timing = new ThsAccessTokenRefresh(clock);
+        var client = new OAuth2AuthorizedClient(registrations.findByRegistrationId(REGISTRATION), SUBJECT, access);
+        var token = timing.observeIssuance(client).getAccessToken();
+        assertThat(token.getIssuedAt()).isEqualTo(now);
+        when(clock.instant()).thenReturn(now.plusSeconds(150).minusNanos(1));
+        assertThat(timing.refreshDue(token)).isFalse();
+        when(clock.instant()).thenReturn(now.plusSeconds(150));
+        assertThat(timing.refreshDue(token)).isTrue();
+    }
+
+    private static String workflowCard() {
+        return "/trusted-human/onboarding/api/" + PROPOSAL;
+    }
+
+    private String savedAccessToken() {
+        return clients.<OAuth2AuthorizedClient>loadAuthorizedClient(REGISTRATION, SUBJECT)
+                .getAccessToken().getTokenValue();
+    }
+
+    private record RequestHold(CountDownLatch admitted, CountDownLatch release) {}
+
     private MockHttpSession session(String registrationId, String value, boolean expired, String refreshValue) {
+        var now = clock.instant();
+        return session(registrationId, value, now.minusSeconds(600),
+                expired ? now.minusSeconds(120) : now.plusSeconds(600), refreshValue);
+    }
+
+    private MockHttpSession session(String registrationId, String value, Instant issued, Instant expiry,
+            String refreshValue) {
         var authorities = List.of(new SimpleGrantedAuthority("OAUTH2_USER"));
         var user = new DefaultOAuth2User(authorities, Map.of("sub", SUBJECT), "sub");
         var auth = new OAuth2AuthenticationToken(user, authorities, registrationId);
-        var now = Instant.now();
-        var access = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, value, now.minusSeconds(600),
-                expired ? now.minusSeconds(120) : now.plusSeconds(600), Set.of("profile"));
-        var refresh = refreshValue == null ? null : new OAuth2RefreshToken(refreshValue, now.minusSeconds(600));
+        var access = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, value, issued, expiry, Set.of("profile"));
+        var refresh = refreshValue == null ? null : new OAuth2RefreshToken(refreshValue, issued);
         clients.saveAuthorizedClient(new OAuth2AuthorizedClient(registrations.findByRegistrationId(registrationId),
                 auth.getName(), access, refresh), auth);
         var security = SecurityContextHolder.createEmptyContext();
@@ -191,6 +341,38 @@ class PermissionThsSessionTest {
     @EnableWebSecurity
     @Import({PermissionThsSecurity.class, PermissionThsApi.class})
     static class Config {
+        @Bean Clock clock() {
+            return mock(Clock.class);
+        }
+
+        @Bean @Primary ThsAccessTokenRefresh controlledTiming(Clock clock) {
+            return new ThsAccessTokenRefresh(clock);
+        }
+
+        @Bean WorkflowThsApi workflow(StubIssuer issuer) {
+            return new WorkflowThsApi(new ObjectMapper(), issuer.origin());
+        }
+
+        @Bean WebMvcConfigurer holdAdmittedRequest(StubIssuer issuer) {
+            return new WebMvcConfigurer() {
+                @Override
+                public void addInterceptors(InterceptorRegistry registry) {
+                    registry.addInterceptor(new HandlerInterceptor() {
+                        @Override
+                        public boolean preHandle(HttpServletRequest request, HttpServletResponse response,
+                                Object handler) throws InterruptedException {
+                            var hold = issuer.hold.get();
+                            if (hold != null && "true".equals(request.getHeader("X-Test-Hold-Request"))) {
+                                hold.admitted().countDown();
+                                return hold.release().await(10, TimeUnit.SECONDS);
+                            }
+                            return true;
+                        }
+                    });
+                }
+            };
+        }
+
         @Bean StubIssuer stubIssuer() throws IOException {
             return new StubIssuer();
         }
@@ -236,11 +418,22 @@ class PermissionThsSessionTest {
 
     private static final class StubIssuer implements AutoCloseable {
         private final HttpServer server;
+        private final AtomicInteger refreshAttempts = new AtomicInteger();
+        private final AtomicReference<String> lastOwnerBearer = new AtomicReference<>();
+        private final AtomicReference<String> lastOwnerMethod = new AtomicReference<>();
+        private final AtomicReference<String> lastOwnerPath = new AtomicReference<>();
+        private final AtomicReference<RequestHold> hold = new AtomicReference<>();
 
         private StubIssuer() throws IOException {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/token", this::token);
             server.createContext("/userinfo", exchange -> reply(exchange, 200, "{\"sub\":\"test-human\"}"));
+            server.createContext("/api/trusted-human/v1/approval-challenges/", exchange -> {
+                lastOwnerBearer.set(exchange.getRequestHeaders().getFirst("Authorization"));
+                lastOwnerMethod.set(exchange.getRequestMethod());
+                lastOwnerPath.set(exchange.getRequestURI().getPath());
+                reply(exchange, 200, "{}");
+            });
             server.start();
         }
 
@@ -250,7 +443,12 @@ class PermissionThsSessionTest {
 
         private void token(HttpExchange exchange) throws IOException {
             var body = new String(exchange.getRequestBody().readAllBytes(), UTF_8);
-            if (body.contains("grant_type=refresh_token") && body.contains("refresh_token=accepted-refresh")
+            if (body.contains("grant_type=refresh_token")) refreshAttempts.incrementAndGet();
+            if (body.contains("grant_type=refresh_token") && body.contains("refresh_token=short-refresh")) {
+                reply(exchange, 200, """
+                        {"access_token":"short-access","refresh_token":"short-refresh","token_type":"Bearer","expires_in":120}
+                        """);
+            } else if (body.contains("grant_type=refresh_token") && body.contains("refresh_token=accepted-refresh")
                     && !body.contains("scope=")) {
                 reply(exchange, 200, """
                         {"access_token":"renewed-access","refresh_token":"renewed-refresh","token_type":"Bearer","expires_in":300}
