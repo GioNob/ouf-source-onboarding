@@ -1,6 +1,7 @@
 'use strict';
 const form = document.getElementById('upload');
 const status = document.getElementById('status');
+const sessionExpired = 'Sessione scaduta: ricarica la pagina per accedere di nuovo';
 const result = document.getElementById('result');
 const handoff = new URLSearchParams(window.location.search).get('handoff');
 const handoffValid = handoff === null || /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(handoff);
@@ -8,13 +9,15 @@ async function reportRejection(code) {
   if (!handoff || !handoffValid) return;
   try {
     const session = await fetch('/trusted-human/managed-files/session', {credentials: 'same-origin', cache: 'no-store'});
+    if (session.status === 401) status.textContent = sessionExpired;
     if (!session.ok) return;
     const {csrfToken, csrfHeader} = await session.json();
     if (!csrfToken || !/^X-[A-Za-z-]+$/.test(csrfHeader)) return;
-    await fetch('/trusted-human/managed-files/rejection?handoff=' + encodeURIComponent(handoff), {
+    const response = await fetch('/trusted-human/managed-files/rejection?handoff=' + encodeURIComponent(handoff), {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
       headers: {'Content-Type': 'application/json', [csrfHeader]: csrfToken}, body: JSON.stringify({code})
     });
+    if (response.status === 401) status.textContent = sessionExpired;
   } catch (_) { /* The local error remains visible if the handoff is unavailable. */ }
 }
 form.addEventListener('submit', async event => {
@@ -44,6 +47,7 @@ form.addEventListener('submit', async event => {
   status.textContent = 'Caricamento in corso…';
   try {
     const session = await fetch('/trusted-human/managed-files/session', { credentials: 'same-origin', cache: 'no-store' });
+    if (session.status === 401) throw new Error(sessionExpired);
     if (!session.ok) throw new Error('SESSION');
     const { csrfToken, csrfHeader } = await session.json();
     if (!csrfToken || !/^X-[A-Za-z-]+$/.test(csrfHeader)) throw new Error('SESSION');
@@ -54,6 +58,7 @@ form.addEventListener('submit', async event => {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
       headers: { 'Content-Type': 'text/csv', 'X-Content-SHA256': hash, [csrfHeader]: csrfToken }, body: file,
     });
+    if (response.status === 401) throw new Error(sessionExpired);
     if (!response.ok) throw new Error('HTTP_' + response.status);
     const uploaded = await response.json();
     const assetId = uploaded.assetId;
@@ -63,7 +68,7 @@ form.addEventListener('submit', async event => {
     status.textContent = handoff ? 'Caricamento completato. Torna alla chat: l’esito arriverà automaticamente.' :
       'Caricamento completato. Torna alla chat e comunica l’Asset ID per avviare il profilo.';
   } catch (error) {
-    status.textContent = 'Caricamento non riuscito: ' + (error.message ?? 'ERRORE');
+    status.textContent = error.message === sessionExpired ? sessionExpired : 'Caricamento non riuscito: ' + (error.message ?? 'ERRORE');
   } finally {
     button.disabled = false;
   }

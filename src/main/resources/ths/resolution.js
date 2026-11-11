@@ -4,6 +4,7 @@
   const status = document.getElementById('status');
   const confirm = document.getElementById('confirm');
   const refresh = document.getElementById('refresh');
+  const sessionExpired = 'Sessione scaduta: ricarica la pagina per accedere di nuovo';
   let current = null;
   let csrf = null;
   const node = (tag, className, value) => {
@@ -95,6 +96,7 @@
     message('Caricamento dei casi…');
     try {
       const response = await fetch('api/package', {credentials: 'same-origin', cache: 'no-store'});
+      if (response.status === 401) throw new Error(sessionExpired);
       if (!response.ok) throw new Error(`Lettura non disponibile (HTTP ${response.status}).`);
       const data = await response.json();
       current = data.package;
@@ -117,6 +119,11 @@
       const response = await fetch('api/package/confirm', {method: 'POST', credentials: 'same-origin',
         headers: {'Content-Type': 'application/json', ...csrf},
         body: JSON.stringify({snapshotHash: current.snapshotHash, choices})});
+      if (response.status === 401) {
+        current = null;
+        csrf = null;
+        throw new Error(sessionExpired);
+      }
       if (!response.ok) throw new Error(`Conferma respinta (HTTP ${response.status}). Aggiorna e verifica di nuovo il pacchetto.`);
       const result = await response.json();
       await load();
