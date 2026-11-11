@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
+import it.comune.trieste.ouf.onboarding.application.ThsBearerTimeouts;
 import com.fasterxml.jackson.databind.*;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -7,7 +8,6 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -24,7 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class WorkflowThsApi {
   private final ObjectMapper json;
   private final URI gateway;
-  private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3))
+  private final HttpClient http=HttpClient.newBuilder().connectTimeout(ThsBearerTimeouts.HTTP_CONNECT)
       .followRedirects(HttpClient.Redirect.NEVER).build();
   public WorkflowThsApi(ObjectMapper json,
       @Value("${ouf.workflow.ths.gateway-base-url}") String baseUrl){
@@ -84,7 +84,8 @@ public class WorkflowThsApi {
   }
   private HttpResponse<String> send(HttpRequest.Builder builder,String access)throws Exception{
     var response=http.send(builder.header("Authorization","Bearer "+access).header("Accept","application/json")
-        .timeout(Duration.ofSeconds(builder.build().uri().getPath().endsWith("/review/activate")?55:15)).build(),HttpResponse.BodyHandlers.ofString());
+        .timeout(builder.build().uri().getPath().endsWith("/review/activate")
+            ? ThsBearerTimeouts.MAX_REQUEST : ThsBearerTimeouts.WORKFLOW_REVIEW).build(),HttpResponse.BodyHandlers.ofString());
     if(response.body().length()>1048576)throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_OWNER_RESPONSE_TOO_LARGE");return response;
   }
   private static ResponseEntity<String> upstream(HttpResponse<String> response){

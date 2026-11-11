@@ -57,6 +57,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit.jupiter.web.SpringJUnitWebConfig;
 import org.springframework.test.web.servlet.MockMvc;
@@ -260,7 +261,7 @@ class PermissionThsSessionTest {
 
     @Test
     @ExtendWith(OutputCaptureExtension.class)
-    void aNewOneHundredTwentySecondTokenLogsTheConfigurationErrorWithoutBlocking(CapturedOutput output)
+    void aNewOneHundredTwentySecondTokenLogsTheConfigurationWarningWithoutBlocking(CapturedOutput output)
             throws Exception {
         var now = clock.instant();
         var session = session(REGISTRATION, "original-access", now.minusSeconds(160), now.plusSeconds(140),
@@ -268,12 +269,10 @@ class PermissionThsSessionTest {
         mvc.perform(get(PAGE).session(session)).andExpect(status().isOk());
         var token = clients.<OAuth2AuthorizedClient>loadAuthorizedClient(REGISTRATION, SUBJECT).getAccessToken();
         assertThat(token.getTokenValue()).isEqualTo("short-access");
-        assertThat(output.getAll()).contains("THS_ACCESS_TOKEN_HALF_LIFE_TOO_SHORT halfLifeMs=60000 minimumMs=105000");
+        assertThat(output.getAll()).contains("THS_ACCESS_TOKEN_HALF_LIFE_TOO_SHORT lifetimeSeconds=120 halfLifeSeconds=60 minimumSeconds=165");
         assertThat(output.getAll()).doesNotContain("short-access", "short-refresh");
         var timing = new ThsAccessTokenRefresh(clock);
-        when(clock.instant()).thenReturn(token.getIssuedAt().plusSeconds(14));
-        assertThat(timing.refreshDue(token)).isFalse();
-        when(clock.instant()).thenReturn(token.getIssuedAt().plusSeconds(15));
+        when(clock.instant()).thenReturn(token.getIssuedAt());
         assertThat(timing.refreshDue(token)).isTrue();
     }
 
@@ -297,10 +296,68 @@ class PermissionThsSessionTest {
         var client = new OAuth2AuthorizedClient(registrations.findByRegistrationId(REGISTRATION), SUBJECT, access);
         var token = timing.observeIssuance(client).getAccessToken();
         assertThat(token.getIssuedAt()).isEqualTo(now);
-        when(clock.instant()).thenReturn(now.plusSeconds(150).minusNanos(1));
+        when(clock.instant()).thenReturn(now.plusSeconds(135).minusNanos(1));
         assertThat(timing.refreshDue(token)).isFalse();
-        when(clock.instant()).thenReturn(now.plusSeconds(150));
+        when(clock.instant()).thenReturn(now.plusSeconds(135));
         assertThat(timing.refreshDue(token)).isTrue();
+    }
+
+    @Test
+    @DirtiesContext(methodMode = DirtiesContext.MethodMode.BEFORE_METHOD)
+    @ExtendWith(OutputCaptureExtension.class)
+    void aThreeHundredSecondLifetimeIsLoggedOnceAcrossTwoLoginsAndRefreshesAtAge135(CapturedOutput output)
+            throws Exception {
+        login("first-login-code");
+        assertThat(savedAccessToken()).isEqualTo("first-login-access");
+        var session = login("login-code");
+        assertThat(lifetimeLogLines(output, "THS_ACCESS_TOKEN_LIFETIME_OBSERVED"))
+                .singleElement().satisfies(line -> assertThat(line).contains("INFO", "lifetimeSeconds=300"));
+        assertThat(lifetimeLogLines(output, "THS_ACCESS_TOKEN_HALF_LIFE_TOO_SHORT"))
+                .singleElement().satisfies(line -> assertThat(line)
+                        .contains("WARN", "lifetimeSeconds=300 halfLifeSeconds=150 minimumSeconds=165"));
+        assertRefreshBoundary(session, 135);
+    }
+
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void aSixHundredSecondTokenRefreshesAtAge300WithoutAWarningForThatLifetime(CapturedOutput output)
+            throws Exception {
+        var session = login("long-login-code");
+        assertThat(lifetimeLogLines(output, "THS_ACCESS_TOKEN_LIFETIME_OBSERVED"))
+                .singleElement().satisfies(line -> assertThat(line).contains("INFO", "lifetimeSeconds=600"));
+        assertThat(lifetimeLogLines(output, "THS_ACCESS_TOKEN_HALF_LIFE_TOO_SHORT")).isEmpty();
+        assertRefreshBoundary(session, 300);
+    }
+
+    private static List<String> lifetimeLogLines(CapturedOutput output, String code) {
+        return output.getAll().lines().filter(line -> line.contains(code)).toList();
+    }
+
+    private MockHttpSession login(String code) throws Exception {
+        var login = mvc.perform(get(LOGIN)).andExpect(status().is3xxRedirection()).andReturn();
+        var session = (MockHttpSession) login.getRequest().getSession(false);
+        var params = UriComponentsBuilder.fromUriString(login.getResponse().getRedirectedUrl())
+                .build().getQueryParams();
+        var state = URLDecoder.decode(params.getFirst("state"), UTF_8);
+        var callback = mvc.perform(get("/login/oauth2/code/" + REGISTRATION).session(session)
+                        .param("code", code).param("state", state))
+                .andExpect(redirectedUrl("/")).andReturn();
+        return (MockHttpSession) callback.getRequest().getSession(false);
+    }
+
+    private void assertRefreshBoundary(MockHttpSession session, long ageSeconds) throws Exception {
+        var access = clients.<OAuth2AuthorizedClient>loadAuthorizedClient(REGISTRATION, SUBJECT).getAccessToken();
+        var threshold = access.getIssuedAt().plusSeconds(ageSeconds);
+        var attempts = issuer.refreshAttempts.get();
+        when(clock.instant()).thenReturn(threshold.minusNanos(1));
+        mvc.perform(get(PAGE).session(session)).andExpect(status().isOk());
+        assertThat(issuer.refreshAttempts.get()).isEqualTo(attempts);
+        assertThat(savedAccessToken()).isEqualTo("login-access");
+
+        when(clock.instant()).thenReturn(threshold);
+        mvc.perform(get(PAGE).session(session)).andExpect(status().isOk());
+        assertThat(issuer.refreshAttempts.get()).isEqualTo(attempts + 1);
+        assertThat(savedAccessToken()).isEqualTo("renewed-access");
     }
 
     private static String workflowCard() {
@@ -454,9 +511,11 @@ class PermissionThsSessionTest {
                         {"access_token":"renewed-access","refresh_token":"renewed-refresh","token_type":"Bearer","expires_in":300}
                         """);
             } else if (body.contains("grant_type=authorization_code") && body.contains("code_verifier=")) {
+                int expiresIn = body.contains("code=long-login-code") ? 600 : 300;
+                String token = body.contains("code=first-login-code") ? "first-login-access" : "login-access";
                 reply(exchange, 200, """
-                        {"access_token":"login-access","token_type":"Bearer","expires_in":300}
-                        """);
+                        {"access_token":"%s","refresh_token":"accepted-refresh","token_type":"Bearer","expires_in":%d}
+                        """.formatted(token, expiresIn));
             } else {
                 reply(exchange, 400, "{\"error\":\"invalid_grant\"}");
             }

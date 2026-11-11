@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
+import it.comune.trieste.ouf.onboarding.application.ThsBearerTimeouts;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -7,7 +8,6 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.*;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,7 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class ResolutionThsApi {
   private static final String OWNER_PATH="/api/udp/v1/governance/resolution/issues/package";
   private final ObjectMapper json;
-  private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3))
+  private final HttpClient http=HttpClient.newBuilder().connectTimeout(ThsBearerTimeouts.HTTP_CONNECT)
       .followRedirects(HttpClient.Redirect.NEVER).build();
   private final URI owner;
   public ResolutionThsApi(ObjectMapper json,
@@ -68,7 +68,7 @@ public class ResolutionThsApi {
   }
   private HttpResponse<String> send(HttpRequest.Builder builder,String access)throws Exception{
     HttpRequest request=builder.header("Authorization","Bearer "+access)
-        .header("Accept","application/json").timeout(Duration.ofSeconds(15)).build();
+        .header("Accept","application/json").timeout(ThsBearerTimeouts.RESOLUTION_REVIEW).build();
     return http.send(request,HttpResponse.BodyHandlers.ofString());
   }
   private static ResponseEntity<String> upstream(HttpResponse<String> response){

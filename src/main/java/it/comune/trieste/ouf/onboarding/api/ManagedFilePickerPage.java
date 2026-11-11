@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
+import it.comune.trieste.ouf.onboarding.application.ThsBearerTimeouts;
 import java.io.IOException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.core.io.ClassPathResource;
@@ -104,8 +105,8 @@ public class ManagedFilePickerPage {
     var connection = (HttpURLConnection) uploadUrl.toURL().openConnection();
     try {
       connection.setInstanceFollowRedirects(false);
-      connection.setConnectTimeout(5000);
-      connection.setReadTimeout(30000);
+      connection.setConnectTimeout(Math.toIntExact(ThsBearerTimeouts.FILE_UPLOAD_CONNECT.toMillis()));
+      connection.setReadTimeout(Math.toIntExact(ThsBearerTimeouts.FILE_UPLOAD_READ.toMillis()));
       connection.setRequestMethod("POST");
       connection.setDoOutput(true);
       if (declaredSize > 0) connection.setFixedLengthStreamingMode(declaredSize);
