@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
+import it.comune.trieste.ouf.onboarding.application.ThsBearerTimeouts;
 import java.io.IOException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.core.io.ClassPathResource;
@@ -13,9 +14,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
-import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletRequest;
@@ -36,20 +34,18 @@ import it.comune.trieste.ouf.onboarding.application.ManagedFileChatHandoff;
 public class ManagedFilePickerPage {
   private static final long MAX_BYTES = 10L * 1024 * 1024;
   private final URI uploadUrl;
-  private final OAuth2AuthorizedClientService clients;
   private final TrustedActorResolver actors;
   private final ObjectMapper json;
   private final ManagedFileChatHandoff handoffs;
 
   public ManagedFilePickerPage(@Value("${ouf.managed-file-picker.gateway-upload-url}") String url,
-      OAuth2AuthorizedClientService clients, TrustedActorResolver actors, ObjectMapper json,
+      TrustedActorResolver actors, ObjectMapper json,
       ManagedFileChatHandoff handoffs) {
     this.uploadUrl = URI.create(url);
     if (!"/api/managed-sources/v1/files".equals(uploadUrl.getPath()) || uploadUrl.getRawQuery() != null
         || uploadUrl.getRawFragment() != null || uploadUrl.getUserInfo() != null
         || !("http".equals(uploadUrl.getScheme()) && "ouf-apisix".equals(uploadUrl.getHost()) && uploadUrl.getPort() == 9080))
       throw new IllegalArgumentException("picker must call the exact governed Gateway upload binding");
-    this.clients = clients;
     this.actors = actors;
     this.json = json;
     this.handoffs = handoffs;
@@ -105,22 +101,17 @@ public class ManagedFilePickerPage {
       throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "UPLOAD_SIZE_INVALID");
     if (declaredSize == 0 || !hash.matches("sha256:[0-9a-f]{64}"))
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UPLOAD_METADATA_INVALID");
-    var auth = SecurityContextHolder.getContext().getAuthentication();
-    if (!(auth instanceof OAuth2AuthenticationToken session))
-      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "THS_SESSION_REQUIRED");
-    var client = clients.loadAuthorizedClient(session.getAuthorizedClientRegistrationId(), session.getName());
-    if (client == null || !"ouf-ths".equals(client.getClientRegistration().getRegistrationId()))
-      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "THS_SESSION_REQUIRED");
+    String access = PermissionThsSecurity.requestAccessToken(request);
     var connection = (HttpURLConnection) uploadUrl.toURL().openConnection();
     try {
       connection.setInstanceFollowRedirects(false);
-      connection.setConnectTimeout(5000);
-      connection.setReadTimeout(30000);
+      connection.setConnectTimeout(Math.toIntExact(ThsBearerTimeouts.FILE_UPLOAD_CONNECT.toMillis()));
+      connection.setReadTimeout(Math.toIntExact(ThsBearerTimeouts.FILE_UPLOAD_READ.toMillis()));
       connection.setRequestMethod("POST");
       connection.setDoOutput(true);
       if (declaredSize > 0) connection.setFixedLengthStreamingMode(declaredSize);
       else connection.setChunkedStreamingMode(65536);
-      connection.setRequestProperty("Authorization", "Bearer " + client.getAccessToken().getTokenValue());
+      connection.setRequestProperty("Authorization", "Bearer " + access);
       connection.setRequestProperty("Content-Type", "text/csv");
       connection.setRequestProperty("X-Content-SHA256", hash);
       try (var source = request.getInputStream(); var target = connection.getOutputStream()) {

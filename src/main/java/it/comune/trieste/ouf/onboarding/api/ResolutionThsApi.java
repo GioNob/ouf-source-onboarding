@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
+import it.comune.trieste.ouf.onboarding.application.ThsBearerTimeouts;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -7,15 +8,11 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.*;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.*;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
-import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -26,14 +23,13 @@ import org.springframework.web.server.ResponseStatusException;
 @ConditionalOnProperty(name="ouf.resolution.ths.gateway-base-url")
 public class ResolutionThsApi {
   private static final String OWNER_PATH="/api/udp/v1/governance/resolution/issues/package";
-  private final OAuth2AuthorizedClientService clients;
   private final ObjectMapper json;
-  private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3))
+  private final HttpClient http=HttpClient.newBuilder().connectTimeout(ThsBearerTimeouts.HTTP_CONNECT)
       .followRedirects(HttpClient.Redirect.NEVER).build();
   private final URI owner;
-  public ResolutionThsApi(OAuth2AuthorizedClientService clients,ObjectMapper json,
+  public ResolutionThsApi(ObjectMapper json,
       @Value("${ouf.resolution.ths.gateway-base-url}") String baseUrl){
-    this.clients=clients;this.json=json;
+    this.json=json;
     URI base=URI.create(baseUrl);
     if(base.getHost()==null||base.getUserInfo()!=null||base.getQuery()!=null
         ||base.getFragment()!=null||!(base.getPath().isEmpty()||"/".equals(base.getPath()))
@@ -43,16 +39,16 @@ public class ResolutionThsApi {
     this.owner=URI.create(base.toString().replaceAll("/+$","")+OWNER_PATH);
   }
   @GetMapping("/") ResponseEntity<byte[]> page(HttpServletRequest request)throws IOException{
-    token(request);return asset("resolution.html",MediaType.TEXT_HTML);
+    PermissionThsSecurity.requestAccessToken(request);return asset("resolution.html",MediaType.TEXT_HTML);
   }
   @GetMapping("/review.js") ResponseEntity<byte[]> script(HttpServletRequest request)throws IOException{
-    token(request);return asset("resolution.js",MediaType.valueOf("text/javascript"));
+    PermissionThsSecurity.requestAccessToken(request);return asset("resolution.js",MediaType.valueOf("text/javascript"));
   }
   @GetMapping("/review.css") ResponseEntity<byte[]> css(HttpServletRequest request)throws IOException{
-    token(request);return asset("resolution.css",MediaType.valueOf("text/css"));
+    PermissionThsSecurity.requestAccessToken(request);return asset("resolution.css",MediaType.valueOf("text/css"));
   }
   @GetMapping("/api/package") ResponseEntity<?> prepare(HttpServletRequest request)throws Exception{
-    String access=token(request);
+    String access=PermissionThsSecurity.requestAccessToken(request);
     var response=send(HttpRequest.newBuilder(owner).GET(),access);
     if(response.statusCode()!=200)return upstream(response);
     CsrfToken csrf=(CsrfToken)request.getAttribute(CsrfToken.class.getName());
@@ -64,7 +60,7 @@ public class ResolutionThsApi {
   @PostMapping("/api/package/confirm") ResponseEntity<String> confirm(@RequestBody byte[] body,
       HttpServletRequest request)throws Exception{
     if(body.length>1048576)throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
-    String access=token(request);
+    String access=PermissionThsSecurity.requestAccessToken(request);
     var builder=HttpRequest.newBuilder(URI.create(owner+"/confirm"))
         .header("Content-Type","application/json")
         .POST(HttpRequest.BodyPublishers.ofByteArray(body));
@@ -72,19 +68,8 @@ public class ResolutionThsApi {
   }
   private HttpResponse<String> send(HttpRequest.Builder builder,String access)throws Exception{
     HttpRequest request=builder.header("Authorization","Bearer "+access)
-        .header("Accept","application/json").timeout(Duration.ofSeconds(15)).build();
+        .header("Accept","application/json").timeout(ThsBearerTimeouts.RESOLUTION_REVIEW).build();
     return http.send(request,HttpResponse.BodyHandlers.ofString());
-  }
-  private String token(HttpServletRequest request){
-    if(!Boolean.TRUE.equals(request.getAttribute("ouf.permissionThsSession")))
-      throw new ResponseStatusException(HttpStatus.FORBIDDEN,"THS_SESSION_REQUIRED");
-    if(!(SecurityContextHolder.getContext().getAuthentication() instanceof OAuth2AuthenticationToken authentication))
-      throw new ResponseStatusException(HttpStatus.FORBIDDEN,"THS_SESSION_REQUIRED");
-    var authorized=clients.loadAuthorizedClient(authentication.getAuthorizedClientRegistrationId(),
-        authentication.getName());
-    if(authorized==null||!"ouf-ths".equals(authorized.getClientRegistration().getRegistrationId()))
-      throw new ResponseStatusException(HttpStatus.FORBIDDEN,"THS_SESSION_REQUIRED");
-    return authorized.getAccessToken().getTokenValue();
   }
   private static ResponseEntity<String> upstream(HttpResponse<String> response){
     int status=response.statusCode();

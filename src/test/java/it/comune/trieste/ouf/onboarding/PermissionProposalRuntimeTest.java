@@ -124,7 +124,9 @@ class PermissionProposalRuntimeTest {
   http.perform(post(API+"read").header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
   http.perform(post(API+"propose").header("X-OUF-Authorization-Receipt",receipt("propose",PermissionProposalService.PROPOSE,body,now.minusSeconds(1).getEpochSecond())).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
   http.perform(post(API+"confirm").header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isNotFound());
-  http.perform(post(THS+UUID.randomUUID()+"/confirm").with(csrf()).header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().is3xxRedirection());
+  http.perform(post(THS+UUID.randomUUID()+"/confirm").with(csrf()).header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content("{}"))
+       .andExpect(status().isUnauthorized()).andExpect(header().doesNotExist("Location"))
+       .andExpect(jsonPath("$.code").value("THS_SESSION_EXPIRED"));
   assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
  }
  @Test void idempotencyHashAndActivePinProtectTheProposal(){

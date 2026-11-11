@@ -27,6 +27,13 @@ test('permission review binds explicit human confirmation to hash, revision and 
  await page.locator('#checked').check();await page.locator('#confirm').click();await page.locator('#status').filter({hasText:'Modifica pubblicata'}).waitFor();assert.deepEqual(sent.body,{expectedHash:'exact-hash'});await page.screenshot({path:'target/browser-evidence/role-review.png',fullPage:true});
  broken=true;await page.goto(url);await page.locator('#review:not([hidden])').waitFor();await page.locator('#checked').check();const beforePosts=posts;await page.locator('#confirm').click();await page.locator('#decision-status').filter({hasText:'esito non verificato'}).waitFor();assert.equal(posts,beforePosts+1);assert.equal(await page.locator('#confirm').isDisabled(),true);assert.doesNotMatch(await page.locator('#decision-status').textContent(),/non registrata/);
  broken=false;card.state='PUBLISHED';card.finalPolicyRef='policy:2';await page.goto(url);await page.locator('#decision-status').filter({hasText:'Modifica pubblicata'}).waitFor();assert.equal(await page.locator('#confirm').isDisabled(),true);
+ card.state='PENDING';card.finalPolicyRef=null;code=401;
+ await page.goto(url);await page.locator('#review:not([hidden])').waitFor();await page.locator('#checked').check();const beforeExpiry=posts;
+ await page.locator('#confirm').click();await page.locator('#decision-status').filter({hasText:'Sessione scaduta: ricarica la pagina per accedere di nuovo'}).waitFor();
+ await page.locator('#decision').dispatchEvent('submit');assert.equal(posts,beforeExpiry+1);
+ await page.unroute('**/api/proposals/**');await page.route('**/api/proposals/**',route=>route.fulfill({status:401,json:{code:'THS_SESSION_EXPIRED'}}));
+ await page.goto(url);await page.locator('#status').filter({hasText:'Sessione scaduta: ricarica la pagina per accedere di nuovo'}).waitFor();
+ assert.equal(await page.locator('#review').isHidden(),true);assert.equal(posts,beforeExpiry+1);
  await page.unroute('**/api/proposals/**');await page.route('**/api/proposals/**',route=>route.fulfill({status:403,json:{}}));await page.goto(url);await page.locator('#status').filter({hasText:'Proposta non accessibile'}).waitFor();assert.equal(await page.locator('#review').isHidden(),true);
  }finally{await browser.close();await new Promise(r=>server.close(r));}
 });

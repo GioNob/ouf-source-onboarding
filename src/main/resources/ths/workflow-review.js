@@ -8,6 +8,13 @@
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const cards = new Map();
   let busy = false;
+  let sessionExpired = false;
+  const sessionExpiredMessage = 'Sessione scaduta: ricarica la pagina per accedere di nuovo';
+  function checkSession(response) {
+    if (response.status !== 401) return;
+    sessionExpired = true;
+    throw new Error(sessionExpiredMessage);
+  }
   const status = (text, error = false) => { $('status').textContent = text; $('status').classList.toggle('error', error); };
   function element(tag, value, parent) { const e = document.createElement(tag); e.textContent = String(value ?? '—'); parent.append(e); return e; }
   function detail(label, value, parent) { const e = document.createElement('details'); element('summary', label, e); element('pre', JSON.stringify(value, null, 2), e); parent.append(e); }
@@ -16,7 +23,7 @@
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
   const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : item.card.onboardingState === 'APPROVED' && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
   function controls() {
-    const items = selected(); $('actions').disabled = busy || items.length === 0;
+    const items = selected(); $('actions').disabled = busy || sessionExpired || items.length === 0;
     $('approve').disabled = !items.length || !items.every(canApprove);
     $('reject').disabled = !items.length || !items.every(canApprove);
     $('complete').disabled = !items.length || !items.every(canComplete);
@@ -59,6 +66,7 @@
   }
   async function load(id) {
     const response = await fetch(`api/${encodeURIComponent(id)}`, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+    checkSession(response);
     if (!response.ok) throw new Error(`Revisione non disponibile (${response.status}). La sessione o i permessi potrebbero richiedere un nuovo accesso.`);
     render(id, await response.json());
   }
@@ -69,7 +77,7 @@
     finally { busy = false; controls(); }
   }
   async function decide(action) {
-    const items = selected(); if (busy || !items.length) return;
+    const items = selected(); if (busy || sessionExpired || !items.length) return;
     if (action === 'complete' ? !items.every(canComplete) : !items.every(canApprove)) return;
     busy = true; controls(); let completed = 0;
     try {
@@ -78,6 +86,7 @@
         const operation = semantic ? (action === 'complete' ? 'publish' : 'decision') : (action === 'complete' ? 'activate' : action === 'approve' ? 'confirm' : 'reject');
         const body = semantic ? (operation === 'publish' ? { approvalDecisionId: card.approvalDecisionId, contentHash: card.target_content_hash } : { decision: action === 'approve' ? 'APPROVED' : 'REJECTED', expectedContentHash: card.target_content_hash }) : { configurationHash: card.configuration_hash, expectedVersion: card.lockVersion };
         const response = await fetch(`api/${encodeURIComponent(id)}/${operation}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', [item.csrfHeader]: item.csrfToken }, body: JSON.stringify(body) });
+        checkSession(response);
         if (!response.ok) { let reason = ''; try { const failure = await response.json(); reason = failure.code || failure.detail || ''; } catch {} throw new Error(`Operazione non completata (${response.status})${reason ? ': ' + reason : ''}.`); }
         await load(id); completed++;
       }

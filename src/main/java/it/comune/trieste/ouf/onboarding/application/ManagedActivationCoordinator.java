@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
 public class ManagedActivationCoordinator {
   private final ManagedOnboardingReviewService reviews;private final ObjectMapper json;private final URI gateway;
   private final java.util.concurrent.Semaphore admission=new java.util.concurrent.Semaphore(2);
-  private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).followRedirects(HttpClient.Redirect.NEVER).build();
+  private final HttpClient http=HttpClient.newBuilder().connectTimeout(ThsBearerTimeouts.HTTP_CONNECT).followRedirects(HttpClient.Redirect.NEVER).build();
   public ManagedActivationCoordinator(ManagedOnboardingReviewService reviews,ObjectMapper json,
       @Value("${ouf.onboarding.udp-identity.gateway-url:}") String origin){
     this.reviews=reviews;this.json=json;this.gateway=origin.isBlank()?null:URI.create(origin);
@@ -30,11 +30,11 @@ public class ManagedActivationCoordinator {
     try{
       if(!admitted)throw new Failure("ONB_READINESS_CAPACITY_PAUSED",true);
       if(!Boolean.TRUE.equals(claim.progress().get("ingestionCompatibilityObserved"))){
-        var proof=post("/api/trusted-human/v1/ingestion/onboarding-readiness",Map.of("sourceId",claim.source(),"onboardingVersionId",claim.version(),"configurationHash",claim.hash()),bearer,35);
+        var proof=post("/api/trusted-human/v1/ingestion/onboarding-readiness",Map.of("sourceId",claim.source(),"onboardingVersionId",claim.version(),"configurationHash",claim.hash()),bearer,ThsBearerTimeouts.INGESTION_READINESS);
         if(!"PASS".equals(proof.get("status"))||!Boolean.TRUE.equals(proof.get("attestationSubmitted"))||!claim.source().equals(proof.get("sourceId"))||!claim.version().toString().equals(proof.get("onboardingVersionId"))||!claim.hash().equals(proof.get("configurationHash")))throw new Failure("ONB_READINESS_COMPATIBILITY_UNPROVEN",false);
       }
       reviews.activationPhase(claim,"CHECKING_IDENTITY");
-      var identity=post("/api/udp/v1/governance/identity/preflight",Map.of("sourceId",claim.source(),"configurationHash",claim.hash(),"configuration",claim.configuration()),bearer,8);
+      var identity=post("/api/udp/v1/governance/identity/preflight",Map.of("sourceId",claim.source(),"configurationHash",claim.hash(),"configuration",claim.configuration()),bearer,ThsBearerTimeouts.UDP_IDENTITY_PREFLIGHT);
       if(!Boolean.TRUE.equals(identity.get("valid"))||!claim.source().equals(identity.get("sourceId"))||!claim.hash().equals(identity.get("configurationHash")))throw new Failure("ONB_READINESS_IDENTITY_UNPROVEN",false);
       reviews.activationPhase(claim,"ACTIVATING");
       return reviews.finishActivation(principal,claim,authentication);
@@ -43,9 +43,9 @@ public class ManagedActivationCoordinator {
     catch(RuntimeException error){reviews.activationFailure(claim,"ONB_READINESS_OUTCOME_UNCONFIRMED",false);throw error;}
     finally{if(admitted)admission.release();}
   }
-  @SuppressWarnings("unchecked") private Map<String,Object> post(String path,Map<String,Object> body,String bearer,int seconds){
+  @SuppressWarnings("unchecked") private Map<String,Object> post(String path,Map<String,Object> body,String bearer,Duration timeout){
     try{
-      var request=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(seconds)).header("Authorization",bearer).header("Content-Type","application/json").header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString()).POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body))).build();
+      var request=HttpRequest.newBuilder(gateway.resolve(path)).timeout(timeout).header("Authorization",bearer).header("Content-Type","application/json").header("Accept","application/json").header("X-Correlation-ID",UUID.randomUUID().toString()).POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body))).build();
       var response=http.send(request,ignored->new BoundedResponse());
       if(response.statusCode()<200||response.statusCode()>=300){
         boolean transientFailure=Set.of(408,429,502,503,504).contains(response.statusCode());

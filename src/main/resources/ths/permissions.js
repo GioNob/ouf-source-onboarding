@@ -13,12 +13,14 @@
   for(const role of value.roles){text('h3',role.displayName+' ('+role.roleId+')',parent);for(const permission of role.permissions){text('p',permission.capabilityId,parent);if(permission.constraints)text('pre',JSON.stringify(permission.constraints,null,2),parent);}}
   text('h3','Assegnazioni',parent);for(const a of value.assignments){const item=document.createElement('dl');parent.append(item);pair(item,'Ruolo OUF',a.roleId);pair(item,a.subjectId?'Persona IAM (sub)':'Ruolo organizzativo IAM',a.subjectId||a.externalRoleRef);pair(item,'Valido da',a.validFrom);pair(item,'Valido fino a',a.validUntil);}
  }
+ const sessionExpired = 'Sessione scaduta: ricarica la pagina per accedere di nuovo';
  const endpoint=`/trusted-human/authorization/api/proposals/${encodeURIComponent(id||'')}`;
  function controls(enabled){$('confirm').disabled=!enabled||!$('checked').checked;$('reject').disabled=!enabled;$('checked').disabled=!enabled;}
  $('checked').onchange=()=>controls(!busy&&card?.state==='PENDING');
  async function load(){
   if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id||''))throw new Error('Apri il collegamento associato alla proposta.');
   const r=await fetch(endpoint,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+  if(r.status===401)throw new Error(sessionExpired);
   if(!r.ok||r.redirected)throw new Error('Proposta non accessibile. Verifica account IAM e autorizzazioni.');
   const data=await r.json();card=data.card;csrfHeader=data.csrfHeader;csrfToken=data.csrfToken;
   if(card.proposalId!==id||!csrfHeader||!csrfToken)throw new Error('Risposta di revisione non valida.');
@@ -33,6 +35,7 @@
   const slow=setTimeout(()=>message('La risposta sta richiedendo più tempo. Non ripetere la conferma; attendi l’esito oppure ricarica la pagina per verificarlo.'),8000);
   try{
    const r=await fetch(endpoint+'/'+action,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','If-Match':`"${card.revision}"`,[csrfHeader]:csrfToken},body:JSON.stringify({expectedHash:card.proposedHash})});
+   if(r.status===401)throw new Error(sessionExpired);
    if(!r.ok||r.redirected){if([409,410,412].includes(r.status))throw new Error('La proposta è scaduta o il contesto è cambiato. Richiedi una nuova proposta al chatbot.');throw new Error('Esito non verificato. Ricarica la pagina per leggere lo stato della proposta; se necessario accedi nuovamente con IAM. Non ripetere la conferma senza verificarlo.');}
    const result=await r.json();
    if(!['PUBLISHED','REJECTED'].includes(result.state)||(result.state==='PUBLISHED'&&!result.finalPolicyRef))throw new Error('Esito non verificato. Ricarica la pagina per leggere lo stato della proposta.');
