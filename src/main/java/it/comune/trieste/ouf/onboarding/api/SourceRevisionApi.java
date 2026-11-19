@@ -1,6 +1,9 @@
 package it.comune.trieste.ouf.onboarding.api;
 
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.cfg.CoercionAction;
+import com.fasterxml.jackson.databind.cfg.CoercionInputShape;
+import com.fasterxml.jackson.databind.type.LogicalType;
 import it.comune.trieste.ouf.onboarding.application.SourceRevisionService;
 import it.comune.trieste.ouf.onboarding.application.ManagedCsvRevision;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
@@ -18,6 +21,11 @@ public class SourceRevisionApi {
   public SourceRevisionApi(PermissionDelegationVerifier receipts,SourceRevisionService revisions,ObjectMapper json){
     this.receipts=receipts;this.revisions=revisions;
     this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).disable(MapperFeature.ALLOW_COERCION_OF_SCALARS);
+    this.json.enable(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY);
+    this.json.coercionConfigFor(LogicalType.Textual)
+        .setCoercion(CoercionInputShape.Integer,CoercionAction.Fail)
+        .setCoercion(CoercionInputShape.Float,CoercionAction.Fail)
+        .setCoercion(CoercionInputShape.Boolean,CoercionAction.Fail);
   }
   private <T>T arguments(byte[] raw,Class<T> type){
     try{var args=json.readTree(raw).required("Arguments");
@@ -30,6 +38,7 @@ public class SourceRevisionApi {
           ||!args.path("commandKey").isTextual()||!args.path("configurationHash").isTextual()
           ||!args.path("publicationEffect").isTextual()||args.has("changes")==args.has("assetRef")
           ||(args.has("changes")&&!args.path("changes").isArray())
+          ||(args.has("newColumns")&&(!args.has("assetRef")||!args.path("newColumns").isArray()))
           ||(args.has("assetRef")&&(!args.path("assetRef").path("assetId").isTextual()
               ||!args.path("assetRef").path("profileId").isTextual()))
           ||!args.path("expectedVersion").isIntegralNumber()||!args.path("expectedVersion").canConvertToLong()))throw new IllegalArgumentException();

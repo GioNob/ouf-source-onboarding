@@ -23,11 +23,16 @@ public class SourceRevisionService {
   public record AssetRef(UUID assetId, UUID profileId) {}
   public record Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
       String commandKey,String publicationEffect,List<Change> changes,
-      @JsonInclude(JsonInclude.Include.NON_NULL) AssetRef assetRef){
+      @JsonInclude(JsonInclude.Include.NON_NULL) AssetRef assetRef,
+      @JsonInclude(JsonInclude.Include.NON_NULL) List<ManagedCsvRevision.NewColumn> newColumns){
     // The absent extension must serialize exactly as before for historical command fingerprints.
     public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
         String commandKey,String publicationEffect,List<Change> changes){
       this(sourceId,parentVersionId,expectedVersion,configurationHash,commandKey,publicationEffect,changes,null);
+    }
+    public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
+        String commandKey,String publicationEffect,List<Change> changes,AssetRef assetRef){
+      this(sourceId,parentVersionId,expectedVersion,configurationHash,commandKey,publicationEffect,changes,assetRef,null);
     }
   }
   public SourceRevisionService(JdbcClient db,OnboardingService onboarding,ManagedOnboardingReviewService reviews,
@@ -73,6 +78,7 @@ public class SourceRevisionService {
         ||r.configurationHash()==null||!r.configurationHash().matches("sha256:[a-f0-9]{64}")
         ||!EFFECT.equals(r.publicationEffect())||(r.changes()==null)==(r.assetRef()==null)
         ||(r.changes()!=null&&(r.changes().isEmpty()||r.changes().size()>256))
+        ||(r.newColumns()!=null&&(r.assetRef()==null||r.newColumns().size()>ManagedFileLimits.MAX_COLUMNS))
         ||(r.assetRef()!=null&&(r.assetRef().assetId()==null||r.assetRef().profileId()==null)))
       throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
     // One command across sources, followed by the same source fence used by clone/publication.
@@ -109,13 +115,14 @@ public class SourceRevisionService {
     var row=db.sql("""
         insert into ouf_onboarding.source_property_revision
           (tenant_id,subject_id,command_key,request_hash,source_id,parent_version_id,parent_configuration_hash,
-           onboarding_version_id,publication_effect,replacement_profile_id)
-        values(:t,:s,:k,:h,:source,:parent,:ph,:v,:effect,:profile)
-        returning parent_version_id,parent_configuration_hash,replacement_profile_id
+           onboarding_version_id,publication_effect,replacement_profile_id,new_columns)
+        values(:t,:s,:k,:h,:source,:parent,:ph,:v,:effect,:profile,cast(:columns as jsonb))
+        returning parent_version_id,parent_configuration_hash,replacement_profile_id,new_columns
         """)
         .param("t",p.tenantId()).param("s",p.subjectId()).param("k",r.commandKey()).param("h",fingerprint)
         .param("source",r.sourceId()).param("parent",r.parentVersionId()).param("ph",r.configurationHash())
         .param("v",version).param("effect",r.publicationEffect())
+        .param("columns",r.newColumns()==null?null:onboarding.write(r.newColumns()),java.sql.Types.VARCHAR)
         .param("profile",r.assetRef()==null?null:r.assetRef().profileId(),java.sql.Types.OTHER).query().singleRow();
     return receipt(frozen,row);
   }
@@ -151,7 +158,7 @@ public class SourceRevisionService {
       throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT");
     if(!"PROFILED".equals(asset.get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_NOT_PROFILED");
     ManagedCsvRevision.replace(config,base,files.fileProfile(previous,profile),asset,
-        files.fileProfile(ref.assetId(),ref.profileId()),number);
+        files.fileProfile(ref.assetId(),ref.profileId()),number,request.newColumns());
     if(asset.get("source_id")==null)
       db.sql("update ouf_onboarding.managed_file_asset set source_id=:s where asset_id=:a and source_id is null")
           .param("s",source).param("a",ref.assetId()).update();
@@ -174,6 +181,7 @@ public class SourceRevisionService {
       var selection=object(object(configuration(version),"extractionProfile"),"selection");
       out.put("assetRef",Map.of("assetId",selection.get("assetId"),"profileId",revision.get("replacement_profile_id")));
       out.put("diagnostics",List.of());
+      out.put("newColumns",onboarding.newColumnDecisions(revision));
     }
     out.put("parentConfigurationHash",revision.get("parent_configuration_hash"));out.put("publicationEffects",effects());return out;
   }
@@ -196,7 +204,7 @@ public class SourceRevisionService {
   }
   @SuppressWarnings("unchecked") private static List<Map<String,Object>> properties(Map<String,Object> configuration){
     var profile=object(object(object(object(configuration,"extractionProfile"),"runtime"),"udp"),"materialization");
-    if(!(profile.get("properties") instanceof List<?> list)||list.size()>256||list.stream().anyMatch(x->!(x instanceof Map<?,?>)))
+    if(!(profile.get("properties") instanceof List<?> list)||list.size()>ManagedFileLimits.MAX_COLUMNS||list.stream().anyMatch(x->!(x instanceof Map<?,?>)))
       throw fail(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_REVISION_PROFILE_REQUIRED");
     return (List<Map<String,Object>>)(List<?>)list;
   }

@@ -198,14 +198,18 @@ public class ManagedOnboardingReviewService {
     card.put("onboardingState",version.get("state"));card.put("lockVersion",version.get("lock_version"));
     card.put("progress",receipt(version,review));
     var revision=db.sql("""
-        select r.parent_version_id,r.parent_configuration_hash,r.publication_effect,p.asset_id,r.replacement_profile_id
+        select r.parent_version_id,r.parent_configuration_hash,r.publication_effect,p.asset_id,r.replacement_profile_id,r.new_columns
         from ouf_onboarding.source_property_revision r left join ouf_onboarding.file_profile p on p.profile_id=r.replacement_profile_id
         where r.onboarding_version_id=:v
         """).param("v",version.get("onboarding_version_id")).query().listOfRows();
     if(!revision.isEmpty()){
       var base=new LinkedHashMap<>(revision.getFirst());
       Object profile=base.remove("replacement_profile_id"),asset=base.remove("asset_id");
-      if(profile!=null)card.put("assetRef",Map.of("assetId",asset,"profileId",profile));
+      if(profile!=null){
+        card.put("assetRef",Map.of("assetId",asset,"profileId",profile));
+        card.put("newColumns",onboarding.newColumnDecisions(base));
+      }
+      base.remove("new_columns");
       card.put("revisionBase",base);card.put("publicationEffects",SourceRevisionService.effects());
     }
     return card;
