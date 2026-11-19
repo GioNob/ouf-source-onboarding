@@ -26,5 +26,17 @@
   {
     "grantId": "grant-semantic-search-human-admin",
     "capabilityId": "ouf.semantic.search"
+  },
+  {
+    "grantId": "grant-semantic-discovery-human-admin",
+    "capabilityId": "ouf.semantic.discovery"
+  },
+  {
+    "grantId": "grant-semantic-discovery-status-human-admin",
+    "capabilityId": "ouf.semantic.discovery.status"
+  },
+  {
+    "grantId": "grant-semantic-discovery-candidates-human-admin",
+    "capabilityId": "ouf.semantic.discovery.candidates"
   }
 ]

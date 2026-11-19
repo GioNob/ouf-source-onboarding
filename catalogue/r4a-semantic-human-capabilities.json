@@ -75,5 +75,38 @@
         "HUMAN"
       ]
     }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.discovery",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.semantic.discovery",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.discovery.status",
+      "operation": "READ",
+      "requiredScope": "ouf.semantic.discovery",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.discovery.candidates",
+      "operation": "READ",
+      "requiredScope": "ouf.semantic.discovery",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
   }
 ]

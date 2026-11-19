@@ -125,8 +125,10 @@ def main():
     args = p.parse_args()
     entries = json.loads(CAPABILITIES.read_text())
     grants = json.loads(GRANTS.read_text())
-    if (len(entries) != 7 or len(grants) != 7
-            or {x['descriptor']['capabilityId'] for x in entries} != {x['capabilityId'] for x in grants}
+    capability_ids = {x['descriptor']['capabilityId'] for x in entries}
+    if (len(entries) != 10 or len(grants) != 10 or len(capability_ids) != 10
+            or len({x['grantId'] for x in grants}) != 10
+            or capability_ids != {x['capabilityId'] for x in grants}
             or any(x.get('ownerRef') != 'semantic' or x['descriptor']['allowedActors'] != ['HUMAN']
                    for x in entries)):
         raise ValueError('SEMANTIC_MANIFEST_CHANGED')
@@ -157,6 +159,7 @@ def main():
     if status != 200 or not etag.isdigit():
         raise RuntimeError('DRAFT_CREATE_FAILED')
     state = {'draftId': draft['id'], 'revision': int(etag),
+             'catalogueHash': policy.digest([entries, grants]),
              'basePolicyRef': current['policyRef'],
              'targetPolicyRef': candidate['bundleId'] + ':' + str(candidate['version']),
              'baselineCapabilitiesHash': policy.digest(current['policy']['capabilities']),
