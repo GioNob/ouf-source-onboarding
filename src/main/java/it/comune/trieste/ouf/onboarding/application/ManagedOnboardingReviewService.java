@@ -197,8 +197,17 @@ public class ManagedOnboardingReviewService {
     var version=onboarding.version(String.valueOf(review.get("source_id")),(UUID)review.get("onboarding_version_id"));
     card.put("onboardingState",version.get("state"));card.put("lockVersion",version.get("lock_version"));
     card.put("progress",receipt(version,review));
-    var revision=db.sql("select parent_version_id,parent_configuration_hash,publication_effect from ouf_onboarding.source_property_revision where onboarding_version_id=:v").param("v",version.get("onboarding_version_id")).query().listOfRows();
-    if(!revision.isEmpty()){card.put("revisionBase",revision.getFirst());card.put("publicationEffects",SourceRevisionService.effects());}
+    var revision=db.sql("""
+        select r.parent_version_id,r.parent_configuration_hash,r.publication_effect,p.asset_id,r.replacement_profile_id
+        from ouf_onboarding.source_property_revision r left join ouf_onboarding.file_profile p on p.profile_id=r.replacement_profile_id
+        where r.onboarding_version_id=:v
+        """).param("v",version.get("onboarding_version_id")).query().listOfRows();
+    if(!revision.isEmpty()){
+      var base=new LinkedHashMap<>(revision.getFirst());
+      Object profile=base.remove("replacement_profile_id"),asset=base.remove("asset_id");
+      if(profile!=null)card.put("assetRef",Map.of("assetId",asset,"profileId",profile));
+      card.put("revisionBase",base);card.put("publicationEffects",SourceRevisionService.effects());
+    }
     return card;
   }
   /** Owner-local finite recovery sessions. Granting one never invokes activation. */

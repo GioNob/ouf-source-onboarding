@@ -23,6 +23,7 @@ import org.springframework.test.context.DynamicPropertySource;
 class SourceRevisionRuntimeTest {
   @DynamicPropertySource static void properties(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->required("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->required("OUF_ONB_DB_PASSWORD"));}
   @Autowired SourceRevisionService revisions; @Autowired OnboardingService onboarding;
+  @Autowired ManagedFileService files;
   @Autowired ManagedOnboardingReviewService reviews; @Autowired CanonicalHash hashes; @Autowired JdbcClient db;
   @MockitoBean(answers=Answers.RETURNS_DEEP_STUBS) AuthorizationPolicyRegistry policy;
   private final OnboardingService.Actor human=new OnboardingService.Actor("test-human","HUMAN_USER");
@@ -122,6 +123,124 @@ class SourceRevisionRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
   }
 
+  @Test void csvReplacementPublishesOnlyAfterConfirmationAndAttestation(){
+    var p=principal(UUID.randomUUID().toString(),human.subject());
+    var parent=activeCsv(p);
+    var original=onboarding.version("s",parent);
+    var ref=csv("id;amount\nr1;10\nr2;20\n",p.tenantId(),null,true);
+    var command=replace(parent,ref);
+    var receipt=revisions.prepare(p,command,"prepare");
+    var version=(UUID)receipt.get("onboardingVersionId");
+    var challenge=(UUID)receipt.get("challengeId");
+    var hash=(String)receipt.get("configurationHash");
+    assertThat(receipt).containsEntry("sourceId","s").containsEntry("state","IN_REVIEW")
+        .containsEntry("parentVersionId",parent).containsEntry("diagnostics",List.of());
+    assertThat(onboarding.version("s",parent)).isEqualTo(original);
+    assertThat(revisions.prepare(p,command,"repeat")).isEqualTo(receipt);
+    assertThat(revisions.readCommand(p,"s",parent,command.commandKey())).isEqualTo(receipt);
+    assertThat(reviews.humanCard(p,challenge)).containsEntry("assetRef",Map.of("assetId",ref.assetId(),"profileId",ref.profileId()));
+    assertThat(files.asset(ref.assetId())).containsEntry("source_id","s");
+    assertThatThrownBy(()->revisions.prepare(p,replace(parent,csv("id,amount\nr3,30\n",p.tenantId(),null,true)),"changed"))
+        .hasMessage("ONB_REVISION_COMMAND_CONFLICT");
+    var config=configuration(version);
+    for(String key:List.of("sourceObjectIdentityPolicy","semanticMapping","dataAccessPolicies","syncProfile"))
+      assertThat(config.get(key)).isEqualTo(configuration(parent).get(key));
+    var extraction=section(config,"extractionProfile");
+    var runtime=section(extraction,"runtime");
+    var asset=files.asset(ref.assetId());
+    assertThat(section(extraction,"selection")).containsEntry("assetId",ref.assetId().toString())
+        .containsEntry("fileProfileId",ref.profileId().toString());
+    assertThat(runtime).containsEntry("csvDelimiter",";").containsEntry("stagingRef",asset.get("staging_ref"))
+        .containsEntry("contentHash",asset.get("content_hash"));
+    String schema="profile://managed-files/"+ref.assetId()+"/profiles/"+ref.profileId();
+    assertThat(section(runtime,"execution")).containsEntry("sourceSchemaRef",schema).containsEntry("sourceSchemaVersion","2");
+    assertThat(((Number)section(runtime,"execution").get("expectedSize")).longValue()).isEqualTo(asset.get("size_bytes"));
+    assertThat(section(config,"bundle")).containsEntry("schemaRef",schema);
+    assertThatThrownBy(()->onboarding.activate("s",version,human,"early")).hasMessageContaining("APPROVED");
+    reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,2),"test-auth");
+    assertThatThrownBy(()->onboarding.activate("s",version,human,"early")).hasMessageContaining("Ingestion Runtime");
+    onboarding.attestIngestionCompatibility("s",version,true,"fixture",
+        new OnboardingService.Actor("fixture-runtime","SERVICE",Set.of("ouf.ingestion.configuration.attest")),"attest");
+    db.sql("update ouf_onboarding.managed_file_asset set status='QUARANTINED' where asset_id=:a").param("a",ref.assetId()).update();
+    assertThatThrownBy(()->onboarding.activate("s",version,human,"stale")).hasMessageContaining("no longer eligible");
+    assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
+    db.sql("update ouf_onboarding.managed_file_asset set status='PROFILED' where asset_id=:a").param("a",ref.assetId()).update();
+    reviews.humanAction(p,challenge,"activate",new ManagedOnboardingReviewService.Decision(hash,3),"test-auth");
+    assertThat(onboarding.version("s",version)).containsEntry("state","ACTIVE");
+    assertThat(onboarding.version("s",parent)).containsEntry("state","SUPERSEDED");
+    assertThat(revisions.prepare(p,command,"after-publication")).containsEntry("onboardingVersionId",version);
+    assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isOne();
+  }
+
+  @Test void unprovenCustodyStaleParentAndIncompatibleProfileRollBackTheWholeCommand(){
+    var p=principal(UUID.randomUUID().toString(),human.subject());
+    var parent=activeCsv(p);
+    onboarding.createSource("other","Other","INTERNAL_MANAGED","MANAGED","owner",Map.of(),human,"create");
+    String good="id,amount\nr2,20\n";
+    var foreignSource=csv(good,p.tenantId(),"other",true);
+    assertThatThrownBy(()->revisions.prepare(p,replace(parent,foreignSource),"c")).hasMessage("ONB_REVISION_ASSET_SOURCE_CONFLICT");
+    var foreignTenant=csv(good,UUID.randomUUID().toString(),null,true);
+    assertThatThrownBy(()->revisions.prepare(p,replace(parent,foreignTenant),"c")).hasMessageContaining("owner scope");
+    var staged=csv(good,p.tenantId(),null,false);
+    assertThatThrownBy(()->revisions.prepare(p,replace(parent,staged),"c")).hasMessage("ONB_REVISION_ASSET_NOT_PROFILED");
+    var incompatible=csv("id,amount,other\nr1,text,one\n",p.tenantId(),null,true);
+    assertThatThrownBy(()->revisions.prepare(p,replace(parent,incompatible),"c"))
+        .isInstanceOfSatisfying(ManagedCsvRevision.Incompatible.class,e->assertThat(e.diagnostics())
+            .extracting(ManagedCsvRevision.Finding::code).containsExactly("TYPE_CHANGED","NEW_COLUMN"));
+    var missing=csv("id\nr1\n",p.tenantId(),null,true);
+    assertThatThrownBy(()->revisions.prepare(p,replace(parent,missing),"c"))
+        .isInstanceOfSatisfying(ManagedCsvRevision.Incompatible.class,e->assertThat(e.diagnostics())
+            .containsExactly(new ManagedCsvRevision.Finding("MISSING_MAPPED_COLUMN","amount","LONG",null)));
+    var unpaired=new SourceRevisionService.AssetRef(missing.assetId(),incompatible.profileId());
+    assertThatThrownBy(()->revisions.prepare(p,replace(parent,unpaired),"c")).hasMessageContaining("profile not found");
+    var base=replace(parent,csv(good,p.tenantId(),null,true));
+    var stale=new SourceRevisionService.Prepare("s",parent,9,base.configurationHash(),base.commandKey(),base.publicationEffect(),null,base.assetRef());
+    assertThatThrownBy(()->revisions.prepare(p,stale,"c")).hasMessage("ONB_REVISION_PARENT_DRIFT");
+    when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(false);
+    assertThatThrownBy(()->revisions.prepare(p,base,"c")).hasMessage("ONB_REVISION_AUTHORIZATION_DENIED");
+    assertThat(db.sql("select count(*) from ouf_onboarding.onboarding_version").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_challenge").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from ouf_onboarding.source_property_revision").query(Long.class).single()).isZero();
+    assertThat(files.asset(incompatible.assetId()).get("source_id")).isNull();
+  }
+
+  private SourceRevisionService.AssetRef csv(String content,String tenant,String source,boolean profile){
+    byte[] bytes=content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.registerOwned(source,"object://fixture/"+UUID.randomUUID(),hashes.ofBytes(bytes),"text/csv",
+        bytes.length,human.subject(),"retention://fixture",tenant).get("asset_id");
+    UUID id=profile?(UUID)files.profile(asset,bytes,"sample://fixture").get("profile_id"):UUID.randomUUID();
+    return new SourceRevisionService.AssetRef(asset,id);
+  }
+  @SuppressWarnings("unchecked") private static Map<String,Object> section(Map<String,Object> map,String key){
+    return (Map<String,Object>)map.get(key);
+  }
+  private UUID activeCsv(PrincipalContext p){
+    var ref=csv("id,amount\nr1,10\n",p.tenantId(),null,true);
+    var fields=List.of("id","amount").stream().map(n->new ManagedFileService.FieldDecision(n,"INCLUDE","RESTRICTED","urn:"+n,"IDENTITY",null,null,null)).toList();
+    var draft=files.onboard(ref.assetId(),ref.profileId(),"s","Fixture","owner","urn:Object",List.of("core@1"),
+        List.of("id"),fields,null,human,"create",p.tenantId());
+    UUID version=(UUID)draft.get("onboarding_version_id");
+    var config=configuration(version);
+    var runtime=section(section(config,"extractionProfile"),"runtime");
+    var execution=new LinkedHashMap<String,Object>(Map.of("acquisitionMode","INTERNAL_MANAGED_CSV","adapterId","managed-tabular-v1",
+        "adapterRuntimeVersion","1","sourceSchemaRef",section(config,"bundle").get("schemaRef"),"sourceSchemaId","s",
+        "sourceSchemaVersion","1","semanticPublicationSetRef","fixture-set","adapterProfileRef","fixture","observationPolicy","ACQUISITION_TIME"));
+    execution.putAll(Map.of("maxRows",100,"maxColumns",2,"expectedSize",files.asset(ref.assetId()).get("size_bytes")));
+    runtime.put("execution",execution);
+    runtime.put("udp",Map.of("resolution",Map.of("strategyId","EXACT_SOURCE_KEY","strategyVersion","1",
+        "policyRef","fixture","canonicalType","urn:Object","canonicalKeyProperty","urn:id","matchProperty","urn:id"),
+        "materialization",Map.of("policyRef","fixture")));
+    config.put("semanticReferenceBindings",List.of(Map.of("semanticId","core","semanticVersion","1","revisionId","fixture","publicationSetId","fixture-set")));
+    onboarding.patchVersion("s",version,0,config,human,"fixture");
+    db.sql("update ouf_onboarding.onboarding_version set state='ACTIVE',configuration_hash=:h,frozen_at=transaction_timestamp() where onboarding_version_id=:v")
+        .param("h",hashes.of(configuration(version))).param("v",version).update();
+    return version;
+  }
+  private SourceRevisionService.Prepare replace(UUID parent,SourceRevisionService.AssetRef ref){
+    var row=onboarding.version("s",parent);
+    return new SourceRevisionService.Prepare("s",parent,((Number)row.get("lock_version")).longValue(),
+        (String)row.get("configuration_hash"),"csv-revision",SourceRevisionService.EFFECT,null,ref);
+  }
   private SourceRevisionService.Prepare command(UUID parent,String key,Map<String,Object> rule){return new SourceRevisionService.Prepare("s",parent,0,String.valueOf(onboarding.version("s",parent).get("configuration_hash")),key,SourceRevisionService.EFFECT,List.of(new SourceRevisionService.Change("urn:name","urn:name",rule)));}
   static Map<String,Object> rule(){return Map.of("policyRef","urn:ouf:policy:linked-object-property-reconciliation:v1","cardinality","SINGLE","normalizerRef","EXACT_TYPED","normalizerVersion",1,"validity","SOURCE_INTERVAL");}
   @SuppressWarnings("unchecked") private Map<String,Object> configuration(UUID version){return (Map<String,Object>)onboarding.version("s",version).get("configuration");}

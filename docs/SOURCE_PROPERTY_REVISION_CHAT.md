@@ -1,5 +1,7 @@
 # Generic source property revision from chat
 
+For a revision that replaces a managed CSV, see the [asset revision contract](SOURCE_REVISION_NEW_ASSET.md). The property-only command described below keeps its original wire format and fingerprint.
+
 Candidate implementation; not deployed or accepted end to end. The runtime checkpoint remains technical8/8, functional4/6.
 
 The owner composes its existing clone, CAS patch, full validation, freeze, native approval challenge and compatibility/activation coordinator. No application-specific source, field, class or priority is embedded in the implementation. Source kinds and scheduler configuration are retained; API/OGC sources use the same property-rule operation, while managed files retain their asset ownership check.
