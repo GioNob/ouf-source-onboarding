@@ -1,0 +1,7 @@
+[
+  {"grantId":"grant-onboarding-configuration-write-human-admin","capabilityId":"ouf.onboarding.configuration.write"},
+  {"grantId":"grant-managed-file-upload-human-admin","capabilityId":"ouf.managed-source.file.upload"},
+  {"grantId":"grant-managed-file-profile-human-admin","capabilityId":"ouf.managed-source.file.profile"},
+  {"grantId":"grant-managed-file-preview-human-admin","capabilityId":"ouf.managed-source.preview"},
+  {"grantId":"grant-managed-file-onboarding-create-human-admin","capabilityId":"ouf.managed-source.onboarding.create"}
+]
