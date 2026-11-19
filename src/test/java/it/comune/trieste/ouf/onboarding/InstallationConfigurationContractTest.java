@@ -18,7 +18,7 @@ class InstallationConfigurationContractTest {
     String raw = Files.readString(SCHEMA);
     assertThat(raw)
         .doesNotContain("ouf-lab.it")
-        .doesNotContain("62.83.33.202")
+        .doesNotContainPattern("\b\d{1,3}(\.\d{1,3}){3}\b")
         .doesNotContain("ouf-backend")
         .doesNotContain("ouf-postgres");
     JsonNode schema = JSON.readTree(raw);
