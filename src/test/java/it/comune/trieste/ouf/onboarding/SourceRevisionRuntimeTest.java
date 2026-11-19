@@ -186,7 +186,7 @@ class SourceRevisionRuntimeTest {
     var incompatible=csv("id,amount,other\nr1,text,one\n",p.tenantId(),null,true);
     assertThatThrownBy(()->revisions.prepare(p,replace(parent,incompatible),"c"))
         .isInstanceOfSatisfying(ManagedCsvRevision.Incompatible.class,e->assertThat(e.diagnostics())
-            .extracting(ManagedCsvRevision.Finding::code).containsExactly("TYPE_CHANGED","NEW_COLUMN"));
+            .extracting(ManagedCsvRevision.Finding::code).containsExactly("TYPE_CHANGED","NEW_COLUMN_DECISION_REQUIRED"));
     var missing=csv("id\nr1\n",p.tenantId(),null,true);
     assertThatThrownBy(()->revisions.prepare(p,replace(parent,missing),"c"))
         .isInstanceOfSatisfying(ManagedCsvRevision.Incompatible.class,e->assertThat(e.diagnostics())
@@ -202,6 +202,66 @@ class SourceRevisionRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_onboarding.approval_challenge").query(Long.class).single()).isZero();
     assertThat(db.sql("select count(*) from ouf_onboarding.source_property_revision").query(Long.class).single()).isZero();
     assertThat(files.asset(incompatible.assetId()).get("source_id")).isNull();
+  }
+
+  @Test void excludedColumnIsRecordedOnlyOnItsRevision(){
+    var p=principal(UUID.randomUUID().toString(),human.subject());
+    var parent=activeCsv(p);
+    var ref=csv("id,amount,notes\nr1,10,private\n",p.tenantId(),null,true);
+    var excluded=new ManagedCsvRevision.NewColumn("notes","EXCLUDE",null);
+    var first=revisions.prepare(p,replace(parent,ref,List.of(excluded)),"prepare");
+    var evidence=List.of(Map.of("column","notes","decision","EXCLUDE"));
+    assertThat(first).containsEntry("newColumns",evidence);
+    assertThat(reviews.humanCard(p,(UUID)first.get("challengeId"))).containsEntry("newColumns",evidence);
+    var config=configuration((UUID)first.get("onboardingVersionId"));
+    var before=configuration(parent);
+    for(String key:List.of("semanticMapping","dataAccessPolicies","sourceObjectIdentityPolicy"))
+      assertThat(config.get(key)).isEqualTo(before.get(key));
+    assertThat(section(config,"extractionProfile").get("projection")).isEqualTo(section(before,"extractionProfile").get("projection"));
+    assertThat(section(section(config,"extractionProfile"),"runtime").get("udp"))
+        .isEqualTo(section(section(before,"extractionProfile"),"runtime").get("udp"));
+  }
+
+  @Test void mixedDecisionsFreezeCanonicalPropertiesAndReconcileTheSameReview(){
+    var p=principal(UUID.randomUUID().toString(),human.subject());
+    var parent=activeCsv(p);
+    var ref=csv("id,amount,price,notes\nr1,10,15,private\n",p.tenantId(),null,true);
+    var excluded=new ManagedCsvRevision.NewColumn("notes","EXCLUDE",null);
+    var mapping=new ManagedCsvRevision.Mapping("urn:price","DECIMAL_DOT_V1",rule(),"PERSONAL",List.of("s"),null);
+    var mapped=new ManagedCsvRevision.NewColumn("price","MAP",mapping);
+    var command=replace(parent,ref,List.of(excluded,mapped));
+    // A string-only normalizer on a decimal must roll back just as in a property revision.
+    var invalidRule=new LinkedHashMap<>(rule());
+    invalidRule.put("normalizerRef","NFC_TRIM");
+    var bad=new ManagedCsvRevision.NewColumn("price","MAP",new ManagedCsvRevision.Mapping("urn:price",
+        mapping.transform(),invalidRule,null,null,null));
+    assertThatThrownBy(()->revisions.prepare(p,replace(parent,ref,List.of(excluded,bad)),"invalid"))
+        .hasMessageContaining("blocking validation");
+    assertThat(files.asset(ref.assetId()).get("source_id")).isNull();
+    var first=revisions.prepare(p,command,"prepare");
+    var version=(UUID)first.get("onboardingVersionId");
+    var card=reviews.humanCard(p,(UUID)first.get("challengeId"));
+    assertThat(first).containsEntry("state","IN_REVIEW");
+    assertThat(card.get("newColumns")).isEqualTo(List.of(Map.of("column","notes","decision","EXCLUDE"),
+        Map.of("column","price","decision","MAP","mapping",Map.of("propertyIri","urn:price","transform","DECIMAL_DOT_V1",
+            "accessLabel","PERSONAL","authorityOrder",List.of("s"),"reconciliation",rule()))));
+    assertThat(revisions.prepare(p,command,"repeat")).isEqualTo(first);
+    assertThat(revisions.readCommand(p,"s",parent,command.commandKey())).isEqualTo(first);
+    assertThat(revisions.read(p,"s",version)).isEqualTo(first);
+    var changed=List.of(excluded,new ManagedCsvRevision.NewColumn("price","EXCLUDE",null));
+    assertThatThrownBy(()->revisions.prepare(p,replace(parent,ref,changed),"changed")).hasMessage("ONB_REVISION_COMMAND_CONFLICT");
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_challenge").query(Long.class).single()).isOne();
+    var config=configuration(version);
+    assertThat(config.get("sourceObjectIdentityPolicy")).isEqualTo(configuration(parent).get("sourceObjectIdentityPolicy"));
+    var extraction=section(config,"extractionProfile");
+    assertThat(section(extraction,"projection")).containsEntry("FILE",List.of("id","amount","price"));
+    assertThat(((List<?>)section(config,"semanticMapping").get("propertyMappings")).getLast())
+        .isEqualTo(Map.of("sourceField","price","targetPropertyIri","urn:price","transform","DECIMAL_DOT_V1"));
+    assertThat(((List<?>)config.get("dataAccessPolicies")).getLast()).isEqualTo(Map.of("target","urn:price","scope","PROPERTY","label","PERSONAL"));
+    var udp=section(section(extraction,"runtime"),"udp");
+    var properties=(List<?>)section(udp,"materialization").get("properties");
+    assertThat(properties.getLast()).isEqualTo(Map.of("sourceField","urn:price","propertyIri","urn:price",
+        "datatype","http://www.w3.org/2001/XMLSchema#decimal","accessLabel","PERSONAL","authorityOrder",List.of("s"),"reconciliation",rule()));
   }
 
   private SourceRevisionService.AssetRef csv(String content,String tenant,String source,boolean profile){
@@ -225,11 +285,13 @@ class SourceRevisionRuntimeTest {
     var execution=new LinkedHashMap<String,Object>(Map.of("acquisitionMode","INTERNAL_MANAGED_CSV","adapterId","managed-tabular-v1",
         "adapterRuntimeVersion","1","sourceSchemaRef",section(config,"bundle").get("schemaRef"),"sourceSchemaId","s",
         "sourceSchemaVersion","1","semanticPublicationSetRef","fixture-set","adapterProfileRef","fixture","observationPolicy","ACQUISITION_TIME"));
-    execution.putAll(Map.of("maxRows",100,"maxColumns",2,"expectedSize",files.asset(ref.assetId()).get("size_bytes")));
+    execution.putAll(Map.of("maxRows",100,"maxColumns",4,"expectedSize",files.asset(ref.assetId()).get("size_bytes")));
     runtime.put("execution",execution);
     runtime.put("udp",Map.of("resolution",Map.of("strategyId","EXACT_SOURCE_KEY","strategyVersion","1",
         "policyRef","fixture","canonicalType","urn:Object","canonicalKeyProperty","urn:id","matchProperty","urn:id"),
-        "materialization",Map.of("policyRef","fixture")));
+        "materialization",Map.of("policyRef","fixture","properties",fields.stream().map(f->Map.of("propertyIri",f.targetPropertyIri(),
+            "sourceField",f.targetPropertyIri(),"datatype","http://www.w3.org/2001/XMLSchema#string",
+            "accessLabel",f.dataAccessLabel(),"authorityOrder",List.of("s"))).toList())));
     config.put("semanticReferenceBindings",List.of(Map.of("semanticId","core","semanticVersion","1","revisionId","fixture","publicationSetId","fixture-set")));
     onboarding.patchVersion("s",version,0,config,human,"fixture");
     db.sql("update ouf_onboarding.onboarding_version set state='ACTIVE',configuration_hash=:h,frozen_at=transaction_timestamp() where onboarding_version_id=:v")
@@ -237,9 +299,12 @@ class SourceRevisionRuntimeTest {
     return version;
   }
   private SourceRevisionService.Prepare replace(UUID parent,SourceRevisionService.AssetRef ref){
+    return replace(parent,ref,null);
+  }
+  private SourceRevisionService.Prepare replace(UUID parent,SourceRevisionService.AssetRef ref,List<ManagedCsvRevision.NewColumn> decisions){
     var row=onboarding.version("s",parent);
     return new SourceRevisionService.Prepare("s",parent,((Number)row.get("lock_version")).longValue(),
-        (String)row.get("configuration_hash"),"csv-revision",SourceRevisionService.EFFECT,null,ref);
+        (String)row.get("configuration_hash"),"csv-revision",SourceRevisionService.EFFECT,null,ref,decisions);
   }
   private SourceRevisionService.Prepare command(UUID parent,String key,Map<String,Object> rule){return new SourceRevisionService.Prepare("s",parent,0,String.valueOf(onboarding.version("s",parent).get("configuration_hash")),key,SourceRevisionService.EFFECT,List.of(new SourceRevisionService.Change("urn:name","urn:name",rule)));}
   static Map<String,Object> rule(){return Map.of("policyRef","urn:ouf:policy:linked-object-property-reconciliation:v1","cardinality","SINGLE","normalizerRef","EXACT_TYPED","normalizerVersion",1,"validity","SOURCE_INTERVAL");}

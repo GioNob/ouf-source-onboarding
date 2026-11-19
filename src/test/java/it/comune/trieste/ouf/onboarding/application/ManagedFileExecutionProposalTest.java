@@ -98,6 +98,37 @@ class ManagedFileExecutionProposalTest {
     }
   }
 
+  @Test void mappedRevisionExtendsGovernedComparisonOnThePinnedPublication(){
+    var compiled=compile(config(),proposal());
+    var previous=asset();previous.put("media_type","text/csv");
+    var next=new LinkedHashMap<>(previous);next.put("asset_id",UUID.randomUUID());
+    var schema=List.of(Map.of("name","nome_teatro","dataType","STRING"),Map.of("name","cap","dataType","STRING"));
+    var before=Map.<String,Object>of("profile_id",PROFILE,"format","CSV","metadata",Map.of("rows",1,"delimiter",";"),"inferred_schema",schema);
+    var extended=new ArrayList<>(schema);
+    extended.add(Map.of("name","fee","dataType","LONG"));
+    var after=new LinkedHashMap<>(before);
+    after.put("profile_id",UUID.randomUUID());after.put("inferred_schema",extended);after.put("candidate_keys",List.of("nome_teatro"));
+    var rule=Map.<String,Object>of("policyRef","urn:ouf:policy:linked-object-property-reconciliation:v1",
+        "cardinality","SINGLE","normalizerRef","EXACT_TYPED","normalizerVersion",1,"validity","UNBOUNDED");
+    var comparison=new ManagedCsvRevision.Comparison("DECIMAL_V1","urn:fixture:fee-assertion");
+    var m=new ManagedCsvRevision.Mapping("urn:fixture:fee","DECIMAL_DOT_V1",rule,null,null,comparison);
+    var decision=new ManagedCsvRevision.NewColumn("fee","MAP",m);
+    var missing=new ManagedCsvRevision.Mapping(m.propertyIri(),m.transform(),rule,null,null,null);
+    assertThatThrownBy(()->ManagedCsvRevision.replace(compiled,previous,before,next,after,2,
+        List.of(new ManagedCsvRevision.NewColumn("fee","MAP",missing))))
+        .isInstanceOfSatisfying(ManagedCsvRevision.Incompatible.class,e->assertThat(e.diagnostics())
+            .extracting(ManagedCsvRevision.Finding::code).containsExactly("INVALID_NEW_COLUMN_COMPARISON"));
+    ManagedCsvRevision.replace(compiled,previous,before,next,after,2,List.of(decision));
+    var runtime=object(object(compiled,"extractionProfile"),"runtime");
+    var resolution=object(object(runtime,"udp"),"resolution");
+    var policy=object(resolution,"governedIdentity");
+    GovernedIdentityProposal.validate(resolution,policy,SOURCE,Set.of(CLASS),Set.of(NAME,CAP,m.propertyIri()));
+    assertThat(((List<?>)policy.get("signals")).getLast()).isEqualTo(Map.of("id",m.propertyIri(),
+        "semanticRef",m.propertyIri()+"@"+PUBLICATION,"comparator",comparison.comparator(),"assertionRef",comparison.assertionRef(),
+        "uniqueWithinScope",false,"excludesOnDisagreement",false));
+    assertThat(policy.get("sufficientRules")).isEqualTo(object(object(proposal().udp(),"resolution"),"governedIdentity").get("sufficientRules"));
+  }
+
   @Test void wideExecutionPreservesAllPropertiesAndRejectsThe1025th() {
     for(int count:List.of(300,400,1024,1025)){
       var c=config();var p=proposal();

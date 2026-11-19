@@ -20,7 +20,25 @@ Esempio di corpo con identificativi illustrativi. La richiesta porta anche `If-M
     "assetRef": {
       "assetId": "00000000-0000-4000-8000-000000000002",
       "profileId": "00000000-0000-4000-8000-000000000003"
-    }
+    },
+    "newColumns": [
+      {"column": "note", "decision": "EXCLUDE"},
+      {
+        "column": "prezzo",
+        "decision": "MAP",
+        "mapping": {
+          "propertyIri": "urn:example:prezzo",
+          "transform": "DECIMAL_DOT_V1",
+          "reconciliation": {
+            "policyRef": "urn:ouf:policy:linked-object-property-reconciliation:v1",
+            "cardinality": "SINGLE",
+            "normalizerRef": "EXACT_TYPED",
+            "normalizerVersion": 1,
+            "validity": "UNBOUNDED"
+          }
+        }
+      }
+    ]
   }
 }
 ```
@@ -29,7 +47,21 @@ Gli argomenti sono chiusi. Si specifica esattamente uno tra `assetRef` e il pree
 
 ## Compatibilità e diagnostica
 
-Il percorso copre il CSV gestito con adapter `managed-tabular-v1`, mapping di proprietà esplicito e chiave `NATIVE_KEY` singola. La chiave attiva deve essere presente, univoca e valorizzata nel nuovo profilo. La proiezione e il mapping devono coprire gli stessi nomi. Il confronto usa nomi esatti e tollera un ordine differente. Ogni colonna aggiunta o rimossa blocca la preparazione, comprese quelle escluse. Per una colonna mappata si richiede il medesimo tipo inferito e una trasformazione compatibile. Una variazione di tipo su una colonna esclusa non influenza la proiezione.
+Il percorso copre il CSV gestito con adapter `managed-tabular-v1`, mapping di proprietà esplicito e chiave `NATIVE_KEY` singola. La chiave attiva deve essere presente, univoca e valorizzata nel nuovo profilo. La proiezione e il mapping devono coprire gli stessi nomi. Il confronto usa i nomi esatti dei due profili, comprese le colonne già escluse, e tollera il riordino del CSV. Una colonna rimossa blocca la preparazione. Per le colonne già mappate servono lo stesso tipo inferito e una trasformazione compatibile. Una variazione di tipo su una colonna già esclusa non influenza la proiezione.
+
+### Campi da aggiungere al server MCP (PR #87)
+
+Nel ramo `assetRef` aggiungere ad `Arguments` l'array `newColumns`, allo stesso livello di `assetRef`. Il ramo `changes` conserva il contratto precedente. Il client può omettere l'array se i profili non presentano aggiunte. Per ogni nome presente solo nel nuovo profilo deve inviare una voce. Il limite è di 1.024 voci e l'intero corpo firmato deve rientrare nei 65.536 byte del trasporto owner.
+
+| Campo | Contratto |
+|---|---|
+| `column`, `decision` | Nome esatto della colonna nuova e valore `EXCLUDE` o `MAP`. Per `EXCLUDE` omettere `mapping`. I byte dell'asset conservano la colonna come evidenza. |
+| `mapping.propertyIri`, `mapping.transform` | Obbligatori per `MAP`. IRI assoluto e distinto per ogni proprietà. `IDENTITY` conserva la cella lessicale come stringa. `DECIMAL_DOT_V1` e `DECIMAL_COMMA_V1` richiedono `LONG` o `DECIMAL`. `DATE_ISO_V1` richiede `DATE`, `DATE_DMY_V1` richiede `STRING`. Il datatype canonico deriva dalla trasformazione. |
+| `mapping.reconciliation` | Oggetto obbligatorio, con le stesse regole di `revision.prepare.changes[].reconciliation`. Il validatore applica alla proprietà compilata i vincoli su normalizzazione, cardinalità, validità, revisione e cancellazione. |
+| `mapping.accessLabel`, `mapping.authorityOrder` | Opzionali. La classificazione ammette `OPEN`, `ANONYMOUS`, `PERSONAL`, `SENSITIVE`, `RESTRICTED` (default). La lista ordinata di autorità ha default `[]` e ammette fino a 32 riferimenti distinti. |
+| `mapping.comparison` | Obbligatorio soltanto se il padre usa `governedIdentity`, che richiede il confronto di ogni proprietà canonica. Indicare `comparator` (`CONCEPT`, `TEXT_V1`, `DECIMAL_V1` o `JSON_V1`) e `assertionRef`. L'owner lega il segnale all'IRI e al set semantico già fissato. Le regole sufficienti, le regole di distinzione e la chiave della sorgente restano quelle approvate. |
+
+Per il mapping dell'esempio, un padre con identità governata richiede anche `"comparison": {"comparator":"DECIMAL_V1","assertionRef":"urn:example:price-comparison"}` dentro `mapping`. MCP deve raccogliere la decisione per ogni colonna e inoltrare il corpo firmato. Il servizio aggiunge alla proiezione solo le colonne con `MAP`, nell'ordine della richiesta. Nella materializzazione UDP il campo sorgente è l'IRI canonico prodotto dal mapping semantico.
 
 Il cambio usa il delimitatore rilevato dal profiler e conserva i limiti di esecuzione approvati. Controlla il numero di righe e colonne rispetto a tali limiti. La conversione lessicale esatta, compresi i separatori decimali, le date e i limiti dei singoli valori, resta soggetta alla verifica dell'Ingestion Runtime sui dati effettivi. I contratti spaziali, relazionali, di vocabolario, multiformato e le chiavi dipendenti dall'ordine delle righe richiedono qualifica separata.
 
@@ -40,14 +72,18 @@ Su incompatibilità l'owner restituisce HTTP 422 con `code=ONB_REVISION_CSV_INCO
   "code": "ONB_REVISION_CSV_INCOMPATIBLE",
   "diagnostics": [
     {"code":"MISSING_MAPPED_COLUMN","column":"amount","expected":"DECIMAL","actual":null},
-    {"code":"NEW_COLUMN","column":"total","expected":null,"actual":"STRING"}
+    {"code":"NEW_COLUMN_DECISION_REQUIRED","column":"total","expected":null,"actual":"STRING"}
   ]
 }
 ```
 
-Gli altri codici diagnostici sono `MISSING_COLUMN`, `TYPE_CHANGED`, `TRANSFORM_TYPE_MISMATCH`, `KEY_NOT_UNIQUE_OR_NULL`, `EXECUTION_LIMIT_EXCEEDED` e `UNSUPPORTED_CSV_CONTRACT`. MCP deve preservare tutte le differenze. La diagnostica comprende metadati di schema, senza campioni o valori di cella.
+Gli altri codici diagnostici sono `MISSING_COLUMN`, `TYPE_CHANGED`, `TRANSFORM_TYPE_MISMATCH`, `KEY_NOT_UNIQUE_OR_NULL`, `EXECUTION_LIMIT_EXCEEDED` e `UNSUPPORTED_CSV_CONTRACT`. Le decisioni aggiungono `COLUMN_NOT_NEW`, `DUPLICATE_NEW_COLUMN_DECISION`, `INVALID_NEW_COLUMN_DECISION`, `DUPLICATE_TARGET_PROPERTY` e `INVALID_NEW_COLUMN_COMPARISON`. Una regola incompatibile con la configurazione compilata blocca il submit con HTTP 422 `ONB_VALIDATION_FAILED`. MCP deve preservare la diagnostica e il nome della colonna che richiede una scelta.
 
 ## Esito, replay e approvazione
+
+Per il cambio file, aggiungere `newColumns` anche allo schema della ricevuta MCP di prepare/read. La risposta ripropone le scelte registrate per la specifica versione, con un array vuoto per i cambi file storici. La THS le mostra sulla stessa scheda di approvazione HUMAN, inclusi proprietà, trasformazione e regole per le colonne mappate. La migrazione V40 conserva le scelte nel journal append-only insieme al fingerprint del comando.
+
+Il fingerprint include l'intero array, il suo ordine e i campi annidati di `mapping`. A parità di chiave, cambiare una decisione, una regola o l'ordine restituisce `409 ONB_REVISION_COMMAND_CONFLICT`. Anche `[]` e l'omissione sono corpi distinti. L'omissione conserva il fingerprint dei comandi precedenti a V40.
 
 HTTP 200 restituisce la ricevuta di revisione e l'ETag della candidata. Comprende `sourceId`, `parentVersionId`, `parentConfigurationHash`, `onboardingVersionId`, `configurationHash`, `lockVersion`, `assetRef`, `diagnostics: []`, `publicationEffects`, `challengeId`, `challengeStatus`, `expiresAt` e `reviewUrl`. Al primo successo `state=IN_REVIEW` e `humanApprovalRequired=true`. Questo è lo stato nativo della candidata congelata. Il padre rimane `ACTIVE` durante la review.
 

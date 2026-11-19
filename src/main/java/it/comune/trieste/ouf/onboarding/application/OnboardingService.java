@@ -151,7 +151,13 @@ public class OnboardingService {
 
   void auditReadinessResume(String source,UUID version,Actor actor,Map<String,Object> detail){audit(source,version,UUID.randomUUID().toString(),actor,"READINESS_RESUME_REQUESTED",detail);}
   private void audit(String source,UUID version,String correlation,Actor actor,String event,Object payload){db.sql("insert into ouf_onboarding.audit_event(audit_event_id,source_id,onboarding_version_id,correlation_id,actor_subject,actor_type,event_type,payload_summary) values(:i,:s,:v,:c,:a,:t,:e,cast(:p as jsonb))").param("i",UUID.randomUUID()).param("s",source).param("v",version).param("c",correlation).param("a",actor.subject()).param("t",actor.type()).param("e",event).param("p",write(payload)).update();}
-  private String write(Object value){try{return json.writeValueAsString(value==null?Map.of():value);}catch(Exception e){throw bad("ONB_JSON_INVALID",e.getMessage());}}
+  String write(Object value){try{return json.writeValueAsString(value==null?Map.of():value);}catch(Exception e){throw bad("ONB_JSON_INVALID",e.getMessage());}}
+  List<?> newColumnDecisions(Map<String,Object> revision){
+    Object value=revision.get("new_columns");
+    if(value==null)return List.of();
+    try{return json.readValue(value.toString(),List.class);}
+    catch(java.io.IOException e){throw new IllegalStateException("Invalid revision decisions in journal",e);}
+  }
   private Map<String,Object> latestConfigurationBefore(String sourceId,int version){return db.sql("select configuration::text configuration from ouf_onboarding.onboarding_version where source_id=:s and version<:v and state in ('ACTIVE','SUPERSEDED') order by version desc limit 1").param("s",sourceId).param("v",version).query().listOfRows().stream().findFirst().map(r->jsonRow(r,"configuration")).map(r->(Map<String,Object>)r.get("configuration")).orElse(Map.of());}
   private static List<String> changedSections(Map<String,Object> proposed,Map<String,Object> previous){Set<String> keys=new TreeSet<>();keys.addAll(proposed.keySet());keys.addAll(previous.keySet());return keys.stream().filter(k->!Objects.equals(proposed.get(k),previous.get(k))).toList();}
   @SuppressWarnings("unchecked") private Map<String,Object> jsonRow(Map<String,Object> row,String field){try{Map<String,Object> out=new LinkedHashMap<>(row);Object value=out.get(field);if(value instanceof String s)out.put(field,json.readValue(s,Object.class));return out;}catch(Exception e){throw new IllegalStateException("database JSON decode failure",e);}}

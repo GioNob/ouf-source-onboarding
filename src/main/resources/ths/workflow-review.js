@@ -57,6 +57,21 @@
       table.append(head);
       for (const row of rows) { const tr = document.createElement('tr'); for (const value of [row.sourceField, row.targetPropertyIri, row.transform]) element('td', value, tr); table.append(tr); }
       article.append(table);
+      if (card.newColumns?.length) {
+        element('h3', 'Decisioni sulle colonne nuove', article);
+        const decisions = document.createElement('table'), header = document.createElement('tr');
+        for (const label of ['Colonna nuova', 'Decisione', 'Effetto sulla proiezione']) element('th', label, header);
+        decisions.append(header);
+        for (const item of card.newColumns) {
+          const row = document.createElement('tr');
+          element('td', item.column, row);
+          element('td', item.decision, row);
+          const effect = element('td', item.decision === 'EXCLUDE' ? 'Conservata solo nel file' : item.mapping.propertyIri, row);
+          if (item.decision === 'MAP') detail('Trasformazione e regole', item.mapping, effect);
+          decisions.append(row);
+        }
+        article.append(decisions);
+      }
       detail('Identità delle righe e classificazione di accesso', { sourceObjectIdentityPolicy: config.sourceObjectIdentityPolicy, dataAccessPolicies: config.dataAccessPolicies }, article);
       detail('Confronto con gli oggetti esistenti e materializzazione', config.extractionProfile?.runtime?.udp, article);
       if (card.publicationEffects) {
