@@ -34,6 +34,10 @@ public class PermissionDelegationVerifier {
  public Delegated verifyManagedFile(String proof,String path,String capability,byte[] body){
   return verifyBound(proof,path,capability,body,"managed-file-owner","ouf-managed-file-owner-v1.");
  }
+ /** Generic source revisions cannot reuse a managed-file or authorization receipt. */
+ public Delegated verifySourceRevision(String proof,String path,String capability,byte[] body){
+  return verifyBound(proof,path,capability,body,"source-revision-owner","ouf-source-revision-owner-v1.");
+ }
  /** A distinct MAC domain prevents JSON-command receipts from authorizing a CSV stream. */
  public DelegatedUpload verifyManagedUpload(String proof,String path){
   try{

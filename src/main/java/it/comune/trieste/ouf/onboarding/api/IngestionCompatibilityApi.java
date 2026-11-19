@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.onboarding.api;
 
-import it.comune.trieste.ouf.onboarding.application.OnboardingService;
+import it.comune.trieste.ouf.onboarding.application.ManagedOnboardingReviewService;
+import it.comune.trieste.ouf.authorization.ServletAuthorization;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -14,27 +15,23 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/internal/v1/onboarding/compatibility/ingestion-runtime")
 public class IngestionCompatibilityApi {
-  private static final String CAPABILITY="ouf.ingestion.configuration.attest";
-  private final OnboardingService service;
-  private final TrustedActorResolver actors;
+  private final ManagedOnboardingReviewService reviews;
 
-  public IngestionCompatibilityApi(OnboardingService service,TrustedActorResolver actors){
-    this.service=service;
-    this.actors=actors;
+  public IngestionCompatibilityApi(ManagedOnboardingReviewService reviews){
+    this.reviews=reviews;
   }
 
-  public record Request(@NotBlank String sourceId,UUID onboardingVersionId,String configurationHash,boolean compatible,@NotBlank String detail){}
+  public record Request(@NotBlank String sourceId,UUID onboardingVersionId,@NotBlank String configurationHash,boolean compatible,@NotBlank String detail){}
 
   @PostMapping
   ResponseEntity<Map<String,Object>> attest(@Valid @RequestBody Request body,@RequestHeader HttpHeaders headers,HttpServletRequest request){
     if(body.onboardingVersionId()==null)throw new IllegalArgumentException("onboardingVersionId required");
-    var actor=actors.requireService(request,CAPABILITY);
-    var out=service.attestIngestionCompatibilityBound(body.sourceId(),body.onboardingVersionId(),body.configurationHash(),body.compatible(),body.detail(),actor,correlation(headers));
+    var out=reviews.ingestionCompatibilityAttest(ServletAuthorization.principal(request).context(),body.sourceId(),body.onboardingVersionId(),body.configurationHash(),body.compatible(),body.detail(),correlation(headers));
     return ResponseEntity.status(HttpStatus.CREATED).body(out);
   }
 
   @GetMapping public Map<String,Object> read(@RequestParam String sourceId,@RequestParam UUID onboardingVersionId,@RequestParam String configurationHash,HttpServletRequest request){
-    return service.ingestionCompatibility(sourceId,onboardingVersionId,configurationHash,actors.requireService(request,"ouf.onboarding.configuration.read"));
+    return reviews.ingestionCompatibilityRead(ServletAuthorization.principal(request).context(),sourceId,onboardingVersionId,configurationHash);
   }
 
   private static String correlation(HttpHeaders headers){

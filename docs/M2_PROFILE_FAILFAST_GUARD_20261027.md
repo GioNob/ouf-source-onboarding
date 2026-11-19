@@ -1,0 +1,13 @@
+Current continuation: see MANAGED_PROFILE_BUDGET_SESSIONS.md. The following describes the earlier failfast-only qualification, not the complete current candidate.
+
+# Profiling: permanent failure and logical-job admission guard
+
+The retained Farmacie job failed before CSV parsing: its Gateway object read returned403. The existing worker retried every exception until five attempts were exhausted. This delta stops typed permanent HTTP failures (including401/403), known invalid input and unknown/ambiguous failures immediately; it retains the safe diagnostic message. Only typed read-only Gateway429/502/503/504 failures request an automatic retry within the existing five-attempt job profile. A valid Retry-After is respected; malformed or over24hour values stop for reconciliation. Arbitrary exception text cannot manufacture transient authority or persist secret-bearing error text.
+
+This delta does not claim the complete resilience policy: the legacy fixed delay, total elapsed-time/session limits, explicit network transient classification and HUMAN recovery sessions remain to be completed. No new retry budget is issued, and no existing FAILED job is resumed or reset by this code.
+
+The immutable asset identifies the profiling operation. A fresh MCP/chat idempotency key returns its one retained job instead of creating another five-attempt budget. Concurrent requests serialize on the asset. An exact historical key still reconciles its own receipt. Multiple historical jobs plus a new key fail for explicit reconciliation; discovery continues to show retained history. Their wider execution reconciliation remains open. Explicit reprocessing under changed intent is not provided by this endpoint.
+
+Quarantine release remains a disposition decision. It does not reset job attempts or authorize a new job/session; this guard closes the new-key workaround. Existing readiness-budget/session/fencing code is the reference for the separate profiling recovery implementation. Five prior Farmacie attempts and the FAILED row remain untouched on target.
+
+Validation requires real PostgreSQL tests of terminal403, unchanged FAILED history after quarantine release/new keys, concurrent admission and ambiguous legacy history; plus typed HTTP/body/Retry-After tests and the retained module/browser/diagnostic qualification. This branch is not deployment, HUMAN job-budget authority, new acquisition, or M2/release acceptance. M1 remains retained.

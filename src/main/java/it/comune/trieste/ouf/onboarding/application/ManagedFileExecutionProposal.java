@@ -3,9 +3,9 @@ package it.comune.trieste.ouf.onboarding.application;
 import java.net.URI;
 import java.util.*;
 
-/** Pure preparation of a lexical CSV execution profile. It issues no approval or runtime authority. */
+/** Pure preparation of an explicitly typed CSV execution profile. It issues no approval or runtime authority. */
 public final class ManagedFileExecutionProposal {
-  private static final String STRING="http://www.w3.org/2001/XMLSchema#string";
+  private static final Map<String,String> DATATYPES=Map.of("IDENTITY","string","DECIMAL_DOT_V1","decimal","DECIMAL_COMMA_V1","decimal","DATE_ISO_V1","date","DATE_DMY_V1","date");
   public record SemanticBinding(String semanticId,String semanticVersion,String revisionId,String publicationSetId) {}
   public record Limits(int maxRows,int maxColumns,int maxCellChars) {}
   public record Proposal(List<SemanticBinding> semanticBindings,String semanticPublicationSetRef,
@@ -35,14 +35,16 @@ public final class ManagedFileExecutionProposal {
     long size=integer(asset.get("size_bytes"),1,10_485_760);
     Limits limits=proposal.limits();require(limits!=null);
     integer(limits.maxRows(),1,1_000_000);integer(limits.maxColumns(),1,10_000);integer(limits.maxCellChars(),1,1_000_000);
-    List<?> fields=list(object(extraction,"projection").get("FILE"),1,32);
+    List<?> fields=list(object(extraction,"projection").get("FILE"),1,ManagedFileLimits.MAX_COLUMNS);
     require(fields.size()<=limits.maxColumns() && new HashSet<>(fields).size()==fields.size());
     Set<String> mapped=new LinkedHashSet<>(),mappedFields=new LinkedHashSet<>(),classes=new LinkedHashSet<>();
+    Map<String,String> declaredDatatypes=new HashMap<>();
     for(Object raw:list(semantic.get("targetClasses"),1,32))classes.add(iri(text(map(raw),"classIri")));
-    for(Object raw:list(semantic.get("propertyMappings"),1,32)){
+    for(Object raw:list(semantic.get("propertyMappings"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> mapping=map(raw);String field=text(mapping,"sourceField");
-      require(fields.contains(field) && mappedFields.add(field) && "IDENTITY".equals(mapping.get("transform"))
+      require(fields.contains(field) && mappedFields.add(field) && DATATYPES.containsKey(text(mapping,"transform"))
           && mapped.add(iri(text(mapping,"targetPropertyIri"))));
+      declaredDatatypes.put(text(mapping,"targetPropertyIri"),"http://www.w3.org/2001/XMLSchema#"+DATATYPES.get(mapping.get("transform")));
     }
     require(mappedFields.equals(new HashSet<>(fields)));
     require(!semantic.containsKey("vocabularyMappings") || list(semantic.get("vocabularyMappings"),0,0).isEmpty());
@@ -64,7 +66,7 @@ public final class ManagedFileExecutionProposal {
     Map<String,Object> resolution=object(udp,"resolution"),policy=object(resolution,"governedIdentity");
     GovernedIdentityProposal.validate(resolution,policy,sourceId,classes,mapped);
     require(tenant.equals(policy.get("tenantId")));
-    for(Object raw:list(policy.get("signals"),1,32)){
+    for(Object raw:list(policy.get("signals"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> signal=map(raw);require((text(signal,"id")+"@"+publication).equals(signal.get("semanticRef")));
     }
     Map<String,Object> materialization=object(udp,"materialization");
@@ -72,16 +74,16 @@ public final class ManagedFileExecutionProposal {
     text(materialization,"policyRef");integer(materialization.get("checkpointInterval"),1,1_000_000);
     list(materialization.get("bitemporalProperties"),0,0);
     Map<String,String> labels=new HashMap<>();
-    for(Object raw:list(config.get("dataAccessPolicies"),1,32)){
+    for(Object raw:list(config.get("dataAccessPolicies"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> label=map(raw);require("PROPERTY".equals(label.get("scope")));
       require(labels.put(text(label,"target"),text(label,"label"))==null);
     }
     require(labels.keySet().equals(mapped));Set<String> properties=new HashSet<>();
-    for(Object raw:list(materialization.get("properties"),1,32)){
+    for(Object raw:list(materialization.get("properties"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> property=map(raw);keys(property,"sourceField","propertyIri","datatype","accessLabel","authorityOrder");
       String iri=text(property,"propertyIri");
       require(mapped.contains(iri) && properties.add(iri) && iri.equals(property.get("sourceField"))
-          && STRING.equals(property.get("datatype")) && labels.get(iri).equals(property.get("accessLabel")));
+          && declaredDatatypes.get(iri).equals(property.get("datatype")) && labels.get(iri).equals(property.get("accessLabel")));
       Set<String> authorities=new HashSet<>();
       for(Object authority:list(property.get("authorityOrder"),0,32))require(authorities.add(string(authority)));
     }

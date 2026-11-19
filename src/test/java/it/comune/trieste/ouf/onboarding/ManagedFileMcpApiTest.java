@@ -73,9 +73,67 @@ class ManagedFileMcpApiTest {
     var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class));api.create(raw,request);
     var actor=org.mockito.ArgumentCaptor.forClass(it.comune.trieste.ouf.onboarding.application.OnboardingService.Actor.class);
     verify(files).onboardIdempotent(eq(asset),eq(profile),eq("cinema"),eq("Cinema"),eq("Comune"),eq("https://example.org/Cinema"),
-        eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"));
+        eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"),eq("tenant-a"));
     assertThat(actor.getValue().subject()).isEqualTo("human:alice");
     assertThat(actor.getValue().type()).isEqualTo("HUMAN_USER");
     assertThat(actor.getValue().capabilities()).containsExactly("ouf.managed-source.onboarding.create");
+  }
+
+  @Test void ownedAssetListingUsesSignedTenantAndSubjectWithoutOpeningAnyAsset()throws Exception{
+    var files=mock(ManagedFileService.class);var receipts=mock(PermissionDelegationVerifier.class);
+    var json=new ObjectMapper();var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/preview");
+    var p=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.HUMAN,"mcp","1","issuer","aud",
+      Set.of("ouf.managed-source.preview"),new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
+    UUID cursor=UUID.randomUUID();byte[] raw=json.writeValueAsBytes(Map.of("Arguments",Map.of("view","ASSETS","limit",2,"afterAssetId",cursor.toString())));
+    when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.preview",raw)).thenReturn(new PermissionDelegationVerifier.Delegated(p,"read-only"));
+    when(files.ownedAssets("tenant-a","alice",2,cursor)).thenReturn(Map.of("items",java.util.List.of(),"hasMore",false));
+    var api=new ManagedFileMcpApi(receipts,files,json,mock(ManagedFileChatHandoff.class));
+    assertThat(api.preview(raw,request)).containsEntry("hasMore",false);
+    verify(files).ownedAssets("tenant-a","alice",2,cursor);verifyNoMoreInteractions(files);
+  }
+  @Test void ownerAssetQueryRejectsUnknownKeysCoercionAndUnboundedSelection()throws Exception{
+    var files=mock(ManagedFileService.class);var receipts=mock(PermissionDelegationVerifier.class);
+    var json=new ObjectMapper();var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/preview");
+    var p=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.HUMAN,"mcp","1","issuer","aud",
+      Set.of("ouf.managed-source.preview"),new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
+    when(receipts.verifyManagedFile(isNull(),eq(request.getRequestURI()),eq("ouf.managed-source.preview"),any()))
+      .thenReturn(new PermissionDelegationVerifier.Delegated(p,"read-only"));
+    var api=new ManagedFileMcpApi(receipts,files,json,mock(ManagedFileChatHandoff.class));
+    for(var args:java.util.List.of(Map.of("view","ASSETS","limit",0),Map.of("view","ASSETS","limit",51),Map.of("view","ASSETS","limit","2"),
+        Map.of("view","ASSETS","limit",1.5),Map.of("view","ASSETS","tenant","other"),Map.of("view","ASSETS","afterAssetId","not-a-uuid"))){
+      byte[] raw=json.writeValueAsBytes(Map.of("Arguments",args));
+      assertThatThrownBy(()->api.preview(raw,request)).isInstanceOf(IllegalArgumentException.class);
+    }
+    verifyNoInteractions(files);
+  }
+
+
+  @Test void columnPageUsesExactTenantOwnerAndProfile()throws Exception{
+    var files=mock(ManagedFileService.class);var receipts=mock(PermissionDelegationVerifier.class);
+    var json=new ObjectMapper();UUID asset=UUID.randomUUID(),profile=UUID.randomUUID();
+    var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/preview");
+    byte[] raw=json.writeValueAsBytes(Map.of("Arguments",Map.of("view","COLUMNS","assetId",asset,"profileId",profile,"offset",128,"limit",128)));
+    var p=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.HUMAN,"mcp","1","issuer","aud",Set.of("ouf.managed-source.preview"),new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
+    when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.preview",raw)).thenReturn(new PermissionDelegationVerifier.Delegated(p,"read-only"));
+    when(files.previewColumns(asset,profile,128,128)).thenReturn(Map.of("columnCount",1024,"hasMore",true));
+    var result=new ManagedFileMcpApi(receipts,files,json,mock(ManagedFileChatHandoff.class)).preview(raw,request);
+    var order=inOrder(files);order.verify(files).requireTenantOwner(asset,"tenant-a","alice");order.verify(files).previewColumns(asset,profile,128,128);
+    assertThat(result).containsEntry("columnCount",1024);
+  }
+
+  @Test void delegatedCreateAccepts1024FieldsAndRejects1025BeforeOwnerWrite()throws Exception{
+    var files=mock(ManagedFileService.class);var receipts=mock(PermissionDelegationVerifier.class);var json=new ObjectMapper();
+    var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/create");
+    var p=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.HUMAN,"mcp","1","issuer","aud",Set.of("ouf.managed-source.onboarding.create"),new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
+    when(receipts.verifyManagedFile(isNull(),eq(request.getRequestURI()),eq("ouf.managed-source.onboarding.create"),any(byte[].class))).thenReturn(new PermissionDelegationVerifier.Delegated(p,"wide-command"));
+    var api=new ManagedFileMcpApi(receipts,files,json,mock(ManagedFileChatHandoff.class));
+    var fields=new java.util.ArrayList<Map<String,Object>>();
+    for(int i=0;i<1024;i++)fields.add(Map.of("fieldName","campo_"+i,"extractionDecision","INCLUDE","dataAccessLabel","OPEN","targetPropertyIri","https://example.org/campo_"+i));
+    var args=new java.util.LinkedHashMap<String,Object>(Map.of("assetId",UUID.randomUUID(),"profileId",UUID.randomUUID(),"sourceId","sue-test","name","Synthetic SUE","owner","Synthetic","targetClassIri","https://example.org/Entity","semanticRefs",java.util.List.of("synthetic@1"),"sourceObjectKeyFields",java.util.List.of(),"fields",fields));
+    api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request);
+    verify(files).onboardIdempotent(any(),any(),eq("sue-test"),any(),any(),any(),any(),any(),argThat(x->x.size()==1024),isNull(),any(),eq("wide"),eq("wide-command"),eq("tenant-a"));
+    fields.add(Map.of("fieldName","overflow","extractionDecision","EXCLUDE","dataAccessLabel","OPEN"));
+    assertThatThrownBy(()->api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request)).hasMessageContaining("explicit field");
+    verifyNoMoreInteractions(files);
   }
 }

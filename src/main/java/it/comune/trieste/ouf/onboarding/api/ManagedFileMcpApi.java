@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.onboarding.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileLimits;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileChatHandoff;
 import it.comune.trieste.ouf.onboarding.application.OnboardingService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -56,21 +57,57 @@ public class ManagedFileMcpApi {
     return ResponseEntity.accepted().body(Map.of("jobId",job.get("jobId"),"status",job.get("status")));
   }
   @PostMapping("/preview") public Map<String,Object> preview(@RequestBody byte[] raw,HttpServletRequest request){
-    String owner=subject(raw,request,"ouf.managed-source.preview");
+    var caller=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),"ouf.managed-source.preview",raw);
+    String owner=caller.principal().subjectId();
+    try{
+      JsonNode selection=json.readTree(raw).required("Arguments");
+      if("COLUMNS".equals(selection.path("view").asText())){
+        Set<String> allowed=Set.of("view","assetId","profileId","offset","limit");
+        for(var keys=selection.fieldNames();keys.hasNext();)if(!allowed.contains(keys.next()))throw new IllegalArgumentException("invalid column page query");
+        if(!selection.path("assetId").isTextual()||!selection.path("profileId").isTextual())throw new IllegalArgumentException("exact asset and profile required");
+        int offset=pageInteger(selection,"offset",0),limit=pageInteger(selection,"limit",ManagedFileLimits.COLUMN_PAGE_SIZE);
+        UUID asset=UUID.fromString(selection.get("assetId").asText()),profile=UUID.fromString(selection.get("profileId").asText());
+        files.requireTenantOwner(asset,caller.principal().tenantId(),owner);
+        return files.previewColumns(asset,profile,offset,limit);
+      }
+      if(selection.has("view")){
+        if(!selection.path("view").isTextual()||!"ASSETS".equals(selection.path("view").asText())||selection.size()>3)throw new IllegalArgumentException("invalid owner asset query");
+        for(var keys=selection.fieldNames();keys.hasNext();)if(!Set.of("view","limit","afterAssetId").contains(keys.next()))throw new IllegalArgumentException("invalid owner asset query");
+        int limit=20;
+        if(selection.has("limit")){if(!selection.get("limit").isIntegralNumber()||!selection.get("limit").canConvertToInt())throw new IllegalArgumentException("invalid owner asset limit");limit=selection.get("limit").intValue();}
+        if(limit<1||limit>50)throw new IllegalArgumentException("invalid owner asset limit");
+        UUID after=null;
+        if(selection.has("afterAssetId")){
+          if(!selection.get("afterAssetId").isTextual())throw new IllegalArgumentException("invalid owner asset cursor");
+          after=UUID.fromString(selection.get("afterAssetId").asText());
+          if(!after.toString().equals(selection.get("afterAssetId").asText()))throw new IllegalArgumentException("invalid owner asset cursor");
+        }
+        return files.ownedAssets(caller.principal().tenantId(),owner,limit,after);
+      }
+    }catch(IOException e){throw new IllegalArgumentException("invalid owner asset query",e);}
     JsonNode args;
     try {args=arguments(raw,"assetId","profileId");}
     catch(IllegalArgumentException ex){args=arguments(raw,"assetId","jobId");}
     UUID asset=UUID.fromString(args.get("assetId").asText());
     files.requireOwner(asset,owner);
     if(args.has("jobId")){
+      files.requireTenantOwner(asset,caller.principal().tenantId(),owner);
       var job=files.profileJob(asset,UUID.fromString(args.get("jobId").asText()));
       Map<String,Object> safe=new LinkedHashMap<>();
       for(String key:new String[]{"jobId","status","resultRef","errorCode"})safe.put(key,job.get(key));
+      if(job.get("errorCode")!=null)safe.put("diagnosticCategory",profileFailureCategory(job.get("last_error")));
       return safe;
     }
     return files.preview(asset,UUID.fromString(args.get("profileId").asText()));
   }
+  private static int pageInteger(JsonNode selection,String key,int fallback){
+    if(!selection.has(key))return fallback;
+    JsonNode value=selection.get(key);
+    if(!value.isIntegralNumber()||!value.canConvertToInt())throw new IllegalArgumentException("invalid column page bounds");
+    return value.intValue();
+  }
   @PostMapping("/create") public Map<String,Object> create(@RequestBody byte[] raw,HttpServletRequest request){
+    if(raw.length>ManagedFileLimits.MAX_MAPPING_ENVELOPE_BYTES)throw new IllegalArgumentException("managed mapping envelope too large");
     String cap="ouf.managed-source.onboarding.create";
     var delegated=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),cap,raw);
     try {
@@ -83,14 +120,35 @@ public class ManagedFileMcpApi {
           ||draft.name()==null||draft.name().isBlank()||draft.owner()==null||draft.owner().isBlank()
           ||draft.targetClassIri()==null||draft.targetClassIri().isBlank()
           ||draft.semanticRefs()==null||draft.semanticRefs().isEmpty()||draft.semanticRefs().size()>32
-          ||draft.sourceObjectKeyFields()==null||draft.fields()==null||draft.fields().isEmpty()||draft.fields().size()>256)
+          ||draft.sourceObjectKeyFields()==null||draft.fields()==null||draft.fields().isEmpty()||draft.fields().size()>ManagedFileLimits.MAX_COLUMNS)
           throw new IllegalArgumentException("explicit field and identity decisions required");
       var actor=new OnboardingService.Actor(delegated.principal().subjectId(),"HUMAN_USER",Set.of(cap));
       List<ManagedFileService.FieldDecision> fields=draft.fields().stream()
           .map(f->new ManagedFileService.FieldDecision(f.fieldName(),f.extractionDecision(),f.dataAccessLabel(),f.targetPropertyIri(),f.transform(),f.vocabularyId(),f.vocabularyVersion(),f.valueMapRef())).toList();
       return files.onboardIdempotent(draft.assetId(),draft.profileId(),draft.sourceId(),draft.name(),draft.owner(),draft.targetClassIri(),
-          draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey());
+          draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey(),delegated.principal().tenantId());
     }catch(IOException e){throw new IllegalArgumentException("invalid draft arguments",e);}
+  }
+
+  /** Fixed categories over retained owner evidence; never release exception text or guess unknowns. */
+  static String profileFailureCategory(Object retained) {
+    if(!(retained instanceof String detail)||detail.length()>512)return "UNCLASSIFIED";
+    return switch(detail) {
+      case "CSV must be valid UTF-8 text","CSV must be UTF-8 text" -> "CSV_ENCODING_INVALID";
+      case "headers must be non-empty and unique" -> "CSV_HEADERS_INVALID";
+      case "invalid CSV","CSV row exceeds declared headers" -> "CSV_SYNTAX_INVALID";
+      case "row limit exceeded","column limit exceeded","file size outside profiling limits" -> "PROFILE_LIMIT_EXCEEDED";
+      case "unsupported media type" -> "MEDIA_TYPE_UNSUPPORTED";
+      case "Staged size does not match downloaded content","Gateway object exceeds the registered size","expected object size is outside intake limits" -> "FILE_SIZE_MISMATCH";
+      case "Staged content hash does not match downloaded content" -> "FILE_HASH_MISMATCH";
+      case "stagingRef must use object://" -> "OBJECT_REFERENCE_INVALID";
+      case "Onboarding workload token is invalid","Onboarding workload token is unavailable" -> "WORKLOAD_CREDENTIAL_UNAVAILABLE";
+      case "Gateway object read failed with status 401" -> "OBJECT_READ_AUTHENTICATION_REQUIRED";
+      case "Gateway object read failed with status 403" -> "OBJECT_READ_FORBIDDEN";
+      case "Gateway object read failed with status 404" -> "OBJECT_READ_NOT_FOUND";
+      case "Gateway object read failed with status 429","Gateway object read failed with status 502","Gateway object read failed with status 503","Gateway object read failed with status 504" -> "OBJECT_READ_UNAVAILABLE";
+      default -> "UNCLASSIFIED";
+    };
   }
   @ExceptionHandler(SecurityException.class) ResponseEntity<?> denied(){
     return ResponseEntity.status(403).body(Map.of("code","ONB_MANAGED_FILE_RECEIPT_INVALID"));

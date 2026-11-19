@@ -8,20 +8,26 @@ import java.util.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class InstallationConfigurationService {
   private final JdbcClient db;
   private final ObjectMapper json;
   private final InstallationEnvironmentProbe environmentProbe;
+  private final TransactionTemplate validationWrites;
 
   public InstallationConfigurationService(
       JdbcClient db,
       ObjectMapper json,
-      InstallationEnvironmentProbe environmentProbe) {
+      InstallationEnvironmentProbe environmentProbe,
+      PlatformTransactionManager transactions) {
     this.db = db;
     this.json = json.copy();
     this.environmentProbe = environmentProbe;
+    this.validationWrites = new TransactionTemplate(transactions);
   }
 
   public record Actor(String subject, String correlationId) {
@@ -39,7 +45,31 @@ public class InstallationConfigurationService {
       JsonNode validationFindings,
       JsonNode payload) {}
 
-  public record Active(String installationId, long revision, String checksum) {}
+  public record Active(String installationId, long revision, String checksum, long generation) {
+    public String etag() { return "\"" + revision + ":" + checksum + ":" + generation + "\""; }
+  }
+
+  /** An explicit absence condition or a strong token from the owner's ACTIVE GET. */
+  public record ExpectedActive(long revision, String checksum, long generation) {
+    public ExpectedActive {
+      if (revision < 0 || generation < 0 || checksum == null
+          || (revision == 0 ? !checksum.isEmpty() || generation != 0
+                            : !checksum.matches("[0-9a-f]{64}") || generation == 0))
+        throw new IllegalArgumentException("INSTALLATION_ACTIVE_PRECONDITION_INVALID");
+    }
+    public static ExpectedActive absent() { return new ExpectedActive(0, "", 0); }
+    public static ExpectedActive from(Active active) {
+      return new ExpectedActive(active.revision(), active.checksum(), active.generation());
+    }
+  }
+
+  private void requireCurrent(String id, ExpectedActive expected) {
+    if (expected == null) throw new IllegalStateException("INSTALLATION_ACTIVE_PRECONDITION_REQUIRED");
+    var current = active(id);
+    boolean matches = expected.revision() == 0 ? current.isEmpty()
+        : current.map(a -> ExpectedActive.from(a).equals(expected)).orElse(false);
+    if (!matches) throw new IllegalStateException("INSTALLATION_ACTIVE_PRECONDITION_FAILED");
+  }
 
   public record EnvironmentValidation(
       UUID validationId,
@@ -156,6 +186,20 @@ public class InstallationConfigurationService {
     String id = payload == null ? null : payload.path("installationId").asText(null);
     if (id == null || id.isBlank()) throw new IllegalArgumentException("INSTALLATION_ID_REQUIRED");
     db.sql("select pg_advisory_xact_lock(hashtext(:id))").param("id", id).query(Object.class).single();
+    String requestedChecksum = checksum(payload);
+    var existing = db.sql("""
+        select revision from ouf_installation.installation_configuration_revision
+        where installation_id=:id and created_by=:actor and created_correlation_id=:correlation
+        """).param("id", id).param("actor", actor.subject()).param("correlation", actor.correlationId())
+        .query(Long.class).list();
+    if (existing.size() > 1)
+      throw new IllegalStateException("INSTALLATION_CREATE_CORRELATION_AMBIGUOUS");
+    if (!existing.isEmpty()) {
+      Revision previous = get(id, existing.getFirst());
+      if (!requestedChecksum.equals(previous.checksum()))
+        throw new IllegalStateException("INSTALLATION_CREATE_CORRELATION_CONFLICT");
+      return previous;
+    }
     long revision = db.sql("""
         select coalesce(max(revision),0)+1
         from ouf_installation.installation_configuration_revision
@@ -163,7 +207,7 @@ public class InstallationConfigurationService {
         """).param("id", id).query(Long.class).single();
     ValidationResult validation = validate(payload);
     String state = validation.valid() ? "VALIDATED" : "REJECTED";
-    String hash = checksum(payload);
+    String hash = requestedChecksum;
     db.sql("""
         insert into ouf_installation.installation_configuration_revision
         (installation_id,revision,payload,checksum,validation_state,validation_findings,created_by,created_correlation_id)
@@ -189,38 +233,51 @@ public class InstallationConfigurationService {
 
   public Optional<Active> active(String installationId) {
     return db.sql("""
-        select a.installation_id,a.revision,r.checksum
+        select a.installation_id,a.revision,r.checksum,
+               (select count(*) from ouf_installation.installation_configuration_lifecycle_event e
+                where e.installation_id=a.installation_id
+                  and e.action in ('ACTIVATED','ROLLBACK_ACTIVATED','REVOKED')) as generation
         from ouf_installation.installation_configuration_active a
         join ouf_installation.installation_configuration_revision r
           on r.installation_id=a.installation_id and r.revision=a.revision
         where a.installation_id=:id
         """).param("id", installationId)
-        .query((rs,n) -> new Active(rs.getString(1), rs.getLong(2), rs.getString(3))).optional();
+        .query((rs,n) -> new Active(rs.getString(1), rs.getLong(2), rs.getString(3), rs.getLong(4))).optional();
   }
 
-  @Transactional
+  @Transactional(propagation = Propagation.NEVER)
   public EnvironmentValidation validateEnvironment(String installationId, long revision, Actor actor) {
     Revision target = get(installationId, revision);
     if (!"VALIDATED".equals(target.validationState()))
       throw new IllegalStateException("INSTALLATION_REVISION_NOT_VALIDATED");
 
+    if (revoked(installationId, revision))
+      throw new IllegalStateException("INSTALLATION_REVISION_REVOKED");
+    // No transaction or installation advisory lock spans an external probe.
     List<InstallationEnvironmentProbe.Finding> findings = environmentProbe.inspect(target.payload());
-    boolean pass = findings.stream().allMatch(f -> "PASS".equals(f.status()));
-    UUID validationId = UUID.randomUUID();
-    db.sql("""
-        insert into ouf_installation.installation_environment_validation
-        (validation_id,installation_id,revision,overall_status,results,checked_by,correlation_id)
-        values(:validation,:id,:rev,:status,cast(:results as jsonb),:actor,:correlation)
-        """)
-        .param("validation", validationId)
-        .param("id", installationId)
-        .param("rev", revision)
-        .param("status", pass ? "PASS" : "FAIL")
-        .param("results", encode(json.valueToTree(findings)))
-        .param("actor", actor.subject())
-        .param("correlation", actor.correlationId())
-        .update();
-    return environmentValidation(validationId);
+    return validationWrites.execute(status -> {
+      db.sql("select pg_advisory_xact_lock(hashtext(:id))").param("id", installationId).query(Object.class).single();
+      if (revoked(installationId, revision))
+        throw new IllegalStateException("INSTALLATION_REVISION_REVOKED");
+      if (!get(installationId, revision).checksum().equals(target.checksum()))
+        throw new IllegalStateException("INSTALLATION_REVISION_CHANGED_DURING_VALIDATION");
+      boolean pass = findings.stream().allMatch(f -> "PASS".equals(f.status()));
+      UUID validationId = UUID.randomUUID();
+      db.sql("""
+          insert into ouf_installation.installation_environment_validation
+          (validation_id,installation_id,revision,overall_status,results,checked_by,correlation_id)
+          values(:validation,:id,:rev,:status,cast(:results as jsonb),:actor,:correlation)
+          """)
+          .param("validation", validationId)
+          .param("id", installationId)
+          .param("rev", revision)
+          .param("status", pass ? "PASS" : "FAIL")
+          .param("results", encode(json.valueToTree(findings)))
+          .param("actor", actor.subject())
+          .param("correlation", actor.correlationId())
+          .update();
+      return environmentValidation(validationId);
+    });
   }
 
   public Optional<EnvironmentValidation> latestEnvironmentValidation(String installationId, long revision) {
@@ -273,8 +330,9 @@ public class InstallationConfigurationService {
   }
 
   @Transactional
-  public Active activate(String installationId, long revision, Actor actor) {
+  public Active activate(String installationId, long revision, Actor actor, ExpectedActive expected) {
     db.sql("select pg_advisory_xact_lock(hashtext(:id))").param("id", installationId).query(Object.class).single();
+    requireCurrent(installationId, expected);
     Revision target = get(installationId, revision);
     if (!"VALIDATED".equals(target.validationState()))
       throw new IllegalStateException("INSTALLATION_REVISION_NOT_VALIDATED");
@@ -303,8 +361,9 @@ public class InstallationConfigurationService {
   }
 
   @Transactional
-  public void revoke(String installationId, long revision, Actor actor) {
+  public void revoke(String installationId, long revision, Actor actor, ExpectedActive expected) {
     db.sql("select pg_advisory_xact_lock(hashtext(:id))").param("id", installationId).query(Object.class).single();
+    requireCurrent(installationId, expected);
     get(installationId, revision);
     if (active(installationId).map(a -> a.revision() == revision).orElse(false))
       db.sql("delete from ouf_installation.installation_configuration_active where installation_id=:id")

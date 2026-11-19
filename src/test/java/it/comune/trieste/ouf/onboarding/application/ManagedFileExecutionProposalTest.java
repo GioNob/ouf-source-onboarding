@@ -68,6 +68,67 @@ class ManagedFileExecutionProposalTest {
     var p=proposal();var compiled=compile(config(),p);p.udp().clear();
     assertThat(object(object(object(compiled,"extractionProfile"),"runtime"),"udp")).containsKeys("resolution","materialization");
   }
+
+  @Test void onlyExplicitVersionedConversionsCanDeclareNumericOrDateProperties(){
+    for(String rule:List.of("DECIMAL_DOT_V1","DECIMAL_COMMA_V1","DATE_ISO_V1","DATE_DMY_V1")){
+      var c=config();var p=proposal();
+      var mappings=(List<Map<String,Object>>)object(c,"semanticMapping").get("propertyMappings");
+      mappings.get(1).put("transform",rule);
+      var props=(List<Map<String,Object>>)object(p.udp(),"materialization").get("properties");
+      String datatype="http://www.w3.org/2001/XMLSchema#"+(rule.startsWith("DECIMAL")?"decimal":"date");
+      props.get(1).put("datatype",datatype);
+      var policy=object(object(p.udp(),"resolution"),"governedIdentity");
+      ((List<Map<String,Object>>)policy.get("signals")).get(1).put("comparator",rule.startsWith("DECIMAL")?"DECIMAL_V1":"TEXT_V1");
+      var compiled=compile(c,p);
+      assertThat(compiled.get("semanticMapping")).isEqualTo(c.get("semanticMapping"));
+      var runtime=object(object(compiled,"extractionProfile"),"runtime");
+      var actual=(List<Map<String,Object>>)object(object(runtime,"udp"),"materialization").get("properties");
+      assertThat(actual.get(1)).containsEntry("datatype",datatype);
+      assertThat(compiled).doesNotContainKeys("runtimeAuthorityIssued","approvedBy","compatibilityAttestation");
+      props.get(1).put("datatype","http://www.w3.org/2001/XMLSchema#string");
+      assertThatThrownBy(()->compile(c,p)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    }
+  }
+
+  @Test void inferredOrUnversionedConversionNamesAreNotAccepted(){
+    for(String rule:List.of("AUTO","DECIMAL","DATE","DATE_DMY_V2")){
+      var c=config();
+      ((List<Map<String,Object>>)object(c,"semanticMapping").get("propertyMappings")).get(1).put("transform",rule);
+      assertThatThrownBy(()->compile(c,proposal())).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    }
+  }
+
+  @Test void wideExecutionPreservesAllPropertiesAndRejectsThe1025th() {
+    for(int count:List.of(300,400,1024,1025)){
+      var c=config();var p=proposal();
+      var fields=new ArrayList<String>();var mappings=new ArrayList<Map<String,Object>>();
+      var labels=new ArrayList<Map<String,Object>>();var properties=new ArrayList<Map<String,Object>>();
+      for(int n=0;n<count;n++){
+        String field=n==0?"nome_teatro":n==1?"cap":"campo_"+n;
+        String iri=n==0?NAME:n==1?CAP:"urn:fixture:property:"+n;
+        fields.add(field);
+        mappings.add(Map.of("sourceField",field,"targetPropertyIri",iri,"transform","IDENTITY"));
+        labels.add(Map.of("scope","PROPERTY","target",iri,"label","RESTRICTED"));
+        properties.add(Map.of("sourceField",iri,"propertyIri",iri,"datatype","http://www.w3.org/2001/XMLSchema#string","accessLabel","RESTRICTED","authorityOrder",List.of(SOURCE)));
+      }
+      object(object(c,"extractionProfile"),"projection").put("FILE",fields);
+      object(c,"semanticMapping").put("propertyMappings",mappings);c.put("dataAccessPolicies",labels);
+      object(p.udp(),"materialization").put("properties",properties);
+      var signals=new ArrayList<Map<String,Object>>();
+      for(var property:properties){
+        String iri=(String)property.get("propertyIri");
+        signals.add(Map.of("id",iri,"semanticRef",iri+"@"+PUBLICATION,"comparator","TEXT_V1","excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","urn:fixture:reviewed-assertion"));
+      }
+      object(object(p.udp(),"resolution"),"governedIdentity").put("signals",signals);
+      var wide=new ManagedFileExecutionProposal.Proposal(p.semanticBindings(),PUBLICATION,p.udp(),new ManagedFileExecutionProposal.Limits(100,count,1000));
+      if(count>1024){assertThatThrownBy(()->compile(c,wide)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");continue;}
+      var compiled=compile(c,wide);var runtime=object(object(compiled,"extractionProfile"),"runtime");
+      assertThat((List<?>)object(object(runtime,"udp"),"materialization").get("properties")).hasSize(count);
+      assertThat(object(runtime,"execution")).containsEntry("maxColumns",count);
+      assertThat(compiled.get("dataAccessPolicies")).isEqualTo(labels);
+    }
+  }
+
   private Map<String,Object> compile(Map<String,Object> c,ManagedFileExecutionProposal.Proposal p){return ManagedFileExecutionProposal.compile(c,asset(),"fixture-tenant",p);}
   private Map<String,Object> asset(){return new LinkedHashMap<>(Map.of("asset_id",UUID.fromString(ASSET),"source_id",SOURCE,"staging_ref","staging://fixture/source.csv","content_hash","sha256:fixture","size_bytes",321L));}
   private ManagedFileExecutionProposal.Proposal proposal(){

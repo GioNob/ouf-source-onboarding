@@ -56,17 +56,24 @@
     review=await response.json();const dl=document.createElement('dl');$('context').replaceChildren(dl);
     for(const [label,value] of [['Oggetto',review.objectId],['Proprietà',review.propertyIri],['Policy',review.policyRef],['Stato',review.state]]){text('dt',label,dl);text('dd',value,dl);}
     const candidates=kind==='geometry'?[{...review.current,label:'Mantieni la geometria corrente'},{...review.candidate,label:'Accetta la geometria candidata'}]:review.candidates;
+    let proposedCell;
+    if(kind==='property' && review.rule){
+      const table=document.createElement('table'),head=document.createElement('tr');
+      for(const title of ['Campo','Valore corrente','Risultato della scelta'])text('th',title,head);
+      table.append(head);const row=document.createElement('tr');text('th',review.propertyIri,row);text('td',JSON.stringify(review.currentValue),row);proposedCell=text('td','Seleziona un contributo per vedere il risultato.',row);table.append(row);$('context').append(table);
+      text('p','Questa decisione riguarda soltanto il campo indicato. Puoi rimandarla lasciando aperto il conflitto; le altre proprietà possono avanzare.',$('context'));
+    }
     for(const [i,c] of candidates.entries()){
       const label=document.createElement('label'),input=document.createElement('input');input.type='radio';input.name='chosen';input.required=true;input.value=c.revisionId||c.contributionId;label.append(input);text('span',` ${c.label||'Contributo '+(i+1)} · fonte ${c.sourceId}`,label);
-      if(kind==='property')json(c.value,label);
+      if(kind==='property'){json(c.value,label);if(proposedCell)input.addEventListener('change',()=>{proposedCell.textContent=c.explicitDeletion?'Cancellazione esplicita del campo':JSON.stringify(c.normalizedValue);});}
       const detail=document.createElement('details');text('summary','Provenienza e riferimenti',detail);json(c.provenance,detail);label.append(detail);$('choices').append(label);
     }
     if(kind==='geometry'){draw(review.current.geometry,review.candidate.geometry);if(review.metrics){text('h2','Misure del confronto',$('context'));const metrics=document.createElement('dl');$('context').append(metrics);for(const [key,label] of [['minimum_distance_meters','Distanza minima (m)'],['current_area_m2','Area corrente (m²)'],['candidate_area_m2','Area candidata (m²)'],['topologically_equal','Equivalenza topologica']]){text('dt',label,metrics);text('dd',review.metrics[key],metrics);}}}
-    $('submit').disabled=review.state!=='OPEN';$('choices').disabled=review.state!=='OPEN';$('reason').disabled=review.state!=='OPEN';
-    status(review.state==='OPEN'?'Confronta i contributi, scegli quale conservare e indica il motivo.':'La revisione è già conclusa.');
+    $('submit').disabled=review.state!=='OPEN'||review.evidenceCurrent===false;$('choices').disabled=review.state!=='OPEN'||review.evidenceCurrent===false;$('reason').disabled=review.state!=='OPEN'||review.evidenceCurrent===false;
+    status(review.evidenceCurrent===false?'I contributi sono cambiati. Apri la revisione aggiornata prima di decidere.':review.state==='OPEN'?'Confronta i contributi, scegli quale conservare e indica il motivo.':'La revisione è già conclusa.');
   }
   $('decision').addEventListener('submit',async event=>{
-    event.preventDefault();if(!review||review.state!=='OPEN')return;
+    event.preventDefault();if(!review||review.state!=='OPEN'||review.evidenceCurrent===false)return;
     const chosen=new FormData($('decision')).get('chosen'),reason=$('reason').value.trim();if(!chosen||!reason)return;
     $('submit').disabled=true;
     const body=kind==='geometry'?{expectedCurrentRevision:review.current.revisionId,chosenRevision:chosen,reason}:{expectedCurrentRevision:review.currentRevision,chosenContribution:chosen,reason};
@@ -78,3 +85,4 @@
   });
   load().catch(error=>{status(error.message);$('decision').hidden=true;});
 })();
+

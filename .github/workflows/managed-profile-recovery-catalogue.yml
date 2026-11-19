@@ -1,0 +1,17 @@
+name: Managed profile canonical authorization catalogue
+on:
+  push:
+    paths: ['catalogue/managed-profile-ths-oauth-request-v1.json','tests/test_managed_profile_ths_scope_contract.py','catalogue/r4a-managed-profile-recovery.json','catalogue/r4a-managed-file-intake.json','src/main/resources/authorization/managed-profile-recovery-role-v1.json','src/main/java/it/comune/trieste/ouf/onboarding/api/ManagedProfileRecoveryApi.java','tests/test_managed_profile_recovery_catalogue.py','.github/workflows/managed-profile-recovery-catalogue.yml']
+  pull_request:
+    paths: ['catalogue/managed-profile-ths-oauth-request-v1.json','tests/test_managed_profile_ths_scope_contract.py','catalogue/r4a-managed-profile-recovery.json','catalogue/r4a-managed-file-intake.json','src/main/resources/authorization/managed-profile-recovery-role-v1.json','src/main/java/it/comune/trieste/ouf/onboarding/api/ManagedProfileRecoveryApi.java','tests/test_managed_profile_recovery_catalogue.py','.github/workflows/managed-profile-recovery-catalogue.yml']
+permissions: {contents: read}
+jobs:
+  owner-manifest-role-closure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - run: python3 -I -S -B -m unittest discover -s tests -p test_managed_profile_recovery_catalogue.py -v
+
+      - run: python3 -I -S -B -m unittest discover -s tests -p test_managed_profile_ths_scope_contract.py -v

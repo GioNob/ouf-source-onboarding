@@ -30,6 +30,14 @@ public class ManagedOnboardingReviewApi {
   }
   @PostMapping("/review-read") public Map<String,Object> read(@RequestBody byte[] raw,HttpServletRequest request){
     var caller=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),ManagedOnboardingReviewService.READ,raw);
+    try{
+      var args=json.readTree(raw).required("Arguments");
+      if(args.has("view")){
+        if(!args.isObject()||args.size()!=2||!args.path("sourceId").isTextual()||!args.path("view").isTextual()
+            ||!"LATEST".equals(args.path("view").asText()))throw new IllegalArgumentException("ONB_REVIEW_ARGUMENTS_INVALID");
+        return reviews.readLatest(caller.principal(),args.path("sourceId").asText());
+      }
+    }catch(java.io.IOException e){throw new IllegalArgumentException("ONB_REVIEW_ARGUMENTS_INVALID",e);}
     var command=arguments(raw,Read.class);return reviews.read(caller.principal(),command.sourceId(),command.onboardingVersionId());
   }
   @ExceptionHandler(IllegalArgumentException.class) ResponseEntity<?> invalid(){return ResponseEntity.unprocessableEntity().body(Map.of("code","ONB_REVIEW_ARGUMENTS_INVALID"));}

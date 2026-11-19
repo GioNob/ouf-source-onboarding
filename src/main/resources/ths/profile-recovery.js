@@ -1,0 +1,90 @@
+'use strict';
+(()=>{
+  const $=id=>document.getElementById(id),params=new URLSearchParams(location.search),asset=params.get('asset'),job=params.get('job');
+  const uuid=/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+  if(!uuid.test(asset||'')||!uuid.test(job||'')){$('message').textContent='Il collegamento al lavoro è incompleto. Recuperalo dalla conversazione OUF.';$('refresh').disabled=true;return;}
+  const endpoint=`api/${asset}/${job}`,storage=`ouf-profile-recovery.v1:${asset}:${job}`;
+  let card,ownershipCard,csrfHeader,csrfToken,busy=false,pending=null,monitor=null,storageAvailable=true;
+  try{pending=JSON.parse(sessionStorage.getItem(storage)||'null');if(pending&&(!['budget','resume','cancel','ownership'].includes(pending.action)||!pending.body||typeof pending.body!=='object'))throw new Error();sessionStorage.setItem(storage+':probe','1');sessionStorage.removeItem(storage+':probe');}catch(_){storageAvailable=false;}
+  const message=text=>{$('message').textContent=text;};
+  function controls(){const confirmed=$('confirmed').checked,reason=$('reason').value.trim();
+    $('budget').disabled=busy||!!pending||!storageAvailable||!confirmed||reason.length<10||!card?.budgetAvailableToGrant;
+    $('resume').disabled=busy||!!pending||!storageAvailable||!confirmed||!card?.canResume;
+    $('cancel').disabled=busy||!!pending||!storageAvailable||!confirmed||reason.length<10||!card?.canCancel;
+    $('refresh').disabled=busy;$('reconcile').hidden=!pending;$('reconcile').disabled=busy||!storageAvailable||!csrfToken;
+    $('ownership').disabled=busy||!!pending||!storageAvailable||!ownershipCard||!$('ownership-confirmed').checked||$('ownership-reason').value.trim().length<10;
+  }
+  function render(){
+    $('ownership-review').hidden=true;$('review').hidden=false;$('facts').replaceChildren();
+    const state={FAILED:'Analisi ferma',READY:'Analisi in coda',RUNNING:'Analisi in corso',RETRY_WAIT:'In pausa per un errore transitorio',SUCCEEDED:'Analisi completata',CANCELLED:'Recupero annullato'};
+    const facts=[['Stato',state[card.status]||'Da verificare'],['Caricato il',card.uploadedAt],['Dimensione',`${card.sizeBytes} byte`],['Tentativi cumulativi',card.cumulativeAttempts],['Ultimo blocco',card.lastFailureCategory==='OBJECT_READ_FORBIDDEN'?'Lettura del file non autorizzata':card.lastFailureCategory||'Non disponibile']];
+    if(card.sessionId)facts.push(['Sessione',card.sessionState],['Tentativi della sessione',`${card.sessionUsedAttempts} di 3`],['Scadenza',new Date(card.sessionExpiresAt).toLocaleString('it-IT')]);
+    for(const [label,value]of facts){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=String(value);$('facts').append(dt,dd);}
+    $('identity').textContent=`File: ${asset}\nJob: ${job}\nContenuto: ${card.contentHash}\n${card.sessionId?'Sessione: '+card.sessionId+'\nDecisione: '+card.decisionRef:''}`;
+    $('history').replaceChildren();for(const event of card.history||[]){const li=document.createElement('li');li.textContent=`${event.created_at} · ${event.event_type} · tentativi ${event.cumulative_attempts}`;$('history').append(li);}
+    $('truncated').textContent=card.historyTruncated?'Sono mostrate le ultime 16 transizioni. La storia completa è conservata.':'';
+    $('confirmed').checked=false;controls();
+  }
+  function renderOwnership(){
+    $('review').hidden=true;$('ownership-review').hidden=false;$('ownership-facts').replaceChildren();
+    const facts=[['Tenant della sessione',ownershipCard.tenantId],['Identità OUF',ownershipCard.subjectId],['File conservato',asset],['Job conservato',job],['Contenuto',ownershipCard.contentHash],['Dimensione',`${ownershipCard.sizeBytes} byte`],['Tentativi cumulativi',ownershipCard.cumulativeAttempts]];
+    for(const[label,value]of facts){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=String(value);$('ownership-facts').append(dt,dd);}
+    $('ownership-confirmed').checked=false;controls();
+  }
+  const denialCodes=new Set(['ONB_CAPABILITY_DENIED','ONB_AUTHORIZATION_DENIED','ONB_ACTOR_TYPE_DENIED','ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED','ONB_FILE_OWNER_SCOPE_UNPROVEN','ONB_FILE_OWNER_DENIED','THS_SESSION_REQUIRED']);
+  function accessFailure(error,action=false){
+    if(![401,403].includes(error.status))return null;
+    const reference=error.correlationId?' Riferimento: '+error.correlationId+'.':'';
+    const code=denialCodes.has(error.code)?' Codice: '+error.code+'.':'';
+    if(error.status===401||error.code==='THS_SESSION_REQUIRED')return 'Sessione OUF non valida o scaduta (HTTP '+error.status+'). Accedi nuovamente con il tuo account e riapri questo stesso collegamento.'+(action?' La richiesta precedente resta da riconciliare.':' Nessuna azione è stata inviata.')+reference;
+    const cause=error.code==='ONB_CAPABILITY_DENIED'||error.code==='ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED'?'Manca una capability HUMAN richiesta.':error.code==='ONB_FILE_OWNER_SCOPE_UNPROVEN'||error.code==='ONB_FILE_OWNER_DENIED'?'Il controllo di ownership del file è stato negato.':'Il controllo di accesso ha negato la richiesta; sessione, scope e permessi devono essere verificati.';
+    return 'Accesso negato (HTTP 403). '+cause+' Un nuovo login non concede permessi.'+(action?' Conserva e riconcilia la stessa richiesta; non concedere un altro budget.':' Il lavoro è conservato; nessuna azione è stata inviata.')+code+reference;
+  }
+  async function request(path,options={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
+    try{const response=await fetch(path,{credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,...options});
+      if(!response.ok){const error=new Error();error.status=response.status;
+        // Never render arbitrary error detail, HTML, credentials or storage references.
+        try{const raw=await response.text();if(raw.length<=4096){const problem=JSON.parse(raw);const code=problem.code||problem.Code;
+          if(denialCodes.has(code))error.code=code;
+          if(typeof problem.correlationId==='string'&&/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(problem.correlationId))error.correlationId=problem.correlationId;}}catch(_){}
+        throw error;}return await response.json();
+    }finally{clearTimeout(timer);}
+  }
+  async function refresh(silent=false){if(busy)return;busy=true;controls();try{const result=await request(endpoint);card=result.card;ownershipCard=null;csrfHeader=result.csrfHeader;csrfToken=result.csrfToken;render();
+      if(!silent)message(card.recoveryPermissionAvailable===false?'Hai accesso allo stato; manca il permesso HUMAN per il recupero. Nessuna azione è disponibile.':pending?'Esito precedente da riconciliare. Nessun invio viene ripetuto automaticamente.':card.status==='SUCCEEDED'?'Analisi completata. Il lavoro conservato è pronto per il passo successivo.':'Stato verificato. Esamina il lavoro e scegli l’azione.');
+    }catch(error){monitor=null;card=null;ownershipCard=null;$('review').hidden=true;$('ownership-review').hidden=true;csrfToken=null;
+      if(error.code==='ONB_FILE_OWNER_SCOPE_UNPROVEN'){
+        try{const result=await request(endpoint+'/ownership');
+          if(result.card?.status==='OWNER_BINDING_REVIEW_REQUIRED'){ownershipCard=result.card;csrfHeader=result.csrfHeader;csrfToken=result.csrfToken;renderOwnership();message(storageAvailable?'Manca la prova storica del tenant. Esamina e conferma solo se il file appartiene al tenant indicato.':'Il browser non può conservare la richiesta. Nessuna decisione può essere inviata.');return;}
+          message('La prova di ownership è cambiata. Aggiorna lo stato prima di decidere.');return;
+        }catch(ownershipError){error=ownershipError;}
+      }
+      message(accessFailure(error)||'Stato non verificato. Aggiorna prima di decidere; nessuna azione è stata inviata.');}
+    finally{busy=false;controls();}}
+  function storePending(value){try{if(value)sessionStorage.setItem(storage,JSON.stringify(value));else sessionStorage.removeItem(storage);pending=value;return true;}catch(_){storageAvailable=false;return false;}finally{controls();}}
+  async function send(action,body){if(busy||!csrfToken||!storageAvailable)return;monitor=null;busy=true;
+    if(!storePending({action,body})){busy=false;controls();message('Il browser non può conservare la richiesta. Nessuna azione è stata inviata.');return;}
+    let ownershipDone=false;
+    try{const response=await request(endpoint+'/'+action,{method:'POST',headers:{'Content-Type':'application/json',[csrfHeader]:csrfToken},body:JSON.stringify(body)});storePending(null);
+      if(action==='ownership'){ownershipDone=true;ownershipCard=null;card=null;$('ownership-review').hidden=true;return;}
+      card=response;render();
+      message(action==='budget'?'Budget concesso. L’analisi resta ferma: verifica la revisione, poi scegli Avvia il recupero.':action==='resume'?'Recupero avviato sullo stesso job. Verifico l’esito entro una finestra finita.':'Recupero annullato; storia e risultati conservati.');
+      if(action==='resume'&&!['SUCCEEDED','FAILED','CANCELLED'].includes(card.status))monitor={start:Date.now(),reads:0};
+    }catch(error){message(accessFailure(error,true)||'Esito non confermato. Nessun invio viene ripetuto automaticamente: aggiorna lo stato o riconcilia la stessa richiesta.');}
+    finally{busy=false;controls();if(ownershipDone){await refresh(true);if(card)message('Associazione registrata. Il job resta fermo; esamina separatamente il budget e poi l’avvio.');}if(monitor)setTimeout(poll,6000);}}
+  async function poll(){if(!monitor||busy)return;if(monitor.reads>=12||Date.now()-monitor.start>=90000){monitor=null;message('Monitoraggio terminato. Il lavoro conserva il proprio stato; usa Aggiorna stato.');return;}
+    monitor.reads++;await refresh(true);if(!monitor)return;
+    if(['SUCCEEDED','FAILED','CANCELLED'].includes(card?.status)){monitor=null;message(card.status==='SUCCEEDED'?'Analisi completata sullo stesso job.':'Il recupero si è fermato. Esamina lo stato conservato; nessun nuovo budget è stato concesso.');return;}
+    setTimeout(poll,6000);
+  }
+  function common(){return{expectedVersion:card.expectedVersion,expectedGeneration:card.expectedGeneration,inputBindingHash:card.inputBindingHash};}
+  $('ownership').addEventListener('click',()=>{if(!ownershipCard||!$('ownership-confirmed').checked)return;send('ownership',{expectedVersion:ownershipCard.expectedVersion,expectedGeneration:ownershipCard.expectedGeneration,inputBindingHash:ownershipCard.inputBindingHash,reviewHash:ownershipCard.reviewHash,commandKey:crypto.randomUUID(),reason:$('ownership-reason').value.trim(),confirmed:true});});
+  $('ownership-confirmed').addEventListener('change',controls);$('ownership-reason').addEventListener('input',controls);
+  $('budget').addEventListener('click',()=>send('budget',{...common(),reviewHash:card.reviewHash,commandKey:crypto.randomUUID(),reason:$('reason').value.trim(),maximumAttempts:3,maximumElapsedSeconds:900}));
+  $('resume').addEventListener('click',()=>send('resume',{...common(),sessionId:card.sessionId}));
+  $('cancel').addEventListener('click',()=>send('cancel',{...common(),commandKey:crypto.randomUUID(),reason:$('reason').value.trim()}));
+  $('reconcile').addEventListener('click',()=>{if(pending)send(pending.action,pending.body);});
+  $('refresh').addEventListener('click',()=>{monitor=null;refresh();});$('confirmed').addEventListener('change',controls);$('reason').addEventListener('input',controls);
+  refresh();
+})();
+

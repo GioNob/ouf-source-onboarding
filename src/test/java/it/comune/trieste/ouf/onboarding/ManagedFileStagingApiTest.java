@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import it.comune.trieste.ouf.authorization.ServletAuthorization;
+import it.comune.trieste.ouf.authorization.TestAuthorization;
 import it.comune.trieste.ouf.onboarding.api.ManagedFileStagingApi;
 import it.comune.trieste.ouf.onboarding.api.TrustedActorResolver;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
@@ -20,9 +22,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 
 class ManagedFileStagingApiTest {
+  private static void bind(MockHttpServletRequest request){request.setAttribute(ServletAuthorization.TRUSTED_PRINCIPAL,TestAuthorization.principal("human:operator","HUMAN",Set.of("ouf.managed-source.file.upload")));}
   @Test void uploadsOriginalBomBytesAndRegistersExactHash() throws Exception {
     byte[] csv="\uFEFFcinema,indirizzo\r\nA,Trieste\r\n".getBytes(StandardCharsets.UTF_8);
-    var request=new MockHttpServletRequest();request.setContent(csv);
+    var request=new MockHttpServletRequest();bind(request);request.setContent(csv);
     var store=mock(ManagedFileStagingStore.class);var files=mock(ManagedFileService.class);
     var actors=mock(TrustedActorResolver.class);var hashes=new CanonicalHash(new ObjectMapper());
     var actor=new OnboardingService.Actor("human:operator","HUMAN_USER",Set.of("ouf.managed-source.file.upload"));
@@ -31,15 +34,15 @@ class ManagedFileStagingApiTest {
       assertThat(((InputStream)invocation.getArgument(0)).readAllBytes()).isEqualTo(csv);
       return "object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8";
     });
-    UUID asset=UUID.randomUUID();when(files.register(eq(null),anyString(),anyString(),eq("text/csv"),eq((long)csv.length),eq("human:operator"),anyString())).thenReturn(Map.of("asset_id",asset));
+    UUID asset=UUID.randomUUID();when(files.registerOwned(eq(null),anyString(),anyString(),eq("text/csv"),eq((long)csv.length),eq("human:operator"),anyString(),eq("tenant-a"))).thenReturn(Map.of("asset_id",asset));
     var api=new ManagedFileStagingApi(store,files,hashes,actors);
     var response=api.upload(request,"sha256:"+hashes.ofBytes(csv).substring(7));
     assertThat(response.getStatusCode().value()).isEqualTo(201);
-    verify(files).register(null,"object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8",hashes.ofBytes(csv),"text/csv",csv.length,"human:operator","retention://managed-files/30d");
+    verify(files).registerOwned(null,"object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8",hashes.ofBytes(csv),"text/csv",csv.length,"human:operator","retention://managed-files/30d","tenant-a");
   }
 
   @Test void mismatchedChecksumCannotWriteToMinio() throws Exception {
-    var request=new MockHttpServletRequest();request.setContent("id\n1\n".getBytes(StandardCharsets.UTF_8));
+    var request=new MockHttpServletRequest();bind(request);request.setContent("id\n1\n".getBytes(StandardCharsets.UTF_8));
     var store=mock(ManagedFileStagingStore.class);var files=mock(ManagedFileService.class);
     var actors=mock(TrustedActorResolver.class);
     when(actors.requireHuman(request,"ouf.managed-source.file.upload"))
@@ -50,7 +53,7 @@ class ManagedFileStagingApiTest {
   }
 
   @Test void oversizedStreamIsRejectedBeforeStorageWrite() throws Exception {
-    var request=new MockHttpServletRequest();request.setContent(new byte[10*1024*1024+1]);
+    var request=new MockHttpServletRequest();bind(request);request.setContent(new byte[10*1024*1024+1]);
     var store=mock(ManagedFileStagingStore.class);var files=mock(ManagedFileService.class);
     var actors=mock(TrustedActorResolver.class);
     when(actors.requireHuman(request,"ouf.managed-source.file.upload"))
@@ -60,3 +63,4 @@ class ManagedFileStagingApiTest {
     verifyNoInteractions(store,files);
   }
 }
+

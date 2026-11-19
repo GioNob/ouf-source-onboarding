@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class ManagedFileProfiler {
-  static final int MAX_ROWS=10_000,MAX_COLUMNS=256; static final long MAX_BYTES=10*1024*1024;
+  static final int MAX_ROWS=10_000,MAX_COLUMNS=ManagedFileLimits.MAX_COLUMNS; static final long MAX_BYTES=10*1024*1024;
   public record ColumnProfile(String name,String dataType,boolean nullable,long distinctValues) {}
   public record Profile(String format,Map<String,Object> metadata,List<ColumnProfile> columns,List<String> candidateKeys,List<Map<String,String>> sample) {}
 
@@ -62,10 +62,51 @@ public class ManagedFileProfiler {
       return new Profile("GEOPACKAGE",Map.of("layers",layers,"layerSelection","REQUIRED","recordModel","ONE_FEATURE_ONE_SOURCE_OBJECT","dimensions",2),List.of(),List.of(),List.of());
     }
   }
-  private Profile csv(byte[] bytes){String text;try{text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString();}catch(CharacterCodingException e){throw new IllegalArgumentException("CSV must be valid UTF-8 text",e);}if(text.startsWith("\uFEFF"))text=text.substring(1);if(text.indexOf('\u0000')>=0)throw new IllegalArgumentException("CSV must be UTF-8 text");char delimiter=delimiter(text);CSVFormat format=CSVFormat.DEFAULT.builder().setDelimiter(delimiter).setHeader().setSkipHeaderRecord(true).setIgnoreEmptyLines(true).get();try(CSVParser parser=CSVParser.parse(text,format)){List<String> headers=parser.getHeaderNames();validateHeaders(headers);List<List<String>> rows=new ArrayList<>();for(CSVRecord record:parser){if(rows.size()>=MAX_ROWS)throw new IllegalArgumentException("row limit exceeded");List<String> row=new ArrayList<>();for(int i=0;i<headers.size();i++)row.add(record.isSet(i)?record.get(i):"");rows.add(row);}return build("CSV",Map.of("encoding","UTF-8","delimiter",String.valueOf(delimiter),"headerRow",1,"rows",rows.size(),"columns",headers.size()),headers,rows);}catch(IOException e){throw new IllegalArgumentException("invalid CSV",e);}}
+  private Profile csv(byte[] bytes) {
+    String text;
+    try {
+      text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+    } catch(CharacterCodingException e) {throw new IllegalArgumentException("CSV must be valid UTF-8 text",e);}
+    if(text.startsWith("\uFEFF"))text=text.substring(1);
+    if(text.indexOf('\u0000')>=0)throw new IllegalArgumentException("CSV must be UTF-8 text");
+    char separator=delimiter(text);
+    CSVFormat format=CSVFormat.DEFAULT.builder().setDelimiter(separator).setHeader()
+        .setSkipHeaderRecord(true).setIgnoreEmptyLines(true).get();
+    try(CSVParser parser=CSVParser.parse(text,format)) {
+      List<String> headers=parser.getHeaderNames();validateHeaders(headers);
+      List<Set<String>> distinct=new ArrayList<>(headers.size());
+      for(int c=0;c<headers.size();c++)distinct.add(new HashSet<>());
+      String[] types=new String[headers.size()];boolean[] nullable=new boolean[headers.size()];
+      List<Map<String,String>> sample=new ArrayList<>(5);int rows=0;
+      for(CSVRecord record:parser) {
+        if(rows>=MAX_ROWS)throw new IllegalArgumentException("row limit exceeded");
+        if(record.size()>headers.size())throw new IllegalArgumentException("CSV row exceeds declared headers");
+        Map<String,String> example=rows<5?new LinkedHashMap<>():null;
+        for(int c=0;c<headers.size();c++) {
+          String raw=record.isSet(c)?record.get(c):"",value=raw.trim();
+          if(value.isEmpty())nullable[c]=true;
+          else {
+            distinct.get(c).add(value);
+            types[c]=merge(types[c],infer(value));
+          }
+          if(example!=null)example.put(headers.get(c),redact(headers.get(c),raw));
+        }
+        if(example!=null)sample.add(example);
+        rows++;
+      }
+      List<ColumnProfile> columns=new ArrayList<>(headers.size());List<String> keys=new ArrayList<>();
+      for(int c=0;c<headers.size();c++) {
+        columns.add(new ColumnProfile(headers.get(c),types[c]==null?"STRING":types[c],nullable[c],distinct.get(c).size()));
+        if(!nullable[c]&&rows>0&&distinct.get(c).size()==rows)keys.add(headers.get(c));
+      }
+      return new Profile("CSV",Map.of("encoding","UTF-8","delimiter",String.valueOf(separator),
+          "headerRow",1,"rows",rows,"columns",headers.size()),List.copyOf(columns),List.copyOf(keys),List.copyOf(sample));
+    } catch(IOException e) {throw new IllegalArgumentException("invalid CSV",e);}
+  }
   private Profile xlsx(byte[] bytes){try(Workbook workbook=new XSSFWorkbook(new ByteArrayInputStream(bytes))){if(workbook.getNumberOfSheets()==0)throw new IllegalArgumentException("workbook has no sheets");Sheet sheet=workbook.getSheetAt(0);Row header=sheet.getRow(sheet.getFirstRowNum());if(header==null)throw new IllegalArgumentException("sheet has no header");int columns=header.getLastCellNum();if(columns<1||columns>MAX_COLUMNS)throw new IllegalArgumentException("column limit exceeded");List<String> headers=new ArrayList<>();for(int i=0;i<columns;i++)headers.add(cellText(header.getCell(i),true));validateHeaders(headers);List<List<String>> rows=new ArrayList<>();for(int r=header.getRowNum()+1;r<=sheet.getLastRowNum();r++){if(rows.size()>=MAX_ROWS)throw new IllegalArgumentException("row limit exceeded");Row row=sheet.getRow(r);if(row==null)continue;List<String> values=new ArrayList<>();for(int c=0;c<columns;c++)values.add(cellText(row.getCell(c),false));rows.add(values);}return build("XLSX",Map.of("workbookSheets",workbook.getNumberOfSheets(),"sheet",sheet.getSheetName(),"headerRow",header.getRowNum()+1,"rows",rows.size(),"columns",columns,"formulas","REJECTED"),headers,rows);}catch(IOException e){throw new IllegalArgumentException("invalid XLSX",e);}}
   private Profile build(String kind,Map<String,Object> metadata,List<String> headers,List<List<String>> rows){List<ColumnProfile> profiles=new ArrayList<>();List<String> keys=new ArrayList<>();for(int c=0;c<headers.size();c++){Set<String> distinct=new HashSet<>();boolean nullable=false;String type=null;for(List<String> row:rows){String value=c<row.size()?row.get(c).trim():"";if(value.isEmpty()){nullable=true;continue;}distinct.add(value);type=merge(type,infer(value));}String resolved=type==null?"STRING":type;profiles.add(new ColumnProfile(headers.get(c),resolved,nullable,distinct.size()));if(!nullable&&!rows.isEmpty()&&distinct.size()==rows.size())keys.add(headers.get(c));}List<Map<String,String>> sample=rows.stream().limit(5).map(row->{Map<String,String> item=new LinkedHashMap<>();for(int i=0;i<headers.size();i++)item.put(headers.get(i),i<row.size()?redact(headers.get(i),row.get(i)):"");return item;}).toList();return new Profile(kind,metadata,List.copyOf(profiles),List.copyOf(keys),sample);}
-  private static void validateHeaders(List<String> headers){if(headers.isEmpty()||headers.size()>MAX_COLUMNS)throw new IllegalArgumentException("column limit exceeded");Set<String> seen=new HashSet<>();for(String h:headers)if(h==null||h.isBlank()||!seen.add(h))throw new IllegalArgumentException("headers must be non-empty and unique");}
+  private static void validateHeaders(List<String> headers){if(headers.isEmpty()||headers.size()>MAX_COLUMNS)throw new IllegalArgumentException("column limit exceeded");Set<String> seen=new HashSet<>();for(String h:headers)if(h==null||h.isBlank()||h.length()>ManagedFileLimits.MAX_COLUMN_NAME_CHARS||!seen.add(h))throw new IllegalArgumentException("headers must be non-empty and unique");}
   private static char delimiter(String text){String first=text.lines().findFirst().orElse("");long comma=first.chars().filter(c->c==',').count(),semicolon=first.chars().filter(c->c==';').count();return semicolon>comma?';':',';}
   private static String cellText(Cell cell,boolean header){if(cell==null)return "";if(cell.getCellType()==CellType.FORMULA)throw new IllegalArgumentException("XLSX formulas are not allowed");DataFormatter formatter=new DataFormatter(Locale.ROOT);String value=formatter.formatCellValue(cell);return header?value.trim():value;}
   private static String infer(String value){if(value.matches("-?[0-9]+"))return "LONG";if(value.matches("-?[0-9]+[.,][0-9]+"))return "DECIMAL";if(value.equalsIgnoreCase("true")||value.equalsIgnoreCase("false"))return "BOOLEAN";try{LocalDate.parse(value);return "DATE";}catch(Exception ignored){return "STRING";}}
