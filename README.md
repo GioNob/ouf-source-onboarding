@@ -76,3 +76,63 @@ e non costituiscono ancora tool chatbot o una directory utenti IAM.
 ## Chatbot e THS per i permessi
 
 Configurazione IAM, sessione, chiavi, ciclo proposta/conferma e collaudo: [guida operativa](docs/PERMISSION_PROPOSALS.md).
+
+Il rinnovo nominale usa `scripts/r4a_human_grant_lifecycle.py --operation renew`
+per HUMAN e `scripts/r4a_service_grant_expiry_renewal.py` per SERVICE. Entrambi
+usano il Device Flow dell'amministratore HUMAN indicato da `--subject-id` e le
+fasi `plan`, `draft` (con preview owner), `preview`, `publish`, `verify`.
+Il manifest SERVICE (`--grants-file`) indica `grantId`, `capabilityId` e
+`servicePrincipalId`. Sono ammessi i grant del tenant `ouf-lab` con soggetto e
+organizzazione nulli e capability che ammette SERVICE. Il rinnovo modifica solo
+`validUntil`. Per i grant già scaduti si usa `--valid-until`. Il rinnovo
+preventivo richiede `--expected-current-valid-until` e `--new-valid-until` in
+UTC, da ripetere in ogni fase. La scadenza attuale deve coincidere con quella
+attesa e la nuova deve essere successiva, entro 12 mesi dall'esecuzione.
+Ogni rinnovo usa un file di stato privato.
+Il publish richiede `--confirm-publish` e l'hash completo `sha256:…` della
+preview approvata in `--reviewed-draft-hash`. In caso di esito ambiguo lo stato
+conserva la fase per la riconciliazione con l'owner.
+
+Il controllo delle scadenze legge il bundle `ACTIVE` ogni cinque minuti. Le
+finestre `DUE_30D` (oltre 7 e fino a 30 giorni), `DUE_7D` ed `EXPIRED` sono
+disgiunte. L'ingresso in una finestra produce `AUTH_GRANT_EXPIRY` nei log con
+conteggio e dipendenza potenziale, una volta per grant, finestra e processo.
+Il report HUMAN `GET /api/trusted-human/v1/authorization/policies/active/grant-expiry`
+usa l'autorità amministrativa esistente e mostra solo i grant del tenant del
+chiamante. Le sette dipendenze Teatri note sono mappate esplicitamente. Gli
+altri grant risultano `UNMAPPED` e le scadenze di un `DENY` sono segnalate
+separatamente. Una scadenza configurata non prova un diniego effettivo.
+
+Le metriche `ouf.authorization.grant.expiry.count` (tag `window`),
+`ouf.authorization.grant.expiry.scan.available` e
+`ouf.authorization.grant.expiry.scan.last.success.unixtime` distinguono zero
+scadenze da una lettura fallita o da un monitor fermo. Gli avvisi sono nei log
+e nelle metriche per il sistema di monitoraggio.
+
+Rete di sicurezza: se entro il 15 dicembre 2026 il pilota SERVICE non ha provato
+rinnovo automatico, aggiornamento senza interruzione, diniego alla generazione
+ritirata e avviso anticipato, preparare il rinnovo dei cinque grant HUMAN e dei
+due SERVICE introdotti dalle policy v62/v63. Usare gli script di questa PR con
+manifest esatto, preview e verifica. Per il rinnovo preventivo la scadenza
+attuale attesa è `2026-12-31T23:00:00Z`. Scadenza ponte e pubblicazione
+richiedono decisione HUMAN e si verificano sul bundle effettivamente attivo.
+
+### Difetti emersi nell'E2E Teatri
+
+- Una challenge scaduta non si può rinnovare.
+- Il refresh del token THS richiede una correzione.
+- Sul VPS sono stati rilevati oltre 150 container fermi.
+- I grant HUMAN e SERVICE coinvolti avevano scadenze fisse il 25–26 ottobre, senza avvisi.
+- La risoluzione delle capability usa un contesto senza etichette. I grant di ruolo con `allowedDataLabels` o `allowedDetailLevels` non vuoti vengono scartati. Va definito il contratto tra `OufRoleCatalogue` e `GrantConstraints.matches()`.
+- Il corpo del 403 viene nascosto al chiamante.
+- Nelle verifiche non sono emersi eventi di login in Keycloak.
+- Gli strumenti MCP di acquisizione e di stato e storico Ingestion restituiscono `authorization denied`.
+- Corretto nella PR #55 il controllo dell'hash di preview che rifiutava il prefisso `sha256:`.
+- Il ricaricamento della policy non è visibile nei log.
+- Il `503 ONB_PERSISTENCE_FAILURE` non compare nei log di Onboarding.
+- Il connettore MCP non espone il clone di una versione di Onboarding.
+- Il 403 di readiness non compare nei log di Ingestion.
+- Un 403 di una dipendenza porta la review in `BLOCKED` senza ripresa. Dopo il ripristino dell'accesso serve clonare e riapprovare.
+- Nei log manca un evento di conclusione del run.
+- `ouf-udp` non registra nei log la ricezione degli handoff.
+

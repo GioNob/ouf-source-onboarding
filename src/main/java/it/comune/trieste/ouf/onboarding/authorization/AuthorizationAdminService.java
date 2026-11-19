@@ -69,6 +69,10 @@ public class AuthorizationAdminService {
   var policy=registry.load(active.bundleId(),active.version());
   return new ActivePolicy(active.bundleId()+":"+active.version(),active.activatedAt(),policy,registry.transportHash(policy));
  }
+ public AuthorizationGrantExpiry.Report activeGrantExpiry(Actor actor){
+  var policy=activePolicy(actor).policy();
+  return AuthorizationGrantExpiry.inspect(policy,Instant.now(),grant->grant.tenantId().equals(actor.tenant()));
+ }
  @Transactional public Draft create(PolicyBundle policy,Actor actor){
   requireWriteAuthority(actor);preserveOtherTenants(policy,actor);validate(policy);UUID id=UUID.randomUUID();db.sql("insert into ouf_authorization.policy_draft(draft_id,state,base_active_ref,payload,created_by,tenant_id) values(:id,'DRAFT',:base,cast(:payload as jsonb),:subject,:tenant)").param("id",id).param("base",activeRef()).param("payload",encode(policy)).param("subject",actor.subject()).param("tenant",actor.tenant()).update();audit("CREATE_DRAFT",id.toString(),actor);return get(id);
  }

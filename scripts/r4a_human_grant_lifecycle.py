@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Governed add-only lifecycle for one named HUMAN grant in OUF Authorization."""
+"""Governed add or expiry-only renewal of named HUMAN Authorization grants."""
 from __future__ import annotations
 
 import argparse
@@ -97,17 +97,31 @@ def review_preview(base, token, state):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("plan", "draft", "preview", "publish", "verify"))
+    parser.add_argument("--operation", choices=("add", "renew"), default="add")
     parser.add_argument("--subject-id", required=True)
     parser.add_argument("--grant-id", default=GRANT_ID)
     parser.add_argument("--capability", default=CAPABILITY)
     parser.add_argument("--grants-file", type=Path, help="JSON list of grantId/capabilityId pairs")
-    parser.add_argument("--valid-from", default="2026-09-25T00:00:00Z")
-    parser.add_argument("--valid-until", default="2026-10-25T00:00:00Z")
+    parser.add_argument("--valid-from")
+    parser.add_argument("--valid-until")
+    parser.add_argument("--expected-current-valid-until", help="Current expiry in UTC for preventive renewal")
+    parser.add_argument("--new-valid-until", help="New expiry in UTC for preventive renewal")
     parser.add_argument("--state-file", type=Path)
     parser.add_argument("--confirm-publish", action="store_true")
+    parser.add_argument("--reviewed-draft-hash", help="Required with renew publish after HUMAN review")
     args = parser.parse_args()
     if args.grants_file and (args.grant_id != GRANT_ID or args.capability != CAPABILITY):
         raise ValueError("GRANT_FLAGS_CONFLICT")
+    if args.operation == "renew":
+        import r4a_human_grant_renewal as renewal
+
+        if not SUBJECT_RE.fullmatch(args.subject_id):
+            raise ValueError("INVALID_SUBJECT_ID")
+        return renewal.run(args, human_token)
+    if args.expected_current_valid_until is not None or args.new_valid_until is not None:
+        raise ValueError("RENEW_PREVENTIVE_REQUIRES_RENEW_OPERATION")
+    args.valid_from = args.valid_from or "2026-09-25T00:00:00Z"
+    args.valid_until = args.valid_until or "2026-10-25T00:00:00Z"
     wanted = (manifest(args.grants_file, args.subject_id, args.valid_from, args.valid_until)
               if args.grants_file else [grant(args.subject_id, args.valid_from, args.valid_until, args.grant_id, args.capability)])
     wanted_by_id = {item["grantId"]: item for item in wanted}
@@ -190,3 +204,4 @@ if __name__ == "__main__":
         code = str(exc) if isinstance(exc, (ValueError, RuntimeError)) else type(exc).__name__
         print("HUMAN_GRANT_LIFECYCLE_BLOCKED=" + code, file=sys.stderr)
         raise SystemExit(1)
+
