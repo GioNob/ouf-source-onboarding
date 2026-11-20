@@ -23,6 +23,15 @@ public final class OufRoleCatalogue {
  private static boolean id(String value){return value!=null&&value.matches("[A-Za-z0-9_.-]{1,80}");}
  public static String tenantPrefix(String tenant){return PREFIX+digest(tenant).substring(0,16)+":";}
  private static String digest(String text){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));}catch(java.security.NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
+ static Set<String> missingCapabilityIds(Snapshot snapshot,List<CapabilityDescriptor> active){
+  Set<String> missing=new HashSet<>();
+  for(var role:snapshot.roles())for(var permission:role.permissions()){
+   require(permission.capabilityId()!=null,"AUTH_ROLE_CAPABILITY_INVALID");
+   missing.add(permission.capabilityId());
+  }
+  for(var descriptor:active)missing.remove(descriptor.capabilityId());
+  return missing;
+ }
  public static List<Grant> compile(Snapshot snapshot,String tenant,String trustedIssuer,List<CapabilityDescriptor> capabilities){
   require(snapshot!=null&&trustedIssuer!=null&&!trustedIssuer.isBlank()&&trustedIssuer.equals(snapshot.issuer()),"AUTH_ROLE_ISSUER_MISMATCH");
   require(tenant!=null&&!tenant.isBlank(),"AUTH_ROLE_TENANT_REQUIRED");
