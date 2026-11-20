@@ -6,9 +6,27 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import r4a_semantic_authorization_bootstrap as bootstrap
 import r4a_semantic_authorization_verify_db as verifier
+import r4a_semantic_human_scopes as human_scopes
 
 
 class SemanticBootstrapTest(unittest.TestCase):
+    def test_discovery_descriptors_and_grants_match_the_mcp_contract(self):
+        discovery = 'ouf.semantic.discovery'
+        operations = {discovery: 'COMMAND', discovery + '.status': 'READ',
+                      discovery + '.candidates': 'READ'}
+        rows = [row for row in verifier.EXPECTED_CAPS
+                if row['descriptor']['capabilityId'].startswith(discovery)]
+        self.assertCountEqual(rows, [
+            {'ownerRef': 'semantic', 'descriptor': {'capabilityId': cap, 'operation': op,
+             'requiredScope': discovery, 'allowedActors': ['HUMAN']}}
+            for cap, op in operations.items()])
+        self.assertCountEqual(
+            [row for row in verifier.EXPECTED_GRANTS if row['capabilityId'].startswith(discovery)],
+            [{'grantId': 'grant-' + cap.removeprefix('ouf.').replace('.', '-') + '-human-admin',
+              'capabilityId': cap} for cap in operations])
+        self.assertCountEqual(human_scopes.SCOPES,
+                              {row['descriptor']['requiredScope'] for row in verifier.EXPECTED_CAPS})
+
     def test_structural_verifier_accepts_owner_null_normalization(self):
         admin = {
             'grantId': 'admin', 'capabilityId': 'authorization.policy.admin',
@@ -24,13 +42,42 @@ class SemanticBootstrapTest(unittest.TestCase):
                   'capabilities': [*old['capabilities'],
                                    *(row['descriptor'] for row in verifier.EXPECTED_CAPS)],
                   'grants': [*old['grants'], *({**admin, **row} for row in verifier.EXPECTED_GRANTS)]}
-        state = {'basePolicyRef': 'ouf-lab-authorization:27',
+        state = {'catalogueHash': bootstrap.policy.digest([verifier.EXPECTED_CAPS, verifier.EXPECTED_GRANTS]),
+                 'basePolicyRef': 'ouf-lab-authorization:27',
                  'targetPolicyRef': 'ouf-lab-authorization:28',
                  'baselineCapabilitiesHash': bootstrap.policy.digest(old['capabilities']),
                  'baselineGrantsHash': bootstrap.policy.digest(old['grants']),
                  'addedCapabilityIds': [x['descriptor']['capabilityId'] for x in verifier.EXPECTED_CAPS],
                  'addedGrantIds': [x['grantId'] for x in verifier.EXPECTED_GRANTS]}
-        self.assertEqual(verifier.verify(old, active, state), (1, 8, 1, 8))
+        self.assertEqual(verifier.verify(old, active, state), (1, 11, 1, 11))
+
+        legacy = {**active,
+                  'capabilities': [row for row in active['capabilities']
+                                   if row['requiredScope'] != 'ouf.semantic.discovery'],
+                  'grants': [row for row in active['grants']
+                             if not row['capabilityId'].startswith('ouf.semantic.discovery')]}
+        original_state = {key: value for key, value in state.items() if key != 'catalogueHash'}
+        original_state.update(addedCapabilityIds=[row['capabilityId'] for row in legacy['capabilities'][1:]],
+                              addedGrantIds=[row['grantId'] for row in legacy['grants'][1:]])
+        self.assertEqual(verifier.verify(old, legacy, original_state), (1, 8, 1, 8))
+
+        upgraded = {**active, 'version': 29}
+        upgrade = {
+            'catalogueHash': state['catalogueHash'],
+            'basePolicyRef': state['targetPolicyRef'],
+            'targetPolicyRef': active['bundleId'] + ':29',
+            'baselineCapabilitiesHash': bootstrap.policy.digest(legacy['capabilities']),
+            'baselineGrantsHash': bootstrap.policy.digest(legacy['grants']),
+            'addedCapabilityIds': [row['capabilityId'] for row in active['capabilities']
+                                   if row['requiredScope'] == 'ouf.semantic.discovery'],
+            'addedGrantIds': [row['grantId'] for row in active['grants']
+                              if row['capabilityId'].startswith('ouf.semantic.discovery')],
+        }
+        self.assertEqual(verifier.verify(legacy, upgraded, upgrade), (8, 11, 8, 11))
+        with self.assertRaisesRegex(ValueError, 'STATE_MANIFEST_MISMATCH'):
+            verifier.verify(legacy, upgraded, {**upgrade, 'addedGrantIds': []})
+        with self.assertRaisesRegex(ValueError, 'STATE_MANIFEST_MISMATCH'):
+            verifier.verify(legacy, upgraded, {**upgrade, 'catalogueHash': 'wrong'})
         active['grants'][1]['subjectId'] = 'other'
         with self.assertRaisesRegex(ValueError, 'SEMANTIC_GRANT_MISMATCH'):
             verifier.verify(old, active, state)

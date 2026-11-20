@@ -2,7 +2,7 @@
 """Read-only, structural verification of the published Semantic policy delta.
 
 The owner rewrites publishedAt and may normalize omitted null grant fields;
-this checker compares version 27 and ACTIVE by exact entry identity instead of
+this checker compares the base and ACTIVE by exact entry identity instead of
 hashing the whole JSON array constructed by the caller.
 """
 import argparse
@@ -42,13 +42,23 @@ def verify(old, active, state):
     after_caps = indexed(active['capabilities'], 'capabilityId')
     before_grants = indexed(old['grants'], 'grantId')
     after_grants = indexed(active['grants'], 'grantId')
-    expected_caps = {row['descriptor']['capabilityId']: row['descriptor'] for row in EXPECTED_CAPS}
-    expected_grants = {row['grantId']: row['capabilityId'] for row in EXPECTED_GRANTS}
-    if (set(state['addedCapabilityIds']) != set(expected_caps)
-            or set(state['addedGrantIds']) != set(expected_grants)):
+    caps, grants = EXPECTED_CAPS, EXPECTED_GRANTS
+    if 'catalogueHash' not in state:
+        # State files from the original seven-capability bootstrap predate discovery.
+        caps = [row for row in caps if row['descriptor']['requiredScope'] != 'ouf.semantic.discovery']
+        legacy_ids = {row['descriptor']['capabilityId'] for row in caps}
+        grants = [row for row in grants if row['capabilityId'] in legacy_ids]
+    elif state['catalogueHash'] != lifecycle.digest([caps, grants]):
         raise ValueError('STATE_MANIFEST_MISMATCH')
-    if (set(after_caps) - set(before_caps) != set(expected_caps)
-            or set(after_grants) - set(before_grants) != set(expected_grants)
+    expected_caps = {row['descriptor']['capabilityId']: row['descriptor'] for row in caps}
+    expected_grants = {row['grantId']: row['capabilityId'] for row in grants}
+    added_caps = expected_caps.keys() - before_caps.keys()
+    added_grants = expected_grants.keys() - before_grants.keys()
+    if (sorted(state['addedCapabilityIds']) != sorted(added_caps)
+            or sorted(state['addedGrantIds']) != sorted(added_grants)):
+        raise ValueError('STATE_MANIFEST_MISMATCH')
+    if (set(after_caps) - set(before_caps) != added_caps
+            or set(after_grants) - set(before_grants) != added_grants
             or any(after_caps.get(key) != value for key, value in before_caps.items())
             or any(after_grants.get(key) != value for key, value in before_grants.items())):
         raise ValueError('UNEXPECTED_EXISTING_POLICY_CHANGE')

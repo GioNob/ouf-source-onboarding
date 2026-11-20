@@ -14,7 +14,7 @@ SCOPES = (
     'ouf.semantic.propose', 'ouf.semantic.review.prepare',
     'ouf.semantic.approval.request', 'ouf.semantic.review',
     'ouf.semantic.approve', 'ouf.semantic.publish',
-    'ouf.semantic.search',
+    'ouf.semantic.search', 'ouf.semantic.discovery',
 )
 CLIENT = 'ouf-human-admin'
 REALM = 'ouf'
