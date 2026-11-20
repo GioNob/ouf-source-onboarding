@@ -63,6 +63,7 @@
         element('h3', 'Effetto della nuova pubblicazione', article);
         element('p', card.publicationEffects.description, article);
         detail('Versione di partenza della revisione', card.revisionBase, article);
+        if (card.assetRef) detail('Nuovo file e profilo da approvare', card.assetRef, article);
       }
       detail('Configurazione completa da approvare', config, article);
       if(card.progress?.activationProgress) detail('Avanzamento delle verifiche e tentativi disponibili', card.progress.activationProgress, article);

@@ -88,7 +88,7 @@ public class OnboardingService {
     // Serialize publications and revision preparation on the same source fence.
     db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:s,0))) locked").param("s",sourceId).query(Integer.class).single();
     db.sql("select source_id from ouf_onboarding.source where source_id=:s for update").param("s",sourceId).query(String.class).single();
-    var revision=db.sql("select r.parent_version_id,r.parent_configuration_hash,v.state,v.configuration_hash from ouf_onboarding.source_property_revision r join ouf_onboarding.onboarding_version v on v.onboarding_version_id=r.parent_version_id where r.onboarding_version_id=:v").param("v",versionId).query().listOfRows();
+    var revision=db.sql("select r.parent_version_id,r.parent_configuration_hash,r.replacement_profile_id,v.state,v.configuration_hash from ouf_onboarding.source_property_revision r join ouf_onboarding.onboarding_version v on v.onboarding_version_id=r.parent_version_id where r.onboarding_version_id=:v").param("v",versionId).query().listOfRows();
     if(!revision.isEmpty()){
       var base=revision.getFirst();
       if(!"ACTIVE".equals(base.get("state"))||!Objects.equals(base.get("parent_configuration_hash"),base.get("configuration_hash")))
@@ -98,6 +98,19 @@ public class OnboardingService {
     Map<String,Object> v=version(sourceId,versionId);if(!"APPROVED".equals(v.get("state")))throw invalid("Version must be APPROVED");
     boolean compatible=db.sql("select compatible from ouf_onboarding.consumer_compatibility_attestation where onboarding_version_id=:v and consumer='INGESTION_RUNTIME' and configuration_hash=:h order by created_at desc,attestation_id desc limit 1").param("v",versionId).param("h",v.get("configuration_hash")).query(Boolean.class).optional().orElse(false);if(!compatible)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_INGESTION_COMPAT_REQUIRED","Ingestion Runtime must accept the frozen configuration before activation");
     @SuppressWarnings("unchecked") Map<String,Object> configuration=(Map<String,Object>)v.get("configuration");ResolutionActivationGate.requireExecutable(configuration,sourceId,String.valueOf(v.get("configuration_hash")),identityVerifier);Map<String,Object> bundle=bundles.compile(sourceId,versionId,v.get("version"),String.valueOf(v.get("configuration_hash")),configuration);String checksum=String.valueOf(bundle.get("checksum"));
+    if(!revision.isEmpty()&&revision.getFirst().get("replacement_profile_id")!=null){
+      var eligible=db.sql("""
+          select a.asset_id from ouf_onboarding.file_profile p
+          join ouf_onboarding.managed_file_asset a on a.asset_id=p.asset_id
+          join ouf_onboarding.onboarding_version v on v.onboarding_version_id=:v
+          where p.profile_id=:p and a.source_id=v.source_id and a.status='PROFILED'
+            and a.content_hash=v.configuration#>>'{extractionProfile,runtime,contentHash}'
+            and a.staging_ref=v.configuration#>>'{extractionProfile,runtime,stagingRef}'
+            and a.size_bytes::text=v.configuration#>>'{extractionProfile,runtime,execution,expectedSize}'
+          for share of a
+          """).param("p",revision.getFirst().get("replacement_profile_id")).param("v",versionId).query(UUID.class).optional();
+      if(eligible.isEmpty())throw new DomainFailure(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_DRIFT","Frozen asset is no longer eligible");
+    }
     db.sql("update ouf_onboarding.published_configuration set active=false where source_id=:s and active=true").param("s",sourceId).update();
     db.sql("update ouf_onboarding.onboarding_version set state='SUPERSEDED',lock_version=lock_version+1,updated_at=transaction_timestamp() where source_id=:s and state='ACTIVE'").param("s",sourceId).update();
     UUID publicationId=UUID.randomUUID();db.sql("insert into ouf_onboarding.published_configuration(publication_id,source_id,onboarding_version_id,bundle_version,bundle,checksum,active,effective_from) values(:p,:s,:v,:n,cast(:b as jsonb),:h,true,transaction_timestamp())")
