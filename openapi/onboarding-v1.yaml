@@ -477,6 +477,13 @@ components:
         name: {type: string, minLength: 1}
         owner: {type: string, minLength: 1}
         targetClassIri: {type: string, minLength: 1}
+        category:
+          type: object
+          additionalProperties: false
+          required: [schemeIri, conceptIri]
+          properties:
+            schemeIri: {type: string, format: iri}
+            conceptIri: {type: string, format: iri}
         semanticRefs:
           type: array
           minItems: 1

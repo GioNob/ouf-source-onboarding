@@ -50,6 +50,13 @@
       if (card.interchangeSnapshot) detail('Contenuto semantico esatto', card.interchangeSnapshot, article);
     } else {
       const config = card.configuration || {}, mapping = config.semanticMapping || {};
+      for (const target of mapping.targetClasses || []) {
+        element('h3', target.classIri, article);
+        if (target.category) {
+          element('p', `Vocabolario: ${target.category.schemeIri}`, article);
+          element('p', `Categoria: ${target.category.conceptIri}`, article);
+        } else element('p', 'Categoria assente', article);
+      }
       const rows = mapping.propertyMappings || [];
       element('h3', 'Campi inclusi e corrispondenze', article);
       const table = document.createElement('table'), head = document.createElement('tr');

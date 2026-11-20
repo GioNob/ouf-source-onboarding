@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ouf.trieste.it/contracts/onboarding/semantic-mapping-category-v1.json",
+  "title": "OUF SemanticMapping v1 with controlled category (D-059)",
+  "allOf": [
+    {
+      "$ref": "semantic-mapping-v1.json"
+    },
+    {
+      "properties": {
+        "targetClasses": {
+          "items": {
+            "properties": {
+              "category": {
+                "type": "object",
+                "required": [
+                  "schemeIri",
+                  "conceptIri"
+                ],
+                "properties": {
+                  "schemeIri": {
+                    "type": "string",
+                    "minLength": 1,
+                    "format": "iri",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:"
+                  },
+                  "conceptIri": {
+                    "type": "string",
+                    "minLength": 1,
+                    "format": "iri",
+                    "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

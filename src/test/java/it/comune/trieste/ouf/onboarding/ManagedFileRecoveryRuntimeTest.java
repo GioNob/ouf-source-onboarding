@@ -40,6 +40,10 @@ class ManagedFileRecoveryRuntimeTest {
     assertThat((Map<String,Object>)onboarding.source(source).get("metadata")).containsEntry("managedTenantId","tenant-a");
     assertThat(files.onboardIdempotent(asset,profile,source,"Recovery","Fixture","urn:fixture:Thing",List.of("fixture@1"),List.of("id"),fields,null,actor,"c","draft-one","tenant-a")).isEqualTo(draft);
     assertThatThrownBy(()->files.onboardIdempotent(asset,profile,source,"Recovery","Fixture","urn:fixture:Thing",List.of("fixture@1"),List.of("id"),fields,null,actor,"c","draft-one","tenant-b")).hasMessageContaining("different onboarding arguments");
+    var category=Map.<String,Object>of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept");
+    assertThatThrownBy(()->files.onboardIdempotent(asset,profile,source,"Recovery","Fixture","urn:fixture:Thing",
+        List.of("fixture@1"),List.of("id"),fields,null,actor,"c","draft-one","tenant-a",category))
+        .hasMessageContaining("different onboarding arguments");
     var a=(List<Map<String,Object>>)files.ownedAssets("tenant-a","alice",20,null).get("items");assertThat(a.getFirst()).containsEntry("sourceId",source).containsEntry("profileId",profile);
     var b=(List<Map<String,Object>>)files.ownedAssets("tenant-b","alice",20,null).get("items");assertThat(b.getFirst()).doesNotContainKey("sourceId");
     assertThat(db.sql("select count(*) from ouf_onboarding.onboarding_version where source_id=:s").param("s",source).query(Long.class).single()).isOne();
