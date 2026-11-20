@@ -23,6 +23,46 @@ class ManagedFileExecutionProposalTest {
     assertThat(compiled).doesNotContainKeys("runtimeAuthorityIssued","compatibilityAttestation","approvedBy");
     assertThat((List<?>)compiled.get("semanticReferenceBindings")).hasSize(1);
   }
+  @Test @SuppressWarnings("unchecked") void categoryMustAgreeAcrossMappingAndGovernedPolicy(){
+    var config=config();var proposal=proposal();
+    var mapping=object(config,"semanticMapping");
+    var targets=(List<Map<String,Object>>)mapping.get("targetClasses");
+    var target=targets.getFirst();
+    var policy=object(object(proposal.udp(),"resolution"),"governedIdentity");
+    var category=Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept");
+    target.put("category",category);
+    var compiled=compile(config,proposal);
+    assertThat(object(compiled,"semanticMapping")).isEqualTo(mapping);
+    policy.put("category",category);
+    compiled=compile(config,proposal);
+    var validator=new ConfigurationValidator();
+    assertThat(validator.validate(SOURCE,compiled).findings()).extracting(ConfigurationValidator.Finding::code)
+        .contains("ONB_GOVERNED_IDENTITY_PROPOSAL").doesNotContain("ONB_MAPPING_CATEGORY_CONFLICT","ONB_MAPPING_CATEGORY_INVALID");
+    var absent=new LinkedHashMap<>(target);absent.remove("category");
+    targets.add(absent);
+    assertCategoryError(config,proposal,"ONB_MAPPING_CATEGORY_CONFLICT");
+    targets.removeLast();
+    target.remove("category");
+    assertCategoryError(config,proposal,"ONB_MAPPING_CATEGORY_CONFLICT");
+    target.put("category",Map.of("schemeIri","urn:example:other","conceptIri","urn:example:concept"));
+    assertCategoryError(config,proposal,"ONB_MAPPING_CATEGORY_CONFLICT");
+    for(Object invalid:Arrays.asList(null,Map.of(),Map.of("schemeIri","urn:example:scheme"),
+        Map.of("schemeIri","relative","conceptIri","urn:example:concept"),
+        Map.of("schemeIri","urn:example:scheme","conceptIri",""),
+        Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept","label","extra"))){
+      target.put("category",invalid);
+      assertCategoryError(config,proposal,"ONB_MAPPING_CATEGORY_INVALID");
+    }
+  }
+
+  private void assertCategoryError(Map<String,Object> config,ManagedFileExecutionProposal.Proposal proposal,String code){
+    assertThatThrownBy(()->compile(config,proposal)).isInstanceOfSatisfying(
+        it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,failure->assertThat(failure.code()).isEqualTo(code));
+    object(object(config,"extractionProfile"),"runtime").put("udp",proposal.udp());
+    assertThat(new ConfigurationValidator().validate(SOURCE,config).findings())
+        .extracting(ConfigurationValidator.Finding::code).contains(code);
+  }
+
   @Test void assetOrTenantDriftCannotBeCompiled(){
     for(String key:List.of("asset_id","source_id","staging_ref","content_hash")){
       var changed=asset();changed.put(key,"changed");

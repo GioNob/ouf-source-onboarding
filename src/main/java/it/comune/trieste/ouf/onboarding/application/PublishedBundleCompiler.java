@@ -16,6 +16,7 @@ public class PublishedBundleCompiler {
     Map<String,Object> template=object(configuration,"bundle");Map<String,Object> source=object(template,"source");
     require(sourceId.equals(source.get("sourceId")),"bundle sourceId does not match the aggregate");
     Map<String,Object> extraction=object(configuration,"extractionProfile");Map<String,Object> semantic=object(configuration,"semanticMapping");
+    MappingCategory.validateConfiguration(configuration);
     Map<String,Object> out=new LinkedHashMap<>();
     out.put("bundleId",text(template,"bundleId"));out.put("bundleVersion",String.valueOf(template.getOrDefault("bundleVersion",versionNumber)));
     out.put("environment",text(template,"environment"));out.put("source",Map.copyOf(source));

@@ -38,7 +38,7 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     await page.getByText('Stato: ACTIVE',{exact:true}).waitFor();assert.equal(posts.length,2);
     assert.deepEqual(posts[1].body,{approvalDecisionId:id,contentHash:hash});
     await page.reload();await page.locator('article.card').waitFor();assert.equal(posts.length,2);
-    let sourcePosts=0,budgetPosts=0,budgetCommand;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
+    let sourcePosts=0,budgetPosts=0,budgetCommand;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{targetClasses:[{classIri:"urn:example:class",category:{schemeIri:"urn:example:scheme",conceptIri:"urn:example:concept"}},{classIri:"urn:example:other"}],propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
     source.newColumns=[{column:'note',decision:'EXCLUDE'},{column:'nome',decision:'MAP',mapping:{propertyIri:'urn:name',transform:'IDENTITY',reconciliation:{cardinality:'SINGLE'}}}];
     await page.route('**/trusted-human/onboarding/api/**',async route=>{
       if(route.request().method()==='POST' && route.request().url().endsWith('/resume')){
@@ -63,7 +63,10 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
       }
       else await route.fulfill({json:{card:source,csrfHeader:'X-CSRF-TOKEN',csrfToken:'test-csrf'}});
     });
-    await page.goto(`${base}/trusted-human/onboarding/?challenge=${id}`);await page.locator('article.card').waitFor();assert.equal(sourcePosts,0);
+    await page.goto(`${base}/trusted-human/onboarding/?challenge=${id}`);
+    for(const label of ['urn:example:class','Vocabolario: urn:example:scheme','Categoria: urn:example:concept','Categoria assente'])
+      await page.getByText(label,{exact:true}).waitFor({state:'visible'});
+    await page.locator('article.card').waitFor();assert.equal(sourcePosts,0);
     const decisions=page.getByRole('table').filter({has:page.getByRole('columnheader',{name:'Decisione',exact:true})});
     assert.equal(await decisions.getByRole('row',{name:/note EXCLUDE Conservata solo nel file/}).isVisible(),true);
     const mapped=decisions.getByRole('row',{name:/nome MAP urn:name/});
