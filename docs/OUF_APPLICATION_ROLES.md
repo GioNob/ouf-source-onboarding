@@ -17,7 +17,8 @@ Il tenant deriva sempre dall'identità autenticata. Email, nomi visuali e header
 arbitrari non sono selettori. Un cambio issuer è una migrazione governata: non
 riassociare automaticamente subject omonimi del nuovo IAM.
 
-Ogni ruolo elenca capability dichiarate nel bundle e i relativi vincoli ABAC.
+Ogni ruolo elenca capability e relativi vincoli ABAC. In proposta si possono
+includere anche i descrittori HUMAN registrati al rilascio e ancora da attivare.
 Ogni assegnazione ha inizio e fine validità espliciti. Entrambe le modalità
 possono coesistere; più assegnazioni applicabili concorrono ai permessi. Revocare
 una sola assegnazione non elimina altre assegnazioni o grant diretti validi.
@@ -47,14 +48,14 @@ L'authority protetta segue il bootstrap e il trasferimento separati.
 3. Chiamare `authorization.permissions.propose` con `operation: "REPLACE_ROLES"`,
    `reason` e `roleCatalogue`. Omettere `grantId` e `grant`.
 4. Aprire il collegamento THS. La card mostra catalogo precedente e proposto,
-   ruoli, capability, vincoli, destinatari e validità.
+   ruoli, capability, vincoli, destinatari e validità. Per ogni descrittore che
+   entra in ACTIVE mostra anche operazione, scope e attori ammessi.
 5. Un umano amministratore conferma nella sessione IAM, con CSRF, hash ed ETag.
    Catalogo, grant compilati, versione policy e audit sono pubblicati nella
    stessa transazione. Il chatbot non può confermare.
 
-Ogni nuova capability, inclusa `urban.identity.preflight`, va registrata e
-pubblicata nel bundle Authorization prima di ripetere la vista `CAPABILITIES`
-e aggiornare il ruolo `ouf-admin` con l'intero insieme. La capability SERVICE
+Per attivare un descrittore HUMAN registrato, indicarne l'ID nella proposta.
+Dopo la conferma compare anche nella vista `CAPABILITIES`. La capability SERVICE
 `ouf.udp.identity.attestation.read` va concessa all'identità workload
 `ouf-source-onboarding`, non al browser o al chatbot.
 
