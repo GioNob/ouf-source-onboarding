@@ -49,7 +49,12 @@ def verify(old, active, state):
         legacy_ids = {row['descriptor']['capabilityId'] for row in caps}
         grants = [row for row in grants if row['capabilityId'] in legacy_ids]
     elif state['catalogueHash'] != lifecycle.digest([caps, grants]):
-        raise ValueError('STATE_MANIFEST_MISMATCH')
+        # The ten-entry release recorded its manifest hash before adoption was added.
+        adopt = 'ouf.semantic.discovery.adopt'
+        caps = [row for row in caps if row['descriptor']['capabilityId'] != adopt]
+        grants = [row for row in grants if row['capabilityId'] != adopt]
+        if state['catalogueHash'] != lifecycle.digest([caps, grants]):
+            raise ValueError('STATE_MANIFEST_MISMATCH')
     expected_caps = {row['descriptor']['capabilityId']: row['descriptor'] for row in caps}
     expected_grants = {row['grantId']: row['capabilityId'] for row in grants}
     added_caps = expected_caps.keys() - before_caps.keys()

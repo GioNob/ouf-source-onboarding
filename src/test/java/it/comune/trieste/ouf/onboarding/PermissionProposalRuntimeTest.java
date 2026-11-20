@@ -46,6 +46,7 @@ class PermissionProposalRuntimeTest {
  static final String DISCOVERY="ouf.semantic.discovery";
  static final List<CapabilityDescriptor> DISCOVERY_DESCRIPTORS=List.of(
      new CapabilityDescriptor(DISCOVERY,"COMMAND",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)),
+     new CapabilityDescriptor(DISCOVERY+".adopt","COMMAND",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)),
      new CapabilityDescriptor(DISCOVERY+".candidates","READ",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)),
      new CapabilityDescriptor(DISCOVERY+".status","READ",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)));
  @MockitoBean JwtDecoder decoder;@MockitoBean OAuth2AuthorizedClientService clients;@MockitoBean AuthorizationRuntimeSynchronizer runtime;
@@ -211,7 +212,7 @@ class PermissionProposalRuntimeTest {
       select capability_id from ouf_authorization.capability_registration
       where registered_by='release:catalogue/r4a-semantic-human-capabilities.json'
         and owner_ref='semantic' and registered_at is not null order by capability_id
-      """).query(String.class).list()).containsExactly(DISCOVERY,DISCOVERY+".candidates",DISCOVERY+".status");
+      """).query(String.class).list()).containsExactly(DISCOVERY,DISCOVERY+".adopt",DISCOVERY+".candidates",DISCOVERY+".status");
   var readOnly=new TransactionTemplate(transactions);
   readOnly.setReadOnly(true);
   readOnly.executeWithoutResult(tx->release.run(null));
@@ -251,7 +252,7 @@ class PermissionProposalRuntimeTest {
   var expectedGrants=new ArrayList<>(base.grants());
   expectedGrants.removeIf(g->g.grantId().startsWith(OufRoleCatalogue.PREFIX));
   expectedGrants.addAll(OufRoleCatalogue.compile(change.roleCatalogue(),proposer.tenantId(),ISSUER,expectedCapabilities));
-  assertThat(expectedGrants).hasSize(base.grants().size()+3);
+  assertThat(expectedGrants).hasSize(base.grants().size()+DISCOVERY_DESCRIPTORS.size());
   assertThat(proposed.grants()).containsAll(base.grants());
   assertThat(proposed.capabilities()).containsExactlyElementsOf(expectedCapabilities);
   assertThat(proposed.grants()).containsExactlyElementsOf(expectedGrants);

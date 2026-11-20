@@ -108,5 +108,16 @@
         "HUMAN"
       ]
     }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.discovery.adopt",
+      "operation": "COMMAND",
+      "requiredScope": "ouf.semantic.discovery",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
   }
 ]
