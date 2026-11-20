@@ -130,7 +130,7 @@ class ManagedFileMcpApiTest {
     var fields=new java.util.ArrayList<Map<String,Object>>();
     for(int i=0;i<1024;i++)fields.add(Map.of("fieldName","campo_"+i,"extractionDecision","INCLUDE","dataAccessLabel","OPEN","targetPropertyIri","https://example.org/campo_"+i));
     var args=new java.util.LinkedHashMap<String,Object>(Map.of("assetId",UUID.randomUUID(),"profileId",UUID.randomUUID(),"sourceId","sue-test","name","Synthetic SUE","owner","Synthetic","targetClassIri","https://example.org/Entity","semanticRefs",java.util.List.of("synthetic@1"),"sourceObjectKeyFields",java.util.List.of(),"fields",fields));
-    var category=Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept");
+    Map<String,Object> category=Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept");
     args.put("category",category);
     api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request);
     verify(files).onboardIdempotent(any(),any(),eq("sue-test"),any(),any(),any(),any(),any(),argThat(x->x.size()==1024),isNull(),any(),eq("wide"),eq("wide-command"),eq("tenant-a"),eq(category));
