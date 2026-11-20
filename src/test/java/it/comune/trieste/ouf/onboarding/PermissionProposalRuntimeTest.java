@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.authorization.*;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 import it.comune.trieste.ouf.onboarding.authorization.*;
+import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
 import java.time.Instant;
 import java.util.*;
 import java.nio.file.*;
@@ -30,6 +31,7 @@ import org.springframework.security.oauth2.client.*;
 import org.springframework.security.oauth2.client.registration.*;
 import org.springframework.security.oauth2.core.*;
 import org.springframework.transaction.*;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest(properties={"ouf.authorization.ths.public-origin=https://ouf.test","ouf.authorization.bootstrap.admin-issuer=https://fixture/realms/ouf","ouf.authorization.bootstrap.superadmin-role=ente:bootstrap","ouf.authorization.bootstrap.admin-tenant=tenant-a","ouf.iam.enabled=true","ouf.iam.issuer=https://fixture/realms/ouf","ouf.iam.audience=gateway","ouf.authorization.ths.enabled=true","spring.security.oauth2.client.registration.ouf-ths.provider=fixture","spring.security.oauth2.client.registration.ouf-ths.client-id=ouf-ths","spring.security.oauth2.client.registration.ouf-ths.client-secret=test-only","spring.security.oauth2.client.registration.ouf-ths.authorization-grant-type=authorization_code","spring.security.oauth2.client.registration.ouf-ths.redirect-uri={baseUrl}/login/oauth2/code/{registrationId}","spring.security.oauth2.client.registration.ouf-ths.scope=openid,authorization.policy.admin","spring.security.oauth2.client.provider.fixture.authorization-uri=https://fixture/authorize","spring.security.oauth2.client.provider.fixture.token-uri=https://fixture/token","spring.security.oauth2.client.provider.fixture.jwk-set-uri=https://fixture/jwks","spring.security.oauth2.client.provider.fixture.user-info-uri=https://fixture/userinfo","spring.security.oauth2.client.provider.fixture.user-name-attribute=sub"})
@@ -40,6 +42,13 @@ class PermissionProposalRuntimeTest {
  static {try{KEYFILE=Files.createTempFile("ouf-owner-test-",".key");Files.writeString(KEYFILE,KEY);KEYFILE.toFile().deleteOnExit();}catch(Exception e){throw new ExceptionInInitializerError(e);}}
  @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));r.add("ouf.authorization.delegation.key-file",()->KEYFILE.toString());}
  @Autowired JdbcClient db;@Autowired ObjectMapper json;@Autowired MockMvc http;@Autowired PermissionProposalService proposals;@Autowired AuthorizationAdminService admin;@Autowired AuthorizationPolicyRegistry registry;@Autowired ClientRegistrationRepository registrations;@Autowired PlatformTransactionManager transactions;
+ @Autowired ReleaseCapabilityRegistration release;
+ static final String DISCOVERY="ouf.semantic.discovery";
+ static final List<CapabilityDescriptor> DISCOVERY_DESCRIPTORS=List.of(
+     new CapabilityDescriptor(DISCOVERY,"COMMAND",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)),
+     new CapabilityDescriptor(DISCOVERY+".adopt","COMMAND",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)),
+     new CapabilityDescriptor(DISCOVERY+".candidates","READ",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)),
+     new CapabilityDescriptor(DISCOVERY+".status","READ",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)));
  @MockitoBean JwtDecoder decoder;@MockitoBean OAuth2AuthorizedClientService clients;@MockitoBean AuthorizationRuntimeSynchronizer runtime;
  PrincipalContext root,proposer;Instant now;List<CapabilityDescriptor> descriptors;ClientRegistration registration;
  AuthorizationAdminService.Actor actor(PrincipalContext p){return new AuthorizationAdminService.Actor(p.subjectId(),p.tenantId(),"HUMAN","fixture:admin",UUID.randomUUID().toString(),p);}
@@ -178,6 +187,101 @@ class PermissionProposalRuntimeTest {
   var role=new OufRoleCatalogue.Role("operator","Operatore",List.of(new OufRoleCatalogue.Permission("ouf.system.status",null)));
   return new OufRoleCatalogue.Snapshot(ISSUER,List.of(role),assigned?List.of(new OufRoleCatalogue.Assignment("giovanni","operator","giovanni",null,now.minusSeconds(5),now.plusSeconds(3600)),new OufRoleCatalogue.Assignment("it-staff","operator",null,"ente:it",now.minusSeconds(5),now.plusSeconds(3600))):List.of());
  }
+ PermissionProposalService.Change adminRole(List<String> ids){
+  var permissions=ids.stream().map(id->new OufRoleCatalogue.Permission(id,null)).toList();
+  var role=new OufRoleCatalogue.Role("admin","Amministratore",permissions);
+  var assignment=new OufRoleCatalogue.Assignment("admin-person","admin","giovanni",null,now.minusSeconds(5),now.plusSeconds(3600));
+  return new PermissionProposalService.Change("REPLACE_ROLES",null,null,"Aggiornare i permessi discovery",
+      new OufRoleCatalogue.Snapshot(ISSUER,List.of(role),List.of(assignment)));
+ }
+ PermissionProposalService.Change discoveryRole(){
+  return adminRole(DISCOVERY_DESCRIPTORS.stream().map(CapabilityDescriptor::capabilityId).toList());
+ }
+ @Test void releaseRegistersOnlyNewDescriptorsAndSecondStartupIsReadOnly()throws Exception{
+  for(String manifest:List.of("chatbot-source-review-capabilities.json","r4a-semantic-human-capabilities.json")){
+   try(var input=new org.springframework.core.io.ClassPathResource("catalogue/"+manifest).getInputStream()){
+    for(var entry:json.readTree(input)){
+     var descriptor=json.treeToValue(entry.get("descriptor"),CapabilityDescriptor.class);
+     if(!DISCOVERY_DESCRIPTORS.contains(descriptor))admin.register(entry.get("ownerRef").asText(),descriptor,actor(root));
+    }
+   }
+  }
+  var active=registry.load("permissions",1);
+  release.run(null);
+  assertThat(db.sql("""
+      select capability_id from ouf_authorization.capability_registration
+      where registered_by='release:catalogue/r4a-semantic-human-capabilities.json'
+        and owner_ref='semantic' and registered_at is not null order by capability_id
+      """).query(String.class).list()).containsExactly(DISCOVERY,DISCOVERY+".adopt",DISCOVERY+".candidates",DISCOVERY+".status");
+  var readOnly=new TransactionTemplate(transactions);
+  readOnly.setReadOnly(true);
+  readOnly.executeWithoutResult(tx->release.run(null));
+  assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
+  assertThat(registry.load("permissions",1)).isEqualTo(active);
+ }
+ @Test @Transactional void releaseCollisionPreservesExistingDescriptorAndRollsBackWholeRegistration(){
+  var other=new CapabilityDescriptor(DISCOVERY,"READ",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN));
+  admin.register("semantic",other,actor(root));
+  // Roll back the release independently of the pre-existing registration in this test transaction.
+  var attempt=new TransactionTemplate(transactions);
+  attempt.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
+  assertThatThrownBy(()->attempt.executeWithoutResult(tx->release.run(null))).hasMessage("AUTH_RELEASE_CAPABILITY_COLLISION "+DISCOVERY);
+  assertThat(db.sql("select descriptor->>'operation' from ouf_authorization.capability_registration where capability_id=:id")
+      .param("id",DISCOVERY).query(String.class).single()).isEqualTo("READ");
+  assertThat(db.sql("select count(*) from ouf_authorization.capability_registration where registered_by like 'release:%'")
+      .query(Long.class).single()).isZero();
+ }
+ @Test void releaseDescriptorsAndCompiledGrantsEnterActiveInOneThsPublication()throws Exception{
+  var original=proposals.propose(proposer,adminRole(List.of("ouf.system.status")),"existing-admin");
+  var originalCard=proposals.card(root,original.proposalId());
+  proposals.decide(root,original.proposalId(),original.revision(),new PermissionProposalService.Confirmation(originalCard.proposedHash()),true);
+  release.run(null);
+  var base=registry.load("permissions",2);
+  var ids=new ArrayList<>(List.of("ouf.system.status"));
+  DISCOVERY_DESCRIPTORS.forEach(c->ids.add(c.capabilityId()));
+  var change=adminRole(ids);
+  byte[] body=json.writeValueAsBytes(Map.of("Arguments",change));
+  var response=http.perform(post(API+"propose")
+      .header("X-OUF-Authorization-Receipt",receipt("propose",PermissionProposalService.PROPOSE,body,now.plusSeconds(30).getEpochSecond()))
+      .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk()).andReturn();
+  UUID id=UUID.fromString(json.readTree(response.getResponse().getContentAsString()).get("proposalId").asText());
+  var proposed=json.readValue(db.sql("select proposed_policy::text from ouf_authorization.permission_proposal where proposal_id=:id")
+      .param("id",id).query(String.class).single(),PolicyBundle.class);
+  var expectedCapabilities=new ArrayList<>(base.capabilities());
+  expectedCapabilities.addAll(DISCOVERY_DESCRIPTORS);
+  var expectedGrants=new ArrayList<>(base.grants());
+  expectedGrants.removeIf(g->g.grantId().startsWith(OufRoleCatalogue.PREFIX));
+  expectedGrants.addAll(OufRoleCatalogue.compile(change.roleCatalogue(),proposer.tenantId(),ISSUER,expectedCapabilities));
+  assertThat(expectedGrants).hasSize(base.grants().size()+DISCOVERY_DESCRIPTORS.size());
+  assertThat(proposed.grants()).containsAll(base.grants());
+  assertThat(proposed.capabilities()).containsExactlyElementsOf(expectedCapabilities);
+  assertThat(proposed.grants()).containsExactlyElementsOf(expectedGrants);
+  assertThat(registry.active().orElseThrow().version()).isEqualTo(base.version());
+  var card=proposals.card(root,id);
+  assertThat(card.addedCapabilities()).containsExactlyElementsOf(DISCOVERY_DESCRIPTORS);
+  var canonical=new CanonicalHash(json);
+  assertThat(card.proposedHash()).isEqualTo(canonical.of(Map.of("policy",proposed,"roleCatalogue",change.roleCatalogue())));
+  http.perform(post(THS+id+"/confirm").with(oauth2Login().clientRegistration(registration)).with(csrf())
+      .header("If-Match","\"0\"").contentType(MediaType.APPLICATION_JSON)
+      .content(json.writeValueAsString(new PermissionProposalService.Confirmation(card.proposedHash()))))
+      .andExpect(status().isOk()).andExpect(jsonPath("$.finalPolicyRef").value("permissions:3"));
+  assertThat(registry.active().orElseThrow().version()).isEqualTo(3);
+  var published=registry.load("permissions",3);
+  assertThat(published.capabilities()).isEqualTo(proposed.capabilities());
+  assertThat(published.grants()).isEqualTo(proposed.grants());
+  assertThat(proposals.roleCatalogue(proposer)).isEqualTo(change.roleCatalogue());
+  assertThat(db.sql("select count(*) from ouf_authorization.policy_bundle").query(Long.class).single()).isEqualTo(3);
+ }
+ @Test void unknownProtectedAndServiceOnlyPermissionsCannotBeProposed(){
+  assertThatThrownBy(()->proposals.propose(proposer,adminRole(List.of("unknown")),"unknown"))
+      .hasMessage("AUTH_ROLE_CAPABILITY_INVALID");
+  for(String id:List.of("authorization.bootstrap","authorization.superadmin.transfer")){
+   admin.register("authorization",new CapabilityDescriptor(id,"COMMAND",id,Set.of(PrincipalContext.ActorType.HUMAN)),actor(root));
+   assertThatThrownBy(()->proposals.propose(proposer,adminRole(List.of(id)),id)).hasMessage("AUTH_ROLE_PROTECTED_AUTHORITY");
+  }
+  admin.register("owner",new CapabilityDescriptor("workload","READ","workload",Set.of(PrincipalContext.ActorType.SERVICE)),actor(root));
+  assertThatThrownBy(()->proposals.propose(proposer,adminRole(List.of("workload")),"workload")).hasMessage("AUTH_ROLE_CAPABILITY_INVALID");
+ }
  @Test void roleCatalogueIsPublishedWithItsGrantsOnlyAfterThsConfirmation()throws Exception{
   var change=new PermissionProposalService.Change("REPLACE_ROLES",null,null,"Assegnare operatore a persona e ruolo IAM",catalogue(true));
   byte[] body=json.writeValueAsBytes(Map.of("Arguments",change));
@@ -196,12 +300,16 @@ class PermissionProposalRuntimeTest {
   assertThat(proposals.roleCatalogue(proposer).assignments()).isEmpty();assertThat(registry.load("permissions",3).grants()).noneMatch(g->g.grantId().startsWith(OufRoleCatalogue.PREFIX));
  }
  @Test void rolePublicationRollbackAndStaleProposalsCannotChangeCatalogue(){
-  var change=new PermissionProposalService.Change("REPLACE_ROLES",null,null,"Role assignment",catalogue(true));
+  release.run(null);
+  var change=discoveryRole();
   var proposal=proposals.propose(proposer,change,"roles-rollback");var card=proposals.card(root,proposal.proposalId());
   new TransactionTemplate(transactions).executeWithoutResult(tx->{proposals.decide(root,proposal.proposalId(),0,new PermissionProposalService.Confirmation(card.proposedHash()),true);tx.setRollbackOnly();});
   assertThat(proposals.roleCatalogue(proposer).assignments()).isEmpty();assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
   var other=proposals.propose(proposer,change(),"independent");var otherCard=proposals.card(root,other.proposalId());proposals.decide(root,other.proposalId(),0,new PermissionProposalService.Confirmation(otherCard.proposedHash()),true);
   assertThatThrownBy(()->proposals.decide(root,proposal.proposalId(),0,new PermissionProposalService.Confirmation(card.proposedHash()),true)).hasMessage("AUTH_ACTIVE_CHANGED_NEW_PROPOSAL_REQUIRED");
   assertThat(proposals.roleCatalogue(proposer).assignments()).isEmpty();
+  assertThat(registry.active().orElseThrow().version()).isEqualTo(2);
+  assertThat(registry.load("permissions",2).capabilities()).isEqualTo(descriptors);
+  assertThat(db.sql("select count(*) from ouf_authorization.policy_bundle").query(Long.class).single()).isEqualTo(2);
  }
 }

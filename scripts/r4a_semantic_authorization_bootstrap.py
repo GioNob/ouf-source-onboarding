@@ -126,8 +126,8 @@ def main():
     entries = json.loads(CAPABILITIES.read_text())
     grants = json.loads(GRANTS.read_text())
     capability_ids = {x['descriptor']['capabilityId'] for x in entries}
-    if (len(entries) != 10 or len(grants) != 10 or len(capability_ids) != 10
-            or len({x['grantId'] for x in grants}) != 10
+    if (len(entries) != 11 or len(grants) != 11 or len(capability_ids) != 11
+            or len({x['grantId'] for x in grants}) != 11
             or capability_ids != {x['capabilityId'] for x in grants}
             or any(x.get('ownerRef') != 'semantic' or x['descriptor']['allowedActors'] != ['HUMAN']
                    for x in entries)):

@@ -24,7 +24,7 @@ public class PermissionProposalService {
   public Change(String operation,String grantId,Grant grant,String reason){this(operation,grantId,grant,reason,null);}
  }
  public record Receipt(UUID proposalId,long revision,String state,Instant expiresAt,String approvalPath,String finalPolicyRef){}
- public record Card(UUID proposalId,long revision,String state,String tenant,String proposedBy,String reason,String baseActiveRef,String proposedHash,Instant expiresAt,Grant before,Grant after,String finalPolicyRef,OufRoleCatalogue.Snapshot beforeRoles,OufRoleCatalogue.Snapshot afterRoles){}
+ public record Card(UUID proposalId,long revision,String state,String tenant,String proposedBy,String reason,String baseActiveRef,String proposedHash,Instant expiresAt,Grant before,Grant after,String finalPolicyRef,OufRoleCatalogue.Snapshot beforeRoles,OufRoleCatalogue.Snapshot afterRoles,List<CapabilityDescriptor> addedCapabilities){}
  public record Confirmation(String expectedHash){}
  private record Proposal(UUID id,String tenant,String subject,String requestHash,String baseRef,String baseHash,String proposedHash,PolicyBundle policy,Change change,String state,long revision,Instant expires,String finalRef){}
  private DomainFailure fail(HttpStatus s,String c){return new DomainFailure(s,c,c);}
@@ -81,18 +81,33 @@ public class PermissionProposalService {
   if(change.operation().equals("REVOKE")&&previous.isEmpty())throw fail(HttpStatus.NOT_FOUND,"AUTH_GRANT_NOT_FOUND");
   if(!roleChange(change)&&previous.isPresent()&&previous.get().equals(change.grant()))throw fail(HttpStatus.CONFLICT,"AUTH_PROPOSAL_NO_CHANGE");
   var grants=new ArrayList<>(active.grants());
+  var capabilities=active.capabilities();
   if(roleChange(change)){
-   var compiled=roles.compile(change.roleCatalogue(),p,active.capabilities());
+   capabilities=roles.proposalCapabilities(change.roleCatalogue(),capabilities);
+   var compiled=roles.compile(change.roleCatalogue(),p,capabilities);
    if(roles.current(p.tenantId()).equals(change.roleCatalogue()))throw fail(HttpStatus.CONFLICT,"AUTH_PROPOSAL_NO_CHANGE");
    grants.removeIf(g->g.tenantId().equals(p.tenantId())&&g.grantId().startsWith(OufRoleCatalogue.PREFIX));grants.addAll(compiled);
   }else{grants.removeIf(g->g.grantId().equals(change.grantId()));if(change.grant()!=null)grants.add(change.grant());}
-  var time=now();var proposed=new PolicyBundle(active.bundleId(),Math.addExact(active.version(),1),time,active.capabilities(),grants);
+  var time=now();var proposed=new PolicyBundle(active.bundleId(),Math.addExact(active.version(),1),time,capabilities,grants);
   var id=UUID.randomUUID();db.sql("insert into ouf_authorization.permission_proposal(proposal_id,tenant_id,proposed_by,idempotency_key,request_hash,base_active_ref,base_hash,proposed_hash,proposed_policy,change_payload,before_role_catalogue,expires_at) values(:id,:tenant,:subject,:key,:request,:base,:basehash,:hash,cast(:policy as jsonb),cast(:change as jsonb),cast(:before as jsonb),:expires)")
    .param("id",id).param("tenant",p.tenantId()).param("subject",p.subjectId()).param("key",idempotency).param("request",requestHash).param("base",ref(active)).param("basehash",hash.of(active)).param("hash",proposalHash(proposed,change)).param("policy",encode(proposed)).param("change",encode(change)).param("before",roleChange(change)?encode(roles.current(p.tenantId())):null).param("expires",Timestamp.from(time.plusSeconds(900))).update();
   audit("PROPOSE_PERMISSION",id.toString(),p,ref(active));return receipt(load(id,p.tenantId()));
  }
  @Transactional public Receipt status(PrincipalContext p,UUID id){delegated(p,STATUS,"READ");var q=load(id,p.tenantId());if(!q.subject().equals(p.subjectId()))throw fail(HttpStatus.NOT_FOUND,"AUTH_PROPOSAL_NOT_FOUND");return receipt(q);}
- @Transactional public Card card(PrincipalContext p,UUID id){review.authorized(p);var q=load(id,p.tenantId());var active=registry.load(q.policy().bundleId(),Long.parseLong(q.baseRef().substring(q.baseRef().lastIndexOf(':')+1)));var before=active.grants().stream().filter(g->g.grantId().equals(q.change().grantId())).findFirst().orElse(null);audit("READ_PERMISSION_CARD",id.toString(),p,q.baseRef());return new Card(q.id(),q.revision(),state(q),q.tenant(),q.subject(),q.change().reason(),q.baseRef(),q.proposedHash(),q.expires(),before,q.change().grant(),q.finalRef(),roleChange(q.change())?decode(db.sql("select before_role_catalogue::text from ouf_authorization.permission_proposal where proposal_id=:id").param("id",id).query(String.class).single(),OufRoleCatalogue.Snapshot.class):null,q.change().roleCatalogue());}
+ @Transactional public Card card(PrincipalContext p,UUID id){
+  review.authorized(p);
+  var q=load(id,p.tenantId());
+  var base=registry.load(q.policy().bundleId(),Long.parseLong(q.baseRef().substring(q.baseRef().lastIndexOf(':')+1)));
+  var before=base.grants().stream().filter(g->g.grantId().equals(q.change().grantId())).findFirst().orElse(null);
+  var beforeRoles=roleChange(q.change())?decode(db.sql("select before_role_catalogue::text from ouf_authorization.permission_proposal where proposal_id=:id")
+      .param("id",id).query(String.class).single(),OufRoleCatalogue.Snapshot.class):null;
+  Set<String> baseIds=new HashSet<>();
+  for(var descriptor:base.capabilities())baseIds.add(descriptor.capabilityId());
+  var added=q.policy().capabilities().stream().filter(c->!baseIds.contains(c.capabilityId())).toList();
+  audit("READ_PERMISSION_CARD",id.toString(),p,q.baseRef());
+  return new Card(q.id(),q.revision(),state(q),q.tenant(),q.subject(),q.change().reason(),q.baseRef(),q.proposedHash(),
+      q.expires(),before,q.change().grant(),q.finalRef(),beforeRoles,q.change().roleCatalogue(),added);
+ }
  @Transactional public Receipt decide(PrincipalContext p,UUID id,long revision,Confirmation confirmation,boolean accept){
   var active=review.authorized(p);var q=load(id,p.tenantId());
   if(q.revision()!=revision)throw fail(HttpStatus.PRECONDITION_FAILED,"AUTH_STALE_ETAG");

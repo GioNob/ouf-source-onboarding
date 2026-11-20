@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -10,10 +11,23 @@ import r4a_semantic_human_scopes as human_scopes
 
 
 class SemanticBootstrapTest(unittest.TestCase):
+    def test_plan_accepts_eleven_matching_descriptors_and_grants(self):
+        self.assertEqual(len(verifier.EXPECTED_CAPS), 11)
+        self.assertEqual(len(verifier.EXPECTED_GRANTS), 11)
+        with patch.object(sys, 'argv', ['bootstrap', 'plan']), \
+                patch.object(bootstrap, 'actor_token', return_value='fixture'), \
+                patch.object(bootstrap.policy, 'active', return_value={'policyRef': 'fixture:1', 'policy': {}}), \
+                patch.object(bootstrap.policy, 'build_candidate', return_value=({}, [])), \
+                patch.object(bootstrap, 'desired_grants', return_value=[]) as desired, \
+                patch.object(bootstrap, 'catalogue', return_value=[]) as catalogue:
+            bootstrap.main()
+        catalogue.assert_called_once_with('fixture', verifier.EXPECTED_CAPS, False)
+        desired.assert_called_once_with({}, verifier.EXPECTED_GRANTS)
+
     def test_discovery_descriptors_and_grants_match_the_mcp_contract(self):
         discovery = 'ouf.semantic.discovery'
         operations = {discovery: 'COMMAND', discovery + '.status': 'READ',
-                      discovery + '.candidates': 'READ'}
+                      discovery + '.candidates': 'READ', discovery + '.adopt': 'COMMAND'}
         rows = [row for row in verifier.EXPECTED_CAPS
                 if row['descriptor']['capabilityId'].startswith(discovery)]
         self.assertCountEqual(rows, [
@@ -49,7 +63,7 @@ class SemanticBootstrapTest(unittest.TestCase):
                  'baselineGrantsHash': bootstrap.policy.digest(old['grants']),
                  'addedCapabilityIds': [x['descriptor']['capabilityId'] for x in verifier.EXPECTED_CAPS],
                  'addedGrantIds': [x['grantId'] for x in verifier.EXPECTED_GRANTS]}
-        self.assertEqual(verifier.verify(old, active, state), (1, 11, 1, 11))
+        self.assertEqual(verifier.verify(old, active, state), (1, 12, 1, 12))
 
         legacy = {**active,
                   'capabilities': [row for row in active['capabilities']
@@ -60,6 +74,15 @@ class SemanticBootstrapTest(unittest.TestCase):
         original_state.update(addedCapabilityIds=[row['capabilityId'] for row in legacy['capabilities'][1:]],
                               addedGrantIds=[row['grantId'] for row in legacy['grants'][1:]])
         self.assertEqual(verifier.verify(old, legacy, original_state), (1, 8, 1, 8))
+
+        ten_caps = verifier.EXPECTED_CAPS[:10]
+        ten_grants = verifier.EXPECTED_GRANTS[:10]
+        ten = {**active, 'capabilities': active['capabilities'][:11], 'grants': active['grants'][:11]}
+        # Recorded from the release manifest before adoption. Keep its fingerprint independent of this checkout.
+        ten_state = {**state, 'catalogueHash': '21d7e5f0a139003e83a8c30d1029554bd7978f8eb67075c652efee1521f4c043',
+                     'addedCapabilityIds': [row['descriptor']['capabilityId'] for row in ten_caps],
+                     'addedGrantIds': [row['grantId'] for row in ten_grants]}
+        self.assertEqual(verifier.verify(old, ten, ten_state), (1, 11, 1, 11))
 
         upgraded = {**active, 'version': 29}
         upgrade = {
@@ -73,7 +96,12 @@ class SemanticBootstrapTest(unittest.TestCase):
             'addedGrantIds': [row['grantId'] for row in active['grants']
                               if row['capabilityId'].startswith('ouf.semantic.discovery')],
         }
-        self.assertEqual(verifier.verify(legacy, upgraded, upgrade), (8, 11, 8, 11))
+        self.assertEqual(verifier.verify(legacy, upgraded, upgrade), (8, 12, 8, 12))
+        adoption_delta = {**upgrade, 'addedCapabilityIds': ['ouf.semantic.discovery.adopt'],
+                          'addedGrantIds': ['grant-semantic-discovery-adopt-human-admin'],
+                          'baselineCapabilitiesHash': bootstrap.policy.digest(ten['capabilities']),
+                          'baselineGrantsHash': bootstrap.policy.digest(ten['grants'])}
+        self.assertEqual(verifier.verify(ten, upgraded, adoption_delta), (11, 12, 11, 12))
         with self.assertRaisesRegex(ValueError, 'STATE_MANIFEST_MISMATCH'):
             verifier.verify(legacy, upgraded, {**upgrade, 'addedGrantIds': []})
         with self.assertRaisesRegex(ValueError, 'STATE_MANIFEST_MISMATCH'):

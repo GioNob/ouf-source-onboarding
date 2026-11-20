@@ -23,6 +23,46 @@ class ManagedFileExecutionProposalTest {
     assertThat(compiled).doesNotContainKeys("runtimeAuthorityIssued","compatibilityAttestation","approvedBy");
     assertThat((List<?>)compiled.get("semanticReferenceBindings")).hasSize(1);
   }
+  @Test @SuppressWarnings("unchecked") void categoryMustAgreeAcrossMappingAndGovernedPolicy(){
+    var config=config();var proposal=proposal();
+    var mapping=object(config,"semanticMapping");
+    var targets=(List<Map<String,Object>>)mapping.get("targetClasses");
+    var target=targets.getFirst();
+    var policy=object(object(proposal.udp(),"resolution"),"governedIdentity");
+    var category=Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept");
+    target.put("category",category);
+    var compiled=compile(config,proposal);
+    assertThat(object(compiled,"semanticMapping")).isEqualTo(mapping);
+    policy.put("category",category);
+    compiled=compile(config,proposal);
+    var validator=new ConfigurationValidator();
+    assertThat(validator.validate(SOURCE,compiled).findings()).extracting(ConfigurationValidator.Finding::code)
+        .contains("ONB_GOVERNED_IDENTITY_PROPOSAL").doesNotContain("ONB_MAPPING_CATEGORY_CONFLICT","ONB_MAPPING_CATEGORY_INVALID");
+    var absent=new LinkedHashMap<>(target);absent.remove("category");
+    targets.add(absent);
+    assertCategoryError(config,proposal,"ONB_MAPPING_CATEGORY_CONFLICT");
+    targets.removeLast();
+    target.remove("category");
+    assertCategoryError(config,proposal,"ONB_MAPPING_CATEGORY_CONFLICT");
+    target.put("category",Map.of("schemeIri","urn:example:other","conceptIri","urn:example:concept"));
+    assertCategoryError(config,proposal,"ONB_MAPPING_CATEGORY_CONFLICT");
+    for(Object invalid:Arrays.asList(null,Map.of(),Map.of("schemeIri","urn:example:scheme"),
+        Map.of("schemeIri","relative","conceptIri","urn:example:concept"),
+        Map.of("schemeIri","urn:example:scheme","conceptIri",""),
+        Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept","label","extra"))){
+      target.put("category",invalid);
+      assertCategoryError(config,proposal,"ONB_MAPPING_CATEGORY_INVALID");
+    }
+  }
+
+  private void assertCategoryError(Map<String,Object> config,ManagedFileExecutionProposal.Proposal proposal,String code){
+    assertThatThrownBy(()->compile(config,proposal)).isInstanceOfSatisfying(
+        it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,failure->assertThat(failure.code()).isEqualTo(code));
+    object(object(config,"extractionProfile"),"runtime").put("udp",proposal.udp());
+    assertThat(new ConfigurationValidator().validate(SOURCE,config).findings())
+        .extracting(ConfigurationValidator.Finding::code).contains(code);
+  }
+
   @Test void assetOrTenantDriftCannotBeCompiled(){
     for(String key:List.of("asset_id","source_id","staging_ref","content_hash")){
       var changed=asset();changed.put(key,"changed");
@@ -96,6 +136,37 @@ class ManagedFileExecutionProposalTest {
       ((List<Map<String,Object>>)object(c,"semanticMapping").get("propertyMappings")).get(1).put("transform",rule);
       assertThatThrownBy(()->compile(c,proposal())).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
     }
+  }
+
+  @Test void mappedRevisionExtendsGovernedComparisonOnThePinnedPublication(){
+    var compiled=compile(config(),proposal());
+    var previous=asset();previous.put("media_type","text/csv");
+    var next=new LinkedHashMap<>(previous);next.put("asset_id",UUID.randomUUID());
+    var schema=List.of(Map.of("name","nome_teatro","dataType","STRING"),Map.of("name","cap","dataType","STRING"));
+    var before=Map.<String,Object>of("profile_id",PROFILE,"format","CSV","metadata",Map.of("rows",1,"delimiter",";"),"inferred_schema",schema);
+    var extended=new ArrayList<>(schema);
+    extended.add(Map.of("name","fee","dataType","LONG"));
+    var after=new LinkedHashMap<>(before);
+    after.put("profile_id",UUID.randomUUID());after.put("inferred_schema",extended);after.put("candidate_keys",List.of("nome_teatro"));
+    var rule=Map.<String,Object>of("policyRef","urn:ouf:policy:linked-object-property-reconciliation:v1",
+        "cardinality","SINGLE","normalizerRef","EXACT_TYPED","normalizerVersion",1,"validity","UNBOUNDED");
+    var comparison=new ManagedCsvRevision.Comparison("DECIMAL_V1","urn:fixture:fee-assertion");
+    var m=new ManagedCsvRevision.Mapping("urn:fixture:fee","DECIMAL_DOT_V1",rule,null,null,comparison);
+    var decision=new ManagedCsvRevision.NewColumn("fee","MAP",m);
+    var missing=new ManagedCsvRevision.Mapping(m.propertyIri(),m.transform(),rule,null,null,null);
+    assertThatThrownBy(()->ManagedCsvRevision.replace(compiled,previous,before,next,after,2,
+        List.of(new ManagedCsvRevision.NewColumn("fee","MAP",missing))))
+        .isInstanceOfSatisfying(ManagedCsvRevision.Incompatible.class,e->assertThat(e.diagnostics())
+            .extracting(ManagedCsvRevision.Finding::code).containsExactly("INVALID_NEW_COLUMN_COMPARISON"));
+    ManagedCsvRevision.replace(compiled,previous,before,next,after,2,List.of(decision));
+    var runtime=object(object(compiled,"extractionProfile"),"runtime");
+    var resolution=object(object(runtime,"udp"),"resolution");
+    var policy=object(resolution,"governedIdentity");
+    GovernedIdentityProposal.validate(resolution,policy,SOURCE,Set.of(CLASS),Set.of(NAME,CAP,m.propertyIri()));
+    assertThat(((List<?>)policy.get("signals")).getLast()).isEqualTo(Map.of("id",m.propertyIri(),
+        "semanticRef",m.propertyIri()+"@"+PUBLICATION,"comparator",comparison.comparator(),"assertionRef",comparison.assertionRef(),
+        "uniqueWithinScope",false,"excludesOnDisagreement",false));
+    assertThat(policy.get("sufficientRules")).isEqualTo(object(object(proposal().udp(),"resolution"),"governedIdentity").get("sufficientRules"));
   }
 
   @Test void wideExecutionPreservesAllPropertiesAndRejectsThe1025th() {

@@ -15,6 +15,19 @@ public class OufRoleCatalogueStore {
  private OufRoleCatalogue.Snapshot decode(String raw){try{return json.readValue(raw,OufRoleCatalogue.Snapshot.class);}catch(Exception e){throw new IllegalStateException("AUTH_ROLE_STORED_INVALID",e);}}
  private String encode(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalArgumentException("AUTH_ROLE_INVALID",e);}}
  public OufRoleCatalogue.Snapshot current(String tenant){return db.sql("select payload::text from ouf_authorization.role_catalogue where tenant_id=:tenant").param("tenant",tenant).query(String.class).optional().map(this::decode).orElse(new OufRoleCatalogue.Snapshot(issuer,List.of(),List.of()));}
+ List<CapabilityDescriptor> proposalCapabilities(OufRoleCatalogue.Snapshot snapshot,List<CapabilityDescriptor> active){
+  var missing=OufRoleCatalogue.missingCapabilityIds(snapshot,active);
+  if(missing.isEmpty())return active;
+  var capabilities=new ArrayList<>(active);
+  for(String raw:db.sql("""
+      select descriptor::text from ouf_authorization.capability_registration
+      where capability_id in (:ids) order by capability_id
+      """).param("ids",missing).query(String.class).list()){
+   try{capabilities.add(json.readValue(raw,CapabilityDescriptor.class));}
+   catch(com.fasterxml.jackson.core.JsonProcessingException ex){throw new IllegalStateException("AUTH_ROLE_DESCRIPTOR_INVALID",ex);}
+  }
+  return capabilities;
+ }
  public List<Grant> compile(OufRoleCatalogue.Snapshot s,PrincipalContext p,List<CapabilityDescriptor> descriptors){
   if(!issuer.equals(p.issuer())||p.actorType()!=PrincipalContext.ActorType.HUMAN)throw new SecurityException("AUTH_ROLE_ISSUER_MISMATCH");
   return OufRoleCatalogue.compile(s,p.tenantId(),issuer,descriptors);

@@ -19,6 +19,7 @@ final class GovernedIdentityProposal {
         || blank(resolution.get("strategyVersion"))) throw invalid();
     Set<String> fields=new HashSet<>(POLICY);
     if(raw instanceof Map<?,?> candidate&&candidate.containsKey("distinctRules"))fields.add("distinctRules");
+    if(raw instanceof Map<?,?> candidate && candidate.containsKey("category"))fields.add("category");
     Map<?,?> policy=map(raw, fields);
     if (blank(policy.get("ref")) || blank(policy.get("version")) || blank(policy.get("tenantId"))
         || !Objects.equals(policy.get("ref"),resolution.get("policyRef"))
