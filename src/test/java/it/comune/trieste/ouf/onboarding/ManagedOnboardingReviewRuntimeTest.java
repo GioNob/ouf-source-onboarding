@@ -81,6 +81,53 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(registry.snapshots.get(retained)).containsExactly(originalBytes);
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans={true,false})
+  void humanRefusalCanStartOneLinkedDraftOnTheSameFile(boolean changes){
+    String type="https://example.org/onto/Place",property="urn:fixture:name";
+    var binding=new ManagedFileExecutionProposal.SemanticBinding(type,"1",UUID.randomUUID().toString(),
+        UUID.randomUUID().toString(),List.of(new ManagedFileExecutionProposal.ReviewTerm(type,"Luogo","Un luogo",null),
+        new ManagedFileExecutionProposal.ReviewTerm(property,"Nome",null,null)));
+    var fixture=governed(binding);var p=fixture.mapper();var prepared=fixture.review();
+    UUID version=fixture.command().onboardingVersionId(),challenge=(UUID)prepared.get("challengeId");
+    String source=fixture.command().sourceId(),hash=(String)prepared.get("configurationHash");
+    long expected=((Number)prepared.get("lockVersion")).longValue();
+    var snapshot=(Map<?,?>)reviews.humanCard(p,challenge).get("reviewSnapshot");
+    assertThat(snapshot.get("columnOrder")).isEqualTo(List.of("name","unused"));
+    var file=(Map<?,?>)snapshot.get("file");
+    assertThat(file.get("format")).isEqualTo("CSV");assertThat(file.get("columns")).isEqualTo(2);
+    assertThat(file.get("rows")).isEqualTo(1);assertThat(snapshot.get("owner")).isEqualTo("Mapper");
+    var fields=(Map<?,?>)snapshot.get("FIELD");var unused=(Map<?,?>)fields.get("unused");
+    assertThat(unused.get("included")).isEqualTo(false);assertThat(unused.get("access")).isEqualTo("OPEN");
+    assertThat(((Map<?,?>)((Map<?,?>)snapshot.get("SEMANTIC")).get(property)).get("labelIt")).isEqualTo("Nome");
+    var note=new ManagedOnboardingReviewService.Feedback("FIELD","unused","È personale");
+    var decision=new ManagedOnboardingReviewService.Decision(hash,expected,changes?List.of(note):null);
+    var invalid=new ManagedOnboardingReviewService.Decision(hash,expected,List.of(new ManagedOnboardingReviewService.Feedback("FIELD","unknown","")));
+    assertThatThrownBy(()->reviews.humanAction(p,challenge,"changes",invalid,"test-auth")).hasMessage("ONB_REVIEW_FEEDBACK_INVALID");
+    var result=reviews.humanAction(p,challenge,changes?"changes":"reject",decision,"test-auth");
+    assertThat(result).containsEntry("state",changes?"CHANGES_REQUESTED":"REJECTED").containsEntry("challengeStatus","CANCELLED");
+    var read=reviews.readLatest(p,source);
+    assertThat(read.get("reviewFeedback")).isEqualTo(changes?List.of(Map.of("section","FIELD","target","unused","comment","È personale")):List.of());
+    assertThatThrownBy(()->reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,expected),"test-auth"))
+        .hasMessage("ONB_REVIEW_STALE_CARD");
+    var next=(Map<?,?>)read.get("nextAction");assertThat(next.get("tool")).isEqualTo("source.onboarding.create");
+    UUID asset=UUID.fromString(next.get("assetId").toString()),profile=UUID.fromString(next.get("profileId").toString());
+    var decisions=List.of(new ManagedFileService.FieldDecision("name","INCLUDE","OPEN",property,"IDENTITY",null,null,null),
+        new ManagedFileService.FieldDecision("unused","EXCLUDE","PERSONAL",null,null,null,null,null));
+    java.util.function.Function<String,Map<String,Object>> create=key->files.onboardIdempotent(asset,profile,source,"Edicole","Mapper",
+        type,List.of(type+"@1"),List.of("name"),decisions,null,human,"redraft",key,p.tenantId());
+    var draft=create.apply("redraft:1");UUID child=(UUID)draft.get("onboardingVersionId");
+    assertThat(onboarding.version(source,child)).containsEntry("parent_version_id",version).containsEntry("version",2);
+    assertThat(create.apply("redraft:1")).isEqualTo(draft);
+    assertThatThrownBy(()->create.apply("redraft:duplicate")).isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class);
+    var second=reviews.prepare(p,new ManagedOnboardingReviewService.Prepare(source,child,0,"review:2",fixture.command().executionProposal()),"review");
+    var card=reviews.humanCard(p,(UUID)second.get("challengeId"));
+    var previous=(Map<?,?>)card.get("previousReview");
+    assertThat(previous.get("feedback")).isEqualTo(read.get("reviewFeedback"));
+    assertThat((List<?>)previous.get("changes")).anyMatch(raw->"unused".equals(((Map<?,?>)raw).get("target")));
+    assertThat(onboarding.bundleHistory(source)).isEmpty();
+  }
+
   @Test void finalUdp503PausesThenPublishesOnceOnSameReview(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)throws Exception{
     var adopted=new PublishedSnapshots().publish("https://example.org/onto/Place","1.0.0","Prima");
     var fixture=governed(adopted);

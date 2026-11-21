@@ -7,11 +7,11 @@ const handoffValid = handoff === null || /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]
 async function reportRejection(code) {
   if (!handoff || !handoffValid) return;
   try {
-    const session = await fetch('/trusted-human/managed-files/session', {credentials: 'same-origin', cache: 'no-store'});
+    const session = await ThsSession.fetch('/trusted-human/managed-files/session', {credentials: 'same-origin', cache: 'no-store'});
     if (!session.ok) return;
     const {csrfToken, csrfHeader} = await session.json();
     if (!csrfToken || !/^X-[A-Za-z-]+$/.test(csrfHeader)) return;
-    await fetch('/trusted-human/managed-files/rejection?handoff=' + encodeURIComponent(handoff), {
+    await ThsSession.fetch('/trusted-human/managed-files/rejection?handoff=' + encodeURIComponent(handoff), {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
       headers: {'Content-Type': 'application/json', [csrfHeader]: csrfToken}, body: JSON.stringify({code})
     });
@@ -43,16 +43,16 @@ form.addEventListener('submit', async event => {
   result.hidden = true;
   status.textContent = 'Caricamento in corso…';
   try {
-    const session = await fetch('/trusted-human/managed-files/session', { credentials: 'same-origin', cache: 'no-store' });
+    const session = await ThsSession.fetch('/trusted-human/managed-files/session', { credentials: 'same-origin', cache: 'no-store' });
     if (!session.ok) throw new Error('SESSION');
     const { csrfToken, csrfHeader } = await session.json();
     if (!csrfToken || !/^X-[A-Za-z-]+$/.test(csrfHeader)) throw new Error('SESSION');
     const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
     const hash = 'sha256:' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
     const uploadPath = '/trusted-human/managed-files/upload' + (handoff ? '?handoff=' + encodeURIComponent(handoff) : '');
-    const response = await fetch(uploadPath, {
+    const response = await ThsSession.fetch(uploadPath, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
-      headers: { 'Content-Type': 'text/csv', 'X-Content-SHA256': hash, [csrfHeader]: csrfToken }, body: file,
+      headers: { 'Content-Type': 'text/csv', 'X-OUF-File-Name': encodeURIComponent(file.name), 'X-Content-SHA256': hash, [csrfHeader]: csrfToken }, body: file,
     });
     if (!response.ok) throw new Error('HTTP_' + response.status);
     const uploaded = await response.json();

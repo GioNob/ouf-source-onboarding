@@ -28,6 +28,9 @@ import org.springframework.test.context.*;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.security.oauth2.jwt.*;
 import org.springframework.security.oauth2.client.*;
+import org.springframework.security.oauth2.client.endpoint.OAuth2AccessTokenResponseClient;
+import org.springframework.security.oauth2.client.endpoint.OAuth2RefreshTokenGrantRequest;
+import org.springframework.security.oauth2.core.endpoint.OAuth2AccessTokenResponse;
 import org.springframework.security.oauth2.client.registration.*;
 import org.springframework.security.oauth2.core.*;
 import org.springframework.transaction.*;
@@ -50,6 +53,8 @@ class PermissionProposalRuntimeTest {
      new CapabilityDescriptor(DISCOVERY+".candidates","READ",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)),
      new CapabilityDescriptor(DISCOVERY+".status","READ",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)));
  @MockitoBean JwtDecoder decoder;@MockitoBean OAuth2AuthorizedClientService clients;@MockitoBean AuthorizationRuntimeSynchronizer runtime;
+ @MockitoBean(name="thsRefreshClient") OAuth2AccessTokenResponseClient<OAuth2RefreshTokenGrantRequest> refreshClient;
+ @Autowired org.springframework.security.web.authentication.AuthenticationSuccessHandler thsLoginSuccess;
  PrincipalContext root,proposer;Instant now;List<CapabilityDescriptor> descriptors;ClientRegistration registration;
  AuthorizationAdminService.Actor actor(PrincipalContext p){return new AuthorizationAdminService.Actor(p.subjectId(),p.tenantId(),"HUMAN","fixture:admin",UUID.randomUUID().toString(),p);}
  PrincipalContext person(String subject,String tenant,Set<String> roles,Set<String> scopes){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,null,"1",ISSUER,"gateway",scopes,new PrincipalContext.IdentityClaims(roles,"1",Set.of(),Instant.now()));}
@@ -77,6 +82,58 @@ class PermissionProposalRuntimeTest {
  String receipt(String mode,String cap,byte[] body,long expiry)throws Exception{
   var map=new LinkedHashMap<String,Object>();map.put("v",1);map.put("purpose","authorization-proposal-owner");map.put("method","POST");map.put("path",API+mode);map.put("bodyHash",HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body)));map.put("capability",cap);map.put("iat",now.getEpochSecond());map.put("exp",expiry);map.put("issuer",ISSUER);map.put("audience","gateway");map.put("workload","ouf-mcp-server");map.put("subject","giovanni");map.put("tenant","tenant-a");map.put("acr","1");map.put("roles","");map.put("scope",String.join(" ",proposer.scopes()));map.put("idempotencyKey","tool-attempt");
   String payload=Base64.getUrlEncoder().withoutPadding().encodeToString(json.writeValueAsBytes(map));Mac mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(KEY.getBytes(StandardCharsets.US_ASCII),"HmacSHA256"));return payload+"."+Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(("ouf-authorization-owner-v1."+payload).getBytes(StandardCharsets.US_ASCII)));
+ }
+ private void expiredClient(){
+  var access=new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER,"fixture-expired",now.minusSeconds(300),now.minusSeconds(120));
+  var refresh=new OAuth2RefreshToken("fixture-refresh",now.minusSeconds(300));
+  when(clients.loadAuthorizedClient(eq("ouf-ths"),anyString())).thenReturn(new OAuth2AuthorizedClient(registration,"admin",access,refresh));
+ }
+ @Test void expiredAccessIsRenewedPersistedAndValidatedBeforeServingThePage()throws Exception{
+  expiredClient();
+  when(refreshClient.getTokenResponse(any())).thenReturn(OAuth2AccessTokenResponse.withToken("human-session-only")
+      .tokenType(OAuth2AccessToken.TokenType.BEARER).expiresIn(300).refreshToken("fixture-rotated").build());
+  http.perform(get("/trusted-human/authorization/").with(oauth2Login().clientRegistration(registration)).accept(MediaType.TEXT_HTML))
+      .andExpect(status().isOk()).andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_HTML))
+      .andExpect(result->assertThat(result.getResponse().getContentAsString()).doesNotContain("human-session-only","fixture-refresh","fixture-rotated"));
+  verify(decoder).decode("human-session-only");verify(decoder,never()).decode("fixture-expired");
+  verify(clients).saveAuthorizedClient(argThat(c->c.getAccessToken().getTokenValue().equals("human-session-only")
+      && c.getRefreshToken().getTokenValue().equals("fixture-rotated")),any());
+ }
+ @Test void failedRefreshSavesOnlyThePageIncludingItsChallengeForLogin()throws Exception{
+  expiredClient();
+  when(refreshClient.getTokenResponse(any())).thenThrow(new OAuth2AuthorizationException(new OAuth2Error("invalid_grant")));
+  String page="/trusted-human/semantic/?challenge="+UUID.randomUUID();
+  var request=http.perform(get(page).with(oauth2Login().clientRegistration(registration)).accept(MediaType.TEXT_HTML))
+      .andExpect(redirectedUrl("/oauth2/authorization/ouf-ths")).andReturn().getRequest();
+  var session=request.getSession(false);
+  http.perform(get("/trusted-human/semantic/review.js").session((org.springframework.mock.web.MockHttpSession)session))
+      .andExpect(status().isUnauthorized());
+  var afterLogin=new org.springframework.mock.web.MockHttpServletResponse();
+  thsLoginSuccess.onAuthenticationSuccess(request,afterLogin,null);
+  assertThat(afterLogin.getRedirectedUrl()).isEqualTo(page);
+  var nextLogin=new org.springframework.mock.web.MockHttpServletResponse();
+  thsLoginSuccess.onAuthenticationSuccess(request,nextLogin,null);
+  assertThat(nextLogin.getRedirectedUrl()).isEqualTo("/trusted-human/onboarding/");
+  verify(decoder,never()).decode("fixture-expired");
+ }
+ @Test void expiredSessionOnApiReadOrWriteIsJsonEvenWithStaleCsrf()throws Exception{
+  expiredClient();
+  when(refreshClient.getTokenResponse(any())).thenThrow(new OAuth2AuthorizationException(new OAuth2Error("invalid_grant")));
+  String api="/trusted-human/semantic/api/"+UUID.randomUUID();
+  http.perform(get(api).with(oauth2Login().clientRegistration(registration)).accept(MediaType.TEXT_HTML))
+      .andExpect(status().isUnauthorized()).andExpect(content().json("{\"code\":\"THS_SESSION_EXPIRED\"}"));
+  http.perform(post(api+"/decision").header("X-CSRF-TOKEN","stale").accept(MediaType.TEXT_HTML))
+      .andExpect(status().isUnauthorized()).andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+      .andExpect(content().json("{\"code\":\"THS_SESSION_EXPIRED\"}"));
+ }
+ @Test void authenticatedNonHumanSeesItalianDenialWithoutAnotherLogin()throws Exception{
+  when(decoder.decode("human-session-only")).thenReturn(Jwt.withTokenValue("human-session-only")
+      .header("alg","RS256").issuer(ISSUER).subject("fixture-service").audience(List.of("gateway"))
+      .claim("tenant_id","tenant-a").claim("ouf_actor_type","SERVICE").claim("client_id","fixture-service").claim("acr","1").build());
+  http.perform(get("/trusted-human/authorization/").with(oauth2Login().clientRegistration(registration)).accept(MediaType.TEXT_HTML))
+      .andExpect(status().isForbidden()).andExpect(header().doesNotExist("Location"))
+      .andExpect(result -> assertThat(result.getResponse().getContentAsString()).contains("Accesso negato","403")
+          .doesNotContain("human-session-only","fixture-service","Whitelabel"));
  }
  @Test void workflowHumanActionsRequireSessionCsrfBeforeReachingAnOwner()throws Exception{
   for(String flow:List.of("onboarding","semantic"))
@@ -133,7 +190,7 @@ class PermissionProposalRuntimeTest {
   http.perform(post(API+"read").header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
   http.perform(post(API+"propose").header("X-OUF-Authorization-Receipt",receipt("propose",PermissionProposalService.PROPOSE,body,now.minusSeconds(1).getEpochSecond())).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
   http.perform(post(API+"confirm").header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isNotFound());
-  http.perform(post(THS+UUID.randomUUID()+"/confirm").with(csrf()).header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().is3xxRedirection());
+  http.perform(post(THS+UUID.randomUUID()+"/confirm").with(csrf()).header("X-OUF-Authorization-Receipt",proof).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("THS_SESSION_EXPIRED"));
   assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
  }
  @Test void idempotencyHashAndActivePinProtectTheProposal(){

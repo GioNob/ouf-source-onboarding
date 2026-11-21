@@ -182,6 +182,36 @@ paths:
       responses:
         '200': {description: Governed expiring JSON export, content: {application/json: {schema: {type: string, contentMediaType: application/json}}}}
         default: {$ref: '#/components/responses/Problem'}
+  /api/trusted-human/v1/approval-challenges/{challengeId}/review/changes:
+    post:
+      operationId: requestManagedOnboardingChanges
+      summary: Chiude la richiesta HUMAN con un riscontro strutturato sulla versione mostrata
+      parameters: [{$ref: '#/components/parameters/ChallengeId'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [configurationHash, expectedVersion, reviewFeedback]
+              properties:
+                configurationHash: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+                expectedVersion: {type: integer, minimum: 0}
+                reviewFeedback:
+                  type: array
+                  description: Al massimo 48 KiB serializzati in UTF-8. Ogni voce deve appartenere allo snapshot.
+                  minItems: 1
+                  maxItems: 128
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [section, target]
+                    properties:
+                      section: {type: string, enum: [FIELD, IDENTITY, SEMANTIC, LIMITS]}
+                      target: {type: string}
+                      comment: {type: string, maxLength: 500}
+      responses: {'200': {$ref: '#/components/responses/JsonResponse'}, default: {$ref: '#/components/responses/Problem'}}
   /api/trusted-human/v1/approval-challenges/{challengeId}/review/budget:
     post:
       operationId: grantManagedReadinessBudget
