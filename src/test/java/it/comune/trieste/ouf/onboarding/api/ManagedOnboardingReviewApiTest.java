@@ -22,6 +22,24 @@ class ManagedOnboardingReviewApiTest {
     verifyNoInteractions(service);
   }
 
+  @Test void signedPrepareCarriesExplicitCandidateActionAndKeepsHistoricalFingerprints()throws Exception{
+    var json=new ObjectMapper();
+    record Original(String sourceId,UUID onboardingVersionId,long expectedVersion,String commandKey,
+        it.comune.trieste.ouf.onboarding.application.ManagedFileExecutionProposal.Proposal executionProposal){}
+    var version=UUID.randomUUID();
+    assertThat(json.writeValueAsBytes(new ManagedOnboardingReviewService.Prepare("s",version,1,"key",null)))
+        .isEqualTo(json.writeValueAsBytes(new Original("s",version,1,"key",null)));
+    var receipts=mock(PermissionDelegationVerifier.class);var service=mock(ManagedOnboardingReviewService.class);
+    var api=new ManagedOnboardingReviewApi(receipts,service,json);
+    var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/review-prepare");
+    var command=new ManagedOnboardingReviewService.Prepare("s",version,1,"key",null,"WITHDRAW");
+    byte[] body=json.writeValueAsBytes(Map.of("Arguments",command));
+    when(receipts.verifyManagedFile(null,request.getRequestURI(),ManagedOnboardingReviewService.PREPARE,body))
+        .thenReturn(new PermissionDelegationVerifier.Delegated(null,"key"));
+    api.prepare(body,request);
+    verify(service).prepare(isNull(),eq(command),anyString());
+  }
+
   @Test void latestViewIsExplicitReadOnlyAndCannotMixAnUntrustedVersion()throws Exception{
     var receipts=mock(PermissionDelegationVerifier.class);var service=mock(ManagedOnboardingReviewService.class);
     when(receipts.verifyManagedFile(any(),anyString(),anyString(),any())).thenReturn(new PermissionDelegationVerifier.Delegated(null,"test-key"));

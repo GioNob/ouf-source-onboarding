@@ -39,6 +39,9 @@ public class ManagedActivationCoordinator {
       reviews.activationPhase(claim,"ACTIVATING");
       return reviews.finishActivation(principal,claim,authentication);
     }catch(Failure error){reviews.activationFailure(claim,error.getMessage(),error.transientFailure,error.retryAfterSeconds);throw new DomainFailure(error.transientFailure?HttpStatus.SERVICE_UNAVAILABLE:HttpStatus.CONFLICT,error.getMessage(),"Activation is paused or blocked; reload the same review to reconcile retained progress");}
+    catch(UdpIdentityActivationVerifier.TransientFailure error){
+      reviews.activationFailure(claim,error.code(),true,error.retryAfterSeconds);throw error;
+    }
     catch(DomainFailure error){reviews.activationFailure(claim,error.code(),false);throw error;}
     catch(RuntimeException error){reviews.activationFailure(claim,"ONB_READINESS_OUTCOME_UNCONFIRMED",false);throw error;}
     finally{if(admitted)admission.release();}
@@ -50,7 +53,7 @@ public class ManagedActivationCoordinator {
       if(response.statusCode()<200||response.statusCode()>=300){
         boolean transientFailure=Set.of(408,429,502,503,504).contains(response.statusCode());
         String code="ONB_READINESS_DEPENDENCY_"+response.statusCode();
-        throw new Failure(code,transientFailure,retryAfter(response.headers().firstValue("Retry-After").orElse("")));
+        throw new Failure(code,transientFailure,transientFailure?retryAfter(response.headers().firstValue("Retry-After").orElse("")):0);
       }
       return json.readValue(response.body(),Map.class);
     }catch(InterruptedException error){Thread.currentThread().interrupt();throw new Failure("ONB_READINESS_INTERRUPTED",true);}
@@ -72,8 +75,16 @@ public class ManagedActivationCoordinator {
     public void onComplete(){if(!failed)delegate.onComplete();}
   }
   private static final class ResponseLimit extends IOException {}
-  private static int retryAfter(String value){
-    try {long seconds=value.matches("[0-9]{1,9}")?Long.parseLong(value):java.time.Duration.between(java.time.Instant.now(),java.time.ZonedDateTime.parse(value,java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()).toSeconds();return (int)Math.min(86400,Math.max(0,seconds));}catch(RuntimeException invalid){return 0;}
+  static int retryAfter(String value){
+    if(value.isBlank())return 0;
+    try{
+      if(value.matches("[0-9]+"))return Integer.parseInt(value);
+      var until=java.time.ZonedDateTime.parse(value,java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
+      var duration=Duration.between(java.time.Instant.now(),until);
+      return duration.isNegative()?0:Math.toIntExact(duration.getSeconds()+(duration.getNano()==0?0:1));
+    }catch(RuntimeException invalid){
+      throw new DomainFailure(HttpStatus.CONFLICT,"ONB_READINESS_RETRY_AFTER_INVALID","Dependency retry interval requires reconciliation");
+    }
   }
   private static final class Failure extends RuntimeException{final boolean transientFailure;final int retryAfterSeconds;Failure(String code,boolean transientFailure){this(code,transientFailure,0);}Failure(String code,boolean transientFailure,int retryAfterSeconds){super(code);this.transientFailure=transientFailure;this.retryAfterSeconds=retryAfterSeconds;}}
 }

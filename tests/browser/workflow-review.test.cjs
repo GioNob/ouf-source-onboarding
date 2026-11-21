@@ -72,14 +72,14 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     const mapped=decisions.getByRole('row',{name:/nome MAP urn:name/});
     await mapped.getByText('Trasformazione e regole').click();
     assert.match(await mapped.innerText(),/IDENTITY/);assert.match(await mapped.innerText(),/SINGLE/);
-    await page.locator('article input[type=checkbox]').check();await page.locator('#approve').click();
+    await page.locator('#approve').click();
     await page.getByRole('status').filter({hasText:'nessun invio viene ripetuto automaticamente'}).waitFor();assert.equal(sourcePosts,1);
     await page.locator('#refresh').click();await page.getByRole('status').filter({hasText:'Esamina le proposte'}).waitFor();assert.equal(sourcePosts,1);assert.deepEqual(errors,[]);
     // An approved source can now request real readiness before activation; no hidden approval or automatic POST.
     source.status='CONFIRMED';source.onboardingState='APPROVED';source.lockVersion=3;
     source.progress={ingestionCompatibilityObserved:false,activationProgress:{readiness_phase:'NOT_STARTED'}};
     await page.reload();await page.locator('article.card').waitFor();
-    await page.locator('article input[type=checkbox]').check();
+
     assert.equal(await page.locator('#complete').isEnabled(),true);
     assert.equal(await page.locator('#approve').isDisabled(),true);
     const priorSourcePosts=sourcePosts;
@@ -87,33 +87,33 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     await page.getByRole('status').filter({hasText:'1 decisioni registrate'}).waitFor();
     assert.equal(sourcePosts,priorSourcePosts+1);
     source.progress.activationProgress={readiness_phase:'PAUSED',readiness_next_at:'2999-01-01T00:00:00Z'};
-    await page.reload();await page.locator('article.card').waitFor();await page.locator('article input[type=checkbox]').check();
+    await page.reload();await page.locator('article.card').waitFor();
     assert.equal(await page.locator('#complete').isDisabled(),true);
     assert.equal(sourcePosts,priorSourcePosts+1);
     source.progress.activationProgress={readiness_phase:'BLOCKED',readiness_generation:1,readiness_attempts:1,readiness_started_at:new Date().toISOString(),readiness_last_code:'ONB_READINESS_DEPENDENCY_403'};
-    await page.reload();await page.locator('article.card').waitFor();await page.locator('article input[type=checkbox]').check();
+    await page.reload();await page.locator('article.card').waitFor();
     assert.equal(await page.locator('#complete').isDisabled(),true);assert.equal(await page.locator('#resume').isEnabled(),true);
     const beforeResume=sourcePosts;await page.locator('#resume').click();
     await page.getByRole('status').filter({hasText:'Ripresa registrata'}).waitFor();
     assert.equal(sourcePosts,beforeResume+1);assert.equal(source.onboardingState,'APPROVED');
-    assert.equal(await page.locator('#complete').isDisabled(),true);
-    await page.reload();await page.locator('article.card').waitFor();await page.locator('article input[type=checkbox]').check();
+    assert.equal(await page.locator('#complete').isEnabled(),true);
+    await page.reload();await page.locator('article.card').waitFor();
     assert.equal(await page.locator('#complete').isEnabled(),true);assert.equal(await page.locator('#resume').isDisabled(),true);
     assert.equal(sourcePosts,beforeResume+1);
-    source.progress.activationProgress={readiness_phase:'PAUSED',readiness_generation:4,cumulativeAttempts:3,budgetExhausted:true,humanBudgetGrantAvailable:true};
+    source.progress.activationProgress={readiness_phase:'ACTIVATING',readiness_generation:4,cumulativeAttempts:3,budgetExhausted:true,
+      humanBudgetGrantAvailable:true,reconciledBudgetReason:'ONB_READINESS_INTERRUPTED'};
     source.expires_at='2020-01-01T00:00:00Z'; // Already CONFIRMED approval is retained.
     await page.reload();await page.locator('article.card').waitFor();
-    await page.locator('article input[type=checkbox]').check();
+
     assert.equal(await page.locator('#complete').isDisabled(),true);
-    assert.equal(await page.locator('#budget').isDisabled(),true);
-    await page.locator('textarea').fill('Dependency recovered; exact resource verified');
+    assert.match(await page.locator('textarea').inputValue(),/interrotto/);
     assert.equal(await page.locator('#budget').isEnabled(),true);
     const beforeBudget=sourcePosts;
     await page.locator('#budget').click();
     await page.getByRole('status').filter({hasText:'nessun invio viene ripetuto automaticamente'}).waitFor();
     assert.equal(budgetPosts,1);assert.equal(sourcePosts,beforeBudget+1);
     await page.locator('#refresh').click();await page.getByRole('status').filter({hasText:'Esamina le proposte'}).waitFor();
-    await page.locator('article input[type=checkbox]').check();
+
     assert.equal(await page.locator('#budget').isDisabled(),true);
     assert.equal(await page.locator('#complete').isEnabled(),true);
     assert.equal(sourcePosts,beforeBudget+1); // No hidden activation after budget grant or refresh.

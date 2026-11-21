@@ -27,7 +27,7 @@ class SourceRevisionRuntimeTest {
   @Autowired ManagedOnboardingReviewService reviews; @Autowired CanonicalHash hashes; @Autowired JdbcClient db;
   @MockitoBean(answers=Answers.RETURNS_DEEP_STUBS) AuthorizationPolicyRegistry policy;
   private final OnboardingService.Actor human=new OnboardingService.Actor("test-human","HUMAN_USER");
-  private PrincipalContext principal(String tenant,String subject){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,"test-mcp","test-acr","https://issuer.example","test-audience",Set.of(SourceRevisionService.PREPARE,SourceRevisionService.READ,"ouf.onboarding.configuration.write"),new PrincipalContext.IdentityClaims(Set.of(),"test-acr",Set.of(),null));}
+private PrincipalContext principal(String tenant,String subject){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,"test-mcp","test-acr","https://issuer.example","test-audience",Set.of(ManagedOnboardingReviewService.PREPARE,ManagedOnboardingReviewService.READ,SourceRevisionService.PREPARE,SourceRevisionService.READ,"ouf.onboarding.configuration.write"),new PrincipalContext.IdentityClaims(Set.of(),"test-acr",Set.of(),null));}
   @BeforeEach void clean(){db.sql("truncate ouf_onboarding.source,ouf_onboarding.managed_file_asset restart identity cascade").update();when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(true);}
   @Test void apiSourceRetainsIdentityConfigurationAndNativeApprovalWithoutPublishing(){
     var parent=active();var p=principal("test-tenant","test-human");var command=command(parent,"revision-one",rule());
@@ -121,6 +121,77 @@ class SourceRevisionRuntimeTest {
     db.sql("update ouf_onboarding.onboarding_version set state='SUPERSEDED',lock_version=lock_version+1 where onboarding_version_id=:v").param("v",parent).update();
     assertThatThrownBy(()->onboarding.activate("s",next,human,"c")).hasMessage("ONB_REVISION_PARENT_DRIFT");
     assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
+  }
+
+  private Map<String,Object> publish(PrincipalContext p,Map<String,Object> prepared){
+    UUID challenge=(UUID)prepared.get("challengeId"),version=(UUID)prepared.get("onboardingVersionId");
+    String hash=(String)prepared.get("configurationHash");
+    var approved=reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,
+        ((Number)prepared.get("lockVersion")).longValue()),"test-auth");
+    onboarding.attestIngestionCompatibilityBound("s",version,hash,true,"Exact CSV fixture",
+        new OnboardingService.Actor("test-ingestion","SERVICE",Set.of("ouf.ingestion.configuration.attest")),"c");
+    var claim=reviews.claimActivation(p,challenge,new ManagedOnboardingReviewService.Decision(hash,
+        ((Number)approved.get("lockVersion")).longValue()));
+    return reviews.finishActivation(p,claim,"test-auth");
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"id,amount\nr1,10\n","id,amount\nr2,25\n"})
+  void twoCsvPublicationsReachOwnerReadBackWithoutStateRepairs(String csv){
+    var p=principal("test-tenant",human.subject());UUID parent=draftCsv(p);
+    var first=publish(p,reviews.prepare(p,new ManagedOnboardingReviewService.Prepare("s",parent,1,"initial-review",null),"c"));
+    assertThat(reviews.readLatest(p,"s")).containsEntry("publication",first.get("publication")).containsEntry("state","ACTIVE");
+    var asset=csv(csv,p.tenantId(),null,true);
+    var next=revisions.prepare(p,replace(parent,asset),"second-csv");
+    assertThat(next.get("challengeId")).isNotEqualTo(first.get("challengeId"));
+    assertThat(next.get("onboardingVersionId")).isNotEqualTo(parent);
+    var second=publish(p,next);
+    var firstId=((Map<?,?>)first.get("publication")).get("publication_id");
+    assertThat(((Map<?,?>)second.get("publication")).get("publication_id")).isNotEqualTo(firstId);
+    assertThat(reviews.readLatest(p,"s")).containsEntry("publication",second.get("publication")).containsEntry("state","ACTIVE");
+    assertThat(onboarding.bundleHistory("s")).hasSize(2);
+  }
+
+  @Test void withdrawingAbandonedDraftAndApprovedRevisionFreesActiveParentAndFencesWorker(){
+    var p=principal("test-tenant",human.subject());var parent=activeCsv(p);
+    UUID abandoned=(UUID)onboarding.cloneVersion("s",parent,human,"abandoned").get("onboarding_version_id");
+    var ref=csv("id,amount\nr2,20\n",p.tenantId(),null,true);
+    var first=replace(parent,ref);
+    assertThatThrownBy(()->revisions.prepare(p,first,"blocked")).hasMessage("ONB_REVISION_OPEN_VERSION_EXISTS");
+    reviews.prepare(p,new ManagedOnboardingReviewService.Prepare("s",abandoned,0,"withdraw-draft",null,"WITHDRAW"),"c");
+    var prepared=revisions.prepare(p,first,"prepare");
+    UUID version=(UUID)prepared.get("onboardingVersionId"),challenge=(UUID)prepared.get("challengeId");
+    String hash=(String)prepared.get("configurationHash");
+    reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,2),"test-auth");
+    var worker=reviews.claimActivation(p,challenge,new ManagedOnboardingReviewService.Decision(hash,3));
+    var stale=new ManagedOnboardingReviewService.Prepare("s",version,2,"withdraw-stale",null,"WITHDRAW");
+    assertThatThrownBy(()->reviews.prepare(p,stale,"c")).hasMessage("ONB_REVIEW_STALE_VERSION");
+    var withdraw=new ManagedOnboardingReviewService.Prepare("s",version,3,"withdraw",null,"WITHDRAW");
+    var retired=reviews.prepare(p,withdraw,"withdraw");
+    assertThat(retired).containsEntry("state","REJECTED").containsEntry("candidateDisposition","WITHDRAWN").containsEntry("challengeStatus","CONFIRMED");
+    assertThat(reviews.prepare(p,withdraw,"lost-response")).isEqualTo(retired);
+    assertThatThrownBy(()->reviews.finishActivation(p,worker,"test-auth")).hasMessage("ONB_READINESS_LEASE_LOST");
+    assertThat(onboarding.version("s",parent)).containsEntry("state","ACTIVE");
+    var identical=new SourceRevisionService.Prepare("s",parent,first.expectedVersion(),first.configurationHash(),
+        "repeat-with-new-key",SourceRevisionService.EFFECT,null,ref);
+    assertThatThrownBy(()->revisions.prepare(p,identical,"duplicate")).hasMessageContaining("changed candidate");
+    var replacement=csv("id,amount\nr3,30\n",p.tenantId(),null,true);
+    var next=new SourceRevisionService.Prepare("s",parent,first.expectedVersion(),first.configurationHash(),
+        "revision-after-withdraw",SourceRevisionService.EFFECT,null,replacement);
+    assertThat(publish(p,revisions.prepare(p,next,"next"))).containsEntry("state","ACTIVE");
+    assertThat(files.asset(ref.assetId())).containsEntry("source_id","s");
+  }
+
+  @Test void newFileAfterInitialRejectionPublishesWithFreshApproval(){
+    var p=principal("test-tenant",human.subject());var parent=draftCsv(p);
+    var first=reviews.prepare(p,new ManagedOnboardingReviewService.Prepare("s",parent,1,"first",null),"c");
+    reviews.humanAction(p,(UUID)first.get("challengeId"),"reject",
+        new ManagedOnboardingReviewService.Decision((String)first.get("configurationHash"),2),"test-auth");
+    var asset=csv("id,amount\nr2,20\n",p.tenantId(),null,true);
+    var next=revisions.prepare(p,replace(parent,asset),"replacement");
+    assertThat(publish(p,next)).containsEntry("state","ACTIVE");
+    assertThat(onboarding.version("s",parent)).containsEntry("state","REJECTED");
+    assertThat(onboarding.bundleHistory("s")).hasSize(1);
   }
 
   @Test void csvReplacementPublishesOnlyAfterConfirmationAndAttestation(){
@@ -275,6 +346,12 @@ class SourceRevisionRuntimeTest {
     return (Map<String,Object>)map.get(key);
   }
   private UUID activeCsv(PrincipalContext p){
+    UUID version=draftCsv(p);
+    db.sql("update ouf_onboarding.onboarding_version set state='ACTIVE',configuration_hash=:h,frozen_at=transaction_timestamp() where onboarding_version_id=:v")
+        .param("h",hashes.of(configuration(version))).param("v",version).update();
+    return version;
+  }
+  private UUID draftCsv(PrincipalContext p){
     var ref=csv("id,amount\nr1,10\n",p.tenantId(),null,true);
     var fields=List.of("id","amount").stream().map(n->new ManagedFileService.FieldDecision(n,"INCLUDE","RESTRICTED","urn:"+n,"IDENTITY",null,null,null)).toList();
     var draft=files.onboard(ref.assetId(),ref.profileId(),"s","Fixture","owner","urn:Object",List.of("core@1"),
@@ -294,8 +371,6 @@ class SourceRevisionRuntimeTest {
             "accessLabel",f.dataAccessLabel(),"authorityOrder",List.of("s"))).toList())));
     config.put("semanticReferenceBindings",List.of(Map.of("semanticId","core","semanticVersion","1","revisionId","fixture","publicationSetId","fixture-set")));
     onboarding.patchVersion("s",version,0,config,human,"fixture");
-    db.sql("update ouf_onboarding.onboarding_version set state='ACTIVE',configuration_hash=:h,frozen_at=transaction_timestamp() where onboarding_version_id=:v")
-        .param("h",hashes.of(configuration(version))).param("v",version).update();
     return version;
   }
   private SourceRevisionService.Prepare replace(UUID parent,SourceRevisionService.AssetRef ref){

@@ -69,7 +69,8 @@ public class WorkflowThsApi {
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
       if("resume".equals(action)&&(!proposed.has("expectedGeneration")||!proposed.get("expectedGeneration").isIntegralNumber()
           ||!proposed.get("expectedGeneration").canConvertToLong()||proposed.get("expectedGeneration").asLong()<1
-          ||!proposed.path("blockedCode").isTextual()||!"ONB_READINESS_DEPENDENCY_403".equals(proposed.get("blockedCode").asText())))
+          ||!proposed.path("blockedCode").isTextual()
+          ||!it.comune.trieste.ouf.onboarding.application.ManagedOnboardingReviewService.humanRecheckCode(proposed.get("blockedCode").asText())))
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
       if(budget&&(!proposed.path("expectedGeneration").isIntegralNumber()||!proposed.path("expectedGeneration").canConvertToLong()
           ||proposed.path("expectedGeneration").asLong()<0||!proposed.path("commandKey").isTextual()

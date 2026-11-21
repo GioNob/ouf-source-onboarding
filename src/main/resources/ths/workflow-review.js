@@ -11,14 +11,14 @@
   const status = (text, error = false) => { $('status').textContent = text; $('status').classList.toggle('error', error); };
   function element(tag, value, parent) { const e = document.createElement(tag); e.textContent = String(value ?? '—'); parent.append(e); return e; }
   function detail(label, value, parent) { const e = document.createElement('details'); element('summary', label, e); element('pre', JSON.stringify(value, null, 2), e); parent.append(e); }
-  const selected = () => [...cards.values()].filter(item => item.checkbox.checked);
+  const selected = () => [...cards.values()].filter(item => !semantic || item.checkbox.checked);
   const expired = card => Date.parse(card.expires_at) <= Date.now();
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
   const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : item.card.onboardingState === 'APPROVED' && !item.card.progress?.activationProgress?.budgetExhausted && item.card.progress?.activationProgress?.counterLineageVerified !== false && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
   const canBudget = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED' && item.card.progress?.activationProgress?.humanBudgetGrantAvailable === true && (item.reason?.value.trim().length || 0) >= 10;
   const canResume = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED'
     && item.card.progress?.activationProgress?.readiness_phase === 'BLOCKED'
-    && item.card.progress.activationProgress.readiness_last_code === 'ONB_READINESS_DEPENDENCY_403'
+    && ['ONB_READINESS_DEPENDENCY_403','ONB_UDP_IDENTITY_PREFLIGHT_REQUIRED'].includes(item.card.progress.activationProgress.readiness_last_code)
     && (typeof item.card.progress.activationProgress.budgetExhausted === 'boolean'
       ? !item.card.progress.activationProgress.budgetExhausted && item.card.progress.activationProgress.counterLineageVerified !== false
       : item.card.progress.activationProgress.readiness_attempts < 128 && Date.parse(item.card.progress.activationProgress.readiness_started_at) + 86400000 > Date.now() + 50000)
@@ -94,14 +94,25 @@
         if(card.progress.activationProgress.humanBudgetGrantAvailable === true) {
           element('p', `Puoi concedere fino a 3 nuovi tentativi entro 15 minuti. I ${card.progress.activationProgress.cumulativeAttempts} tentativi già registrati e lo storico restano conservati. Poi potrai scegliere separatamente “Verifica e attiva”, che può pubblicare la configurazione e avviare un’acquisizione.`, article);
           const label = document.createElement('label'); element('span', 'Motivo della nuova concessione (10–500 caratteri, senza credenziali)', label);
-          reason = document.createElement('textarea'); reason.maxLength = 500; reason.rows = 3; reason.oninput = controls; label.append(reason); article.append(label);
+          reason = document.createElement('textarea'); reason.maxLength = 500; reason.rows = 3;
+          if (card.progress.activationProgress.reconciledBudgetReason)
+            reason.value = 'Ripetere le verifiche della dipendenza entro i limiti indicati.';
+          if (card.progress.activationProgress.reconciledBudgetReason === 'ONB_READINESS_INTERRUPTED')
+            reason.value = 'Ripetere le verifiche dopo il tentativo interrotto senza pubblicazione.';
+          if (card.progress.activationProgress.reconciledBudgetReason === 'ONB_UDP_IDENTITY_PREFLIGHT_REQUIRED')
+            reason.value = 'Richiedere una nuova prova UDP per la configurazione approvata.';
+          if (card.progress.activationProgress.reconciledBudgetReason === 'ONB_READINESS_DEPENDENCY_403')
+            reason.value = 'Verificare di nuovo le autorizzazioni correnti della dipendenza.';
+          reason.oninput = controls; label.append(reason); article.append(label);
         } else element('p', 'Occorre riconciliare lo stato prima di concedere altri tentativi.', article);
       }
       if (card.onboardingState === 'APPROVED' && !card.progress?.ingestionCompatibilityObserved) element('p', 'Approvazione registrata. “Verifica e attiva” controlla la configurazione con Ingestion e confronta l’identità con gli oggetti esistenti prima di attivare.', article);
     }
     detail('Riferimenti della revisione', { challenge: id, version: card.onboarding_version_id || card.revision_id, hash: card.configuration_hash || card.target_content_hash, expiresAt: card.expires_at }, article);
     const label = document.createElement('label'), checkbox = document.createElement('input'); checkbox.type = 'checkbox';
-    label.append(checkbox); element('span', 'Ho esaminato questa proposta e la seleziono per la decisione.', label); article.append(label);
+    if (semantic) {
+      label.append(checkbox); element('span', 'Ho esaminato questa proposta e la seleziono per la decisione.', label); article.append(label);
+    }
     const previous = cards.get(id); if (previous) { previous.article.replaceWith(article); } else $('cards').append(article);
     cards.set(id, { card, csrfHeader: response.csrfHeader, csrfToken: response.csrfToken, checkbox, article, reason }); checkbox.onchange = controls;
   }
@@ -139,7 +150,7 @@
         if (!response.ok) { let reason = ''; try { const failure = await response.json(); reason = failure.code || failure.detail || ''; } catch {} throw new Error(`Operazione non completata (${response.status})${reason ? ': ' + reason : ''}.`); }
         await load(id); completed++;
       }
-      status(action === 'resume' ? 'Ripresa registrata. Approvazione e tentativi precedenti conservati. Seleziona di nuovo la fonte e scegli “Verifica e attiva”.' : `${completed} decisioni registrate. Puoi tornare alla chat per proseguire.`);
+      status(action === 'resume' ? 'Ripresa registrata. Per proseguire scegli “Verifica e attiva”.' : `${completed} decisioni registrate. Puoi tornare alla chat per proseguire.`);
     } catch (error) {
       status(`${error.message} Decisioni già confermate in questa operazione: ${completed}. Aggiorna lo stato; nessun invio viene ripetuto automaticamente.`, true);
     } finally { busy = false; controls(); }
