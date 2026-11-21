@@ -1,0 +1,45 @@
+name: Onboarding predecessor return
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      predecessor:
+        description: Deployed predecessor commit (abbreviated or full SHA)
+        type: string
+        default: '79672b55'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  predecessor-return:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: ouf_onboarding
+          POSTGRES_USER: ouf_onboarding
+          POSTGRES_PASSWORD: local-ci-only
+        ports: ['127.0.0.1:5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ouf_onboarding -d ouf_onboarding"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build both revisions and exercise the return on candidate data
+        env:
+          PREDECESSOR: ${{ inputs.predecessor || '79672b55' }}
+          CI_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          OUF_ONB_DB_PASSWORD: local-ci-only
+        run: bash scripts/ci/predecessor-return.sh
