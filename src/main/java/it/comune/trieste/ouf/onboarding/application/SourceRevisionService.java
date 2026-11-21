@@ -18,13 +18,19 @@ public class SourceRevisionService {
   public static final String EFFECT="NEW_PUBLICATION_MAY_START_ACQUISITION";
   private final JdbcClient db; private final OnboardingService onboarding;
   private final ManagedOnboardingReviewService reviews; private final ManagedFileService files;
+  private final ApiSchemaRevision apiSchemas;
   private final CanonicalHash hashes; private final AuthorizationPolicyRegistry policy;
   public record Change(String propertyIri,String sourceField,Map<String,Object> reconciliation){}
   public record AssetRef(UUID assetId, UUID profileId) {}
   public record Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
       String commandKey,String publicationEffect,List<Change> changes,
       @JsonInclude(JsonInclude.Include.NON_NULL) AssetRef assetRef,
-      @JsonInclude(JsonInclude.Include.NON_NULL) List<ManagedCsvRevision.NewColumn> newColumns){
+      @JsonInclude(JsonInclude.Include.NON_NULL) List<ManagedCsvRevision.NewColumn> newColumns,
+      @JsonInclude(JsonInclude.Include.NON_NULL) String observedSchemaRef){
+    public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
+        String commandKey,String publicationEffect,List<Change> changes,AssetRef assetRef,List<ManagedCsvRevision.NewColumn> newColumns){
+      this(sourceId,parentVersionId,expectedVersion,configurationHash,commandKey,publicationEffect,changes,assetRef,newColumns,null);
+    }
     // The absent extension must serialize exactly as before for historical command fingerprints.
     public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
         String commandKey,String publicationEffect,List<Change> changes){
@@ -36,7 +42,8 @@ public class SourceRevisionService {
     }
   }
   public SourceRevisionService(JdbcClient db,OnboardingService onboarding,ManagedOnboardingReviewService reviews,
-      ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy){
+      ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy,ApiSchemaRevision apiSchemas){
+    this.apiSchemas=apiSchemas;
     this.db=db;this.onboarding=onboarding;this.reviews=reviews;this.files=files;this.hashes=hashes;this.policy=policy;
   }
   private static DomainFailure fail(HttpStatus status,String code){return new DomainFailure(status,code,code);}
@@ -76,7 +83,8 @@ public class SourceRevisionService {
     if(r.commandKey()==null||!r.commandKey().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
         ||r.expectedVersion()<0||r.expectedVersion()>9007199254740991L
         ||r.configurationHash()==null||!r.configurationHash().matches("sha256:[a-f0-9]{64}")
-        ||!EFFECT.equals(r.publicationEffect())||(r.changes()==null)==(r.assetRef()==null)
+        ||!EFFECT.equals(r.publicationEffect())
+        ||java.util.stream.Stream.of(r.changes(),r.assetRef(),r.observedSchemaRef()).filter(Objects::nonNull).count()!=1
         ||(r.changes()!=null&&(r.changes().isEmpty()||r.changes().size()>256))
         ||(r.newColumns()!=null&&(r.assetRef()==null||r.newColumns().size()>ManagedFileLimits.MAX_COLUMNS))
         ||(r.assetRef()!=null&&(r.assetRef().assetId()==null||r.assetRef().profileId()==null)))
@@ -105,7 +113,9 @@ public class SourceRevisionService {
     UUID version=(UUID)draft.get("onboarding_version_id");
     var proposed=configuration(draft);
     int number=((Number)draft.get("version")).intValue();
-    if(r.assetRef()==null)proposed=revise(proposed,r.changes());
+    UUID schemaNotice=null;
+    if(r.observedSchemaRef()!=null) schemaNotice=apiSchemas.apply(p.tenantId(),r.sourceId(),r.observedSchemaRef(),proposed);
+    else if(r.assetRef()==null)proposed=revise(proposed,r.changes());
     else replaceAsset(p,r,proposed,number);
     revisionMetadata(proposed,number);
     draft=onboarding.patchVersion(r.sourceId(),version,((Number)draft.get("lock_version")).longValue(),proposed,actor,correlation);
@@ -115,13 +125,14 @@ public class SourceRevisionService {
     var row=db.sql("""
         insert into ouf_onboarding.source_property_revision
           (tenant_id,subject_id,command_key,request_hash,source_id,parent_version_id,parent_configuration_hash,
-           onboarding_version_id,publication_effect,replacement_profile_id,new_columns)
-        values(:t,:s,:k,:h,:source,:parent,:ph,:v,:effect,:profile,cast(:columns as jsonb))
-        returning parent_version_id,parent_configuration_hash,replacement_profile_id,new_columns
+           onboarding_version_id,publication_effect,replacement_profile_id,new_columns,schema_notice_id)
+        values(:t,:s,:k,:h,:source,:parent,:ph,:v,:effect,:profile,cast(:columns as jsonb),:notice)
+        returning parent_version_id,parent_configuration_hash,replacement_profile_id,new_columns,schema_notice_id
         """)
         .param("t",p.tenantId()).param("s",p.subjectId()).param("k",r.commandKey()).param("h",fingerprint)
         .param("source",r.sourceId()).param("parent",r.parentVersionId()).param("ph",r.configurationHash())
         .param("v",version).param("effect",r.publicationEffect())
+        .param("notice",schemaNotice,java.sql.Types.OTHER)
         .param("columns",r.newColumns()==null?null:onboarding.write(r.newColumns()),java.sql.Types.VARCHAR)
         .param("profile",r.assetRef()==null?null:r.assetRef().profileId(),java.sql.Types.OTHER).query().singleRow();
     return receipt(frozen,row);
@@ -177,6 +188,7 @@ public class SourceRevisionService {
     var row=db.sql("select * from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:v")
         .param("v",version.get("onboarding_version_id")).query().singleRow();
     var out=reviews.receipt(version,row);out.put("parentVersionId",revision.get("parent_version_id"));
+    if(revision.get("schema_notice_id")!=null) out.put("observedSchemaRef",object(configuration(version),"bundle").get("schemaRef"));
     if(revision.get("replacement_profile_id")!=null){
       var selection=object(object(configuration(version),"extractionProfile"),"selection");
       out.put("assetRef",Map.of("assetId",selection.get("assetId"),"profileId",revision.get("replacement_profile_id")));

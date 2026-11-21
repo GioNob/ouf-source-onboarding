@@ -88,13 +88,14 @@ public class OnboardingService {
     // Serialize publications and revision preparation on the same source fence.
     db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:s,0))) locked").param("s",sourceId).query(Integer.class).single();
     db.sql("select source_id from ouf_onboarding.source where source_id=:s for update").param("s",sourceId).query(String.class).single();
-    var revision=db.sql("select r.parent_version_id,r.parent_configuration_hash,r.replacement_profile_id,v.state,v.configuration_hash from ouf_onboarding.source_property_revision r join ouf_onboarding.onboarding_version v on v.onboarding_version_id=r.parent_version_id where r.onboarding_version_id=:v").param("v",versionId).query().listOfRows();
+    var revision=db.sql("select r.parent_version_id,r.parent_configuration_hash,r.replacement_profile_id,r.schema_notice_id,v.state,v.configuration_hash from ouf_onboarding.source_property_revision r join ouf_onboarding.onboarding_version v on v.onboarding_version_id=r.parent_version_id where r.onboarding_version_id=:v").param("v",versionId).query().listOfRows();
     if(!revision.isEmpty()){
       var base=revision.getFirst();
       if(!"ACTIVE".equals(base.get("state"))||!Objects.equals(base.get("parent_configuration_hash"),base.get("configuration_hash")))
         throw new DomainFailure(HttpStatus.PRECONDITION_FAILED,"ONB_REVISION_PARENT_DRIFT","ONB_REVISION_PARENT_DRIFT");
     }
-    surveillance.assertActivationAllowed(sourceId);
+    UUID correction=revision.isEmpty()?null:(UUID)revision.getFirst().get("schema_notice_id");
+    surveillance.assertActivationAllowed(sourceId,correction);
     Map<String,Object> v=version(sourceId,versionId);if(!"APPROVED".equals(v.get("state")))throw invalid("Version must be APPROVED");
     boolean compatible=db.sql("select compatible from ouf_onboarding.consumer_compatibility_attestation where onboarding_version_id=:v and consumer='INGESTION_RUNTIME' and configuration_hash=:h order by created_at desc,attestation_id desc limit 1").param("v",versionId).param("h",v.get("configuration_hash")).query(Boolean.class).optional().orElse(false);if(!compatible)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_INGESTION_COMPAT_REQUIRED","Ingestion Runtime must accept the frozen configuration before activation");
     @SuppressWarnings("unchecked") Map<String,Object> configuration=(Map<String,Object>)v.get("configuration");ResolutionActivationGate.requireExecutable(configuration,sourceId,String.valueOf(v.get("configuration_hash")),identityVerifier);Map<String,Object> bundle=bundles.compile(sourceId,versionId,v.get("version"),String.valueOf(v.get("configuration_hash")),configuration);String checksum=String.valueOf(bundle.get("checksum"));
@@ -116,6 +117,7 @@ public class OnboardingService {
     UUID publicationId=UUID.randomUUID();db.sql("insert into ouf_onboarding.published_configuration(publication_id,source_id,onboarding_version_id,bundle_version,bundle,checksum,active,effective_from) values(:p,:s,:v,:n,cast(:b as jsonb),:h,true,transaction_timestamp())")
       .param("p",publicationId).param("s",sourceId).param("v",versionId).param("n",v.get("version")).param("b",write(bundle)).param("h",checksum).update();projections.publish(publicationId,bundle);
     db.sql("update ouf_onboarding.onboarding_version set state='ACTIVE',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and state='APPROVED'").param("v",versionId).update();
+    if(correction!=null) surveillance.closeActivated(sourceId,correction);
     audit(sourceId,versionId,correlation,actor,"VERSION_ACTIVATED",Map.of("checksum",checksum));return activeBundle(sourceId);
   }
   @Transactional public Map<String,Object> attestIngestionCompatibility(String sourceId,UUID versionId,boolean compatible,String detail,Actor actor,String correlation){

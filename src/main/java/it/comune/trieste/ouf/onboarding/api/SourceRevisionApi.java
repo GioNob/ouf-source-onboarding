@@ -36,7 +36,8 @@ public class SourceRevisionApi {
       }
       if(type==SourceRevisionService.Prepare.class&&(!args.path("parentVersionId").isTextual()
           ||!args.path("commandKey").isTextual()||!args.path("configurationHash").isTextual()
-          ||!args.path("publicationEffect").isTextual()||args.has("changes")==args.has("assetRef")
+          ||!args.path("publicationEffect").isTextual()||(List.of("changes","assetRef","observedSchemaRef").stream().filter(args::has).count()!=1)
+          ||(args.has("observedSchemaRef")&&!args.path("observedSchemaRef").isTextual())
           ||(args.has("changes")&&!args.path("changes").isArray())
           ||(args.has("newColumns")&&(!args.has("assetRef")||!args.path("newColumns").isArray()))
           ||(args.has("assetRef")&&(!args.path("assetRef").path("assetId").isTextual()

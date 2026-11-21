@@ -5,6 +5,58 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {chromium}=require('playwright');
 
+test('onboarding home shows only owner notices and prepares a revision on explicit HUMAN action', async () => {
+  const root=path.resolve('src/main/resources/ths');
+  const browser=await chromium.launch({headless:true, channel:process.env.OUF_TEST_BROWSER_CHANNEL});
+  const id='00000000-0000-4000-8000-000000000001';
+  const parent='00000000-0000-4000-8000-000000000002';
+  const revision={parentVersion:1,parentVersionId:parent,expectedVersion:4,
+    configurationHash:'sha256:'+'a'.repeat(64),observedSchemaRef:'observation:2'};
+  let entries=[], reads=0;
+  const posts=[];
+  try {
+    const page=await browser.newPage();
+    await page.route('**/*',async route=>{
+      const req=route.request(), url=new URL(req.url());
+      if(url.host!=='ths.example') return route.abort();
+      if(url.pathname.endsWith('/schema-notices')) {
+        reads++;
+        return route.fulfill({json:{page:{notices:entries,next:null,hasMore:false},parents:{[id]:revision},
+          csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture'}});
+      }
+      if(url.pathname.endsWith('/schema-notices/prepare')) {
+        posts.push({body:req.postDataJSON(),csrf:req.headers()['x-csrf-token']});
+        return route.fulfill({json:{challengeId:id}});
+      }
+      const name=url.pathname.endsWith('/review.js')?'workflow-review.js'
+        :url.pathname.endsWith('/review.css')?'workflow-review.css'
+        :url.pathname.endsWith('/')?'workflow-review.html':null;
+      if(!name) return route.fulfill({status:404,body:''});
+      return route.fulfill({path:path.join(root,name),contentType:name.endsWith('.html')?'text/html'
+        :name.endsWith('.css')?'text/css':'text/javascript'});
+    });
+    await page.goto('https://ths.example/trusted-human/onboarding/');
+    await page.waitForLoadState('networkidle');
+    assert.equal(reads,1);
+    assert.equal(await page.locator('#schema-notices').isHidden(),true);
+    entries=[{noticeId:id,sourceId:'s',sourceName:'Edicole',differences:[{field:'telefono',change:'ADDED'}],
+      observationPolls:7,revision}];
+    await page.reload();
+    const panel=page.locator('#schema-notices');
+    await panel.waitFor();
+    assert.match(await panel.innerText(),/Edicole/);
+    assert.match(await panel.innerText(),/telefono · ADDED/);
+    assert.equal(await page.locator('main > :first-child').getAttribute('id'),'schema-notices');
+    await panel.getByRole('link',{name:'Rivedi lo schema della sorgente'}).click();
+    assert.deepEqual(posts,[]);
+    await panel.getByRole('button',{name:'Prepara la revisione'}).click();
+    await page.waitForURL('**/?challenge='+id);
+    assert.deepEqual(posts,[{csrf:'fixture',body:{sourceId:'s',parentVersionId:parent,expectedVersion:4,
+      configurationHash:revision.configurationHash,observedSchemaRef:revision.observedSchemaRef,
+      commandKey:'schema-notice:'+id+':'+parent}}]);
+  } finally { await browser.close(); }
+});
+
 test('workflow HUMAN UI makes no automatic decisions and resumes exact approval before publication',async()=>{
   const root=path.resolve('src/main/resources/ths');
   const server=http.createServer((req,res)=>{

@@ -11,6 +11,76 @@
   const status = (text, error = false) => { $('status').textContent = text; $('status').classList.toggle('error', error); };
   function element(tag, value, parent) { const e = document.createElement(tag); e.textContent = String(value ?? '—'); parent.append(e); return e; }
   function detail(label, value, parent) { const e = document.createElement('details'); element('summary', label, e); element('pre', JSON.stringify(value, null, 2), e); parent.append(e); }
+  let noticeGeneration = 0;
+  async function loadNotices(after) {
+    const panel = $('schema-notices');
+    const generation = after ? noticeGeneration : ++noticeGeneration;
+    if (!after) { panel.replaceChildren(); panel.hidden = true; }
+    try {
+      const query = after ? '?after=' + encodeURIComponent(after) : '';
+      const response = await fetch('api/schema-notices' + query, { credentials: 'same-origin', cache: 'no-store' });
+      if (!response.ok) throw new Error();
+      const { page, parents, csrfHeader, csrfToken } = await response.json();
+      if (generation !== noticeGeneration) return;
+      if (!page.notices.length && !after) { panel.hidden = true; return; }
+      if (!after) element('h2', 'Sorgenti ferme per cambio di schema', panel);
+      panel.hidden = false;
+      for (const notice of page.notices) {
+        const item = document.createElement('article');
+        element('h3', notice.sourceName, item);
+        element('p', notice.sourceId + ' · Poll in osservazione: ' + notice.observationPolls, item);
+        const list = document.createElement('ul');
+        for (const diff of notice.differences) element('li', diff.field + ' · ' + diff.change, list);
+        item.append(list);
+        const parent = parents[notice.noticeId];
+        if (parent.challengeId && uuid.test(parent.challengeId)) {
+          element('a', 'Apri la revisione preparata', item).href = '?challenge=' + encodeURIComponent(parent.challengeId);
+          panel.append(item);
+          continue;
+        }
+        const review = document.createElement('details');
+        const link = element('a', 'Rivedi lo schema della sorgente', item);
+        review.id = 'schema-revision-' + notice.noticeId;
+        link.href = '#' + review.id;
+        link.onclick = () => { review.open = true; };
+        element('summary', 'Revisione della versione ' + (notice.revision.parentVersion ?? 'non disponibile'), review);
+        element('p', 'La preparazione crea una proposta da approvare. L’attivazione pubblica la nuova configurazione e può avviare un’acquisizione.', review);
+        const prepare = element('button', 'Prepara la revisione', review);
+        prepare.type = 'button';
+        prepare.disabled = !parent.parentVersionId;
+        prepare.onclick = async () => {
+          prepare.disabled = true;
+          const { parentVersionId, expectedVersion, configurationHash } = parent;
+          const { observedSchemaRef } = notice.revision;
+          try {
+            const result = await fetch('api/schema-notices/prepare', {
+              method: 'POST', credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json', [csrfHeader]: csrfToken },
+              body: JSON.stringify({ sourceId: notice.sourceId, parentVersionId, expectedVersion, configurationHash,
+                observedSchemaRef, commandKey: 'schema-notice:' + notice.noticeId + ':' + parentVersionId })
+            });
+            if (!result.ok) throw new Error();
+            const { challengeId } = await result.json();
+            if (!uuid.test(challengeId)) throw new Error();
+            location.assign('?challenge=' + encodeURIComponent(challengeId));
+          } catch {
+            element('p', 'Preparazione non confermata. Aggiorna gli avvisi per riconciliare la richiesta.', review);
+          }
+        };
+        item.append(review);
+        panel.append(item);
+      }
+      if (page.hasMore) {
+        const more = element('button', 'Altri avvisi', panel);
+        more.type = 'button';
+        more.onclick = () => { more.remove(); loadNotices(page.next); };
+      }
+    } catch {
+      if (generation !== noticeGeneration) return;
+      panel.hidden = false;
+      element('p', 'Avvisi di cambio schema non disponibili. Ricarica la pagina per consultarli.', panel);
+    }
+  }
   const selected = () => [...cards.values()].filter(item => item.checkbox.checked);
   const expired = card => Date.parse(card.expires_at) <= Date.now();
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
@@ -138,6 +208,7 @@
         const response = await fetch(`api/${encodeURIComponent(id)}/${operation}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', [item.csrfHeader]: item.csrfToken }, body: JSON.stringify(body) });
         if (!response.ok) { let reason = ''; try { const failure = await response.json(); reason = failure.code || failure.detail || ''; } catch {} throw new Error(`Operazione non completata (${response.status})${reason ? ': ' + reason : ''}.`); }
         await load(id); completed++;
+        if (!semantic && operation === 'activate') await loadNotices();
       }
       status(action === 'resume' ? 'Ripresa registrata. Approvazione e tentativi precedenti conservati. Seleziona di nuovo la fonte e scegli “Verifica e attiva”.' : `${completed} decisioni registrate. Puoi tornare alla chat per proseguire.`);
     } catch (error) {
@@ -150,8 +221,12 @@
   $('resume').hidden = semantic; $('resume').onclick = () => decide('resume');
   $('budget').hidden = semantic;
   $('budget').onclick = () => decide('budget');
-  $('approve').onclick = () => decide('approve'); $('complete').onclick = () => decide('complete'); $('reject').onclick = () => decide('reject'); $('refresh').onclick = refresh;
-  if (!['onboarding', 'semantic'].includes(flow) || ids.length > (semantic ? 21 : 1) || new Set(ids).size !== ids.length || !ids.every(id => uuid.test(id))) status('Apri il collegamento di revisione fornito dalla chat.', true);
+  $('approve').onclick = () => decide('approve'); $('complete').onclick = () => decide('complete'); $('reject').onclick = () => decide('reject');
+  $('refresh').onclick = () => { if (!semantic) loadNotices(); refresh(); };
+  if (!semantic) loadNotices();
+  if (!semantic && !params.has('challenge') && !params.has('challenges')) {
+    $('title').textContent = 'Revisione delle sorgenti';
+    $('intro').hidden = true; $('status').textContent = ''; $('refresh').hidden = true; $('actions').hidden = true;
+  } else if (!['onboarding', 'semantic'].includes(flow) || ids.length > (semantic ? 21 : 1) || new Set(ids).size !== ids.length || !ids.every(id => uuid.test(id))) status('Apri il collegamento di revisione fornito dalla chat.', true);
   else refresh();
 })();
-

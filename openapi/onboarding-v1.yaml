@@ -8,6 +8,56 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /sources/{sourceId}/schema-surveillance:
+    parameters: [{$ref: '#/components/parameters/SourceId'}]
+    post:
+      operationId: reportSchemaObservation
+      summary: SERVICE observation scoped by authenticated tenant and source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - {$ref: '#/components/schemas/SchemaObservation'}
+                - {$ref: '#/components/schemas/LegacySchemaReport'}
+      responses:
+        '201':
+          description: Retained receipt, including for an exact replay
+          content: {application/json: {schema: {$ref: '#/components/schemas/SchemaReceipt'}}}
+        '409': {description: Conflicting evidence or missing OPEN}
+        default: {$ref: '#/components/responses/Problem'}
+    get:
+      operationId: reconcileSchemaObservations
+      summary: SERVICE receipts within the authenticated tenant and source
+      responses:
+        '200':
+          description: Retained receipts
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/SchemaReceipt'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+  /schema-notices:
+    get:
+      operationId: readSchemaNotices
+      x-ouf-mcp-capability: ouf.onboarding.schema-notices.read
+      x-ouf-required-scope: ouf.onboarding.schema-notices.read
+      summary: HUMAN notices visible under the current revision.prepare grant on each source
+      parameters:
+        - {name: state, in: query, schema: {type: string, enum: [OPEN, RESOLVED], default: OPEN}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: after, in: query, description: Opaque continuation from the previous page, schema: {type: string, format: uuid}}
+      responses:
+        '200':
+          description: Only authorized notices contribute to pagination. Reading leaves the notice open.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notices, next, hasMore]
+                properties:
+                  notices: {type: array, items: {$ref: '#/components/schemas/SchemaNotice'}}
+                  next: {type: [string, 'null'], format: uuid}
+                  hasMore: {type: boolean}
+        default: {$ref: '#/components/responses/Problem'}
   /sources:
     get:
       operationId: listSources
@@ -377,6 +427,84 @@ components:
               code: {type: string}
               correlationId: {type: string}
   schemas:
+    SchemaDifference:
+      type: object
+      required: [field, change]
+      properties:
+        field: {type: string, minLength: 1}
+        change: {type: string, enum: [ADDED, REMOVED, TYPE_CHANGED, NULLABILITY_CHANGED, KEY_CHANGED, GEOMETRY_CHANGED]}
+    SchemaObservation:
+      type: object
+      required: [incidentKey, state, observationPolls, observedAt]
+      properties:
+        incidentKey: {type: string, minLength: 1, maxLength: 512}
+        state: {type: string, enum: [OPEN, UPDATE, RESOLVED]}
+        expectedSchemaRef: {type: string, minLength: 1}
+        observedSchema:
+          type: object
+          required: [schemaVersion, fieldsSha256, fields]
+          properties:
+            schemaVersion: {type: string, minLength: 1}
+            fieldsSha256: {type: string, pattern: '^(sha256:)?[0-9a-f]{64}$'}
+            fields:
+              type: array
+              minItems: 1
+              maxItems: 1024
+              items:
+                type: object
+                required: [name, type, nullable]
+                properties:
+                  name: {type: string, minLength: 1}
+                  type: {type: string, minLength: 1}
+                  nullable: {type: boolean}
+        differences: {type: array, minItems: 1, maxItems: 4096, items: {$ref: '#/components/schemas/SchemaDifference'}}
+        frozenCheckpointRef: {type: string, minLength: 1}
+        observationPolls: {type: integer, format: int64, minimum: 0, description: Cumulative producer counter}
+        observedAt: {type: string, format: date-time}
+        reason: {type: string, enum: [SCHEMA_RETURNED, REVISION_ACTIVATED], description: Defaults to SCHEMA_RETURNED on RESOLVED}
+      allOf:
+        - if: {properties: {state: {const: OPEN}}}
+          then: {required: [expectedSchemaRef, observedSchema, differences, frozenCheckpointRef]}
+    LegacySchemaReport:
+      type: object
+      required: [observedSchemaRef, observedFingerprint, classification]
+      properties:
+        observedSchemaRef: {type: string}
+        previousFingerprint: {type: [string, 'null']}
+        observedFingerprint: {type: string}
+        classification: {type: string, enum: [UNCHANGED, ADDITIVE, BREAKING, UNKNOWN]}
+        detail: {type: object}
+    SchemaReceipt:
+      type: object
+      required: [issue_id, source_id, observed_schema_ref, state]
+      properties:
+        issue_id: {type: string, format: uuid}
+        source_id: {type: string}
+        observed_schema_ref: {type: string}
+        incident_key: {type: [string, 'null']}
+        state: {type: string, enum: [OPEN, ACKNOWLEDGED, RESOLVED]}
+        observation_polls: {type: [integer, 'null']}
+        last_observed_at: {type: [string, 'null'], format: date-time}
+        resolution_reason: {type: [string, 'null']}
+    SchemaNotice:
+      type: object
+      required: [noticeId, sourceId, sourceName, since, lastObservedAt, observationPolls, differences, nextAction, revision]
+      properties:
+        noticeId: {type: string, format: uuid}
+        sourceId: {type: string}
+        sourceName: {type: string}
+        since: {type: string, format: date-time}
+        lastObservedAt: {type: string, format: date-time}
+        observationPolls: {type: integer, format: int64}
+        differences: {type: array, items: {$ref: '#/components/schemas/SchemaDifference'}}
+        nextAction: {const: REVISE_ONBOARDING}
+        revision:
+          type: object
+          required: [tool, parentVersion, observedSchemaRef]
+          properties:
+            tool: {const: source.onboarding.revision.prepare}
+            parentVersion: {type: [integer, 'null']}
+            observedSchemaRef: {type: string}
     RegisterManagedFileRequest:
       type: object
       required: [stagingRef, contentHash, mediaType, sizeBytes, retentionRef]

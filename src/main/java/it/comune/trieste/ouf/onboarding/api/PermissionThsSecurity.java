@@ -26,15 +26,18 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Configuration(proxyBeanMethods=false)
 @ConditionalOnProperty(name="ouf.authorization.ths.enabled",havingValue="true")
 public class PermissionThsSecurity {
- @Bean @Order(1) SecurityFilterChain permissionThsChain(HttpSecurity http,OAuth2AuthorizedClientService clients,JwtDecoder decoder,Converter<Jwt,? extends AbstractAuthenticationToken> converter,ClientRegistrationRepository registrations)throws Exception{
+ @Bean @Order(1) SecurityFilterChain permissionThsChain(HttpSecurity http,OAuth2AuthorizedClientService clients,JwtDecoder decoder,Converter<Jwt,? extends AbstractAuthenticationToken> converter,ClientRegistrationRepository registrations,org.springframework.core.env.Environment environment)throws Exception{
   http.securityMatcher("/trusted-human/authorization/**","/trusted-human/managed-files/**","/trusted-human/resolution/**","/trusted-human/onboarding/**","/trusted-human/semantic/**","/oauth2/**","/login/oauth2/**");
   http.authorizeHttpRequests(a->a.requestMatchers("/oauth2/**","/login/oauth2/**").permitAll().anyRequest().authenticated());
   // Confidential clients also require PKCE under the OUF Authorization PET.
   // Spring retains the verifier in the server session and sends it at the token endpoint.
   var resolver=new DefaultOAuth2AuthorizationRequestResolver(registrations,"/oauth2/authorization");
   resolver.setAuthorizationRequestCustomizer(OAuth2AuthorizationRequestCustomizers.withPkce());
-  http.oauth2Login(o->o.loginPage("/oauth2/authorization/ouf-ths")
-    .authorizationEndpoint(e->e.authorizationRequestResolver(resolver)));
+  http.oauth2Login(o->{
+    o.loginPage("/oauth2/authorization/ouf-ths").authorizationEndpoint(e->e.authorizationRequestResolver(resolver));
+    if(environment.containsProperty("ouf.workflow.ths.gateway-base-url"))
+      o.defaultSuccessUrl("/trusted-human/onboarding/",false);
+  });
   // Keep Spring CSRF enabled for all session-authenticated state changes.
   http.addFilterAfter(new OncePerRequestFilter(){@Override protected void doFilterInternal(HttpServletRequest r,HttpServletResponse response,FilterChain chain)throws ServletException,IOException{
    if(r.getRequestURI().startsWith("/trusted-human/authorization/")
