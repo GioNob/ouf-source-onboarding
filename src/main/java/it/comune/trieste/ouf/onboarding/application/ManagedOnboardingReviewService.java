@@ -54,6 +54,8 @@ public class ManagedOnboardingReviewService {
   @SuppressWarnings("unchecked") private Map<String,Object> ownedVersion(PrincipalContext p,String source,UUID version){
     var current=onboarding.version(source,version);
     var metadata=(Map<String,Object>)onboarding.source(source).get("metadata");
+    if(metadata.containsKey("managedTenantId")&&!Objects.equals(metadata.get("managedTenantId"),p.tenantId()))
+      throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
     Object raw=metadata.get("managedFileAssetId");
     if(!(raw instanceof String value))throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_MANAGED_SOURCE_REQUIRED");
     files.requireOwner(UUID.fromString(value),p.subjectId());
@@ -121,7 +123,26 @@ public class ManagedOnboardingReviewService {
     if(request.executionProposal()!=null){
       @SuppressWarnings("unchecked") var configuration=(Map<String,Object>)current.get("configuration");
       @SuppressWarnings("unchecked") var metadata=(Map<String,Object>)onboarding.source(request.sourceId()).get("metadata");
-      var asset=files.asset(UUID.fromString(String.valueOf(metadata.get("managedFileAssetId"))));
+      var selection=ManagedReviewSnapshot.child(ManagedReviewSnapshot.child(configuration,"extractionProfile"),"selection");
+      UUID selected=UUID.fromString((String)selection.get("assetId"));
+      if(!selected.toString().equals(metadata.get("managedFileAssetId"))){
+        files.requireTenantOwner(selected,p.tenantId(),p.subjectId());
+        boolean sameRefusedInput=db.sql("""
+            select exists(select 1 from ouf_onboarding.source_property_revision r
+              join ouf_onboarding.file_profile f on f.profile_id=:profile
+              join ouf_onboarding.onboarding_version anchor on anchor.onboarding_version_id=r.parent_version_id
+              join ouf_onboarding.onboarding_version parent on parent.onboarding_version_id=r.onboarding_version_id
+              where parent.onboarding_version_id=:parent and parent.state='REJECTED' and r.source_id=:source
+                and r.tenant_id=:tenant and r.subject_id=:subject and f.asset_id=:asset
+                and parent.configuration #>> '{extractionProfile,selection,fileProfileId}'=cast(:profile as text)
+                and (r.replacement_profile_id=:profile or (r.replacement_profile_id is null
+                  and anchor.configuration #>> '{extractionProfile,selection,fileProfileId}'=cast(:profile as text))))
+            """).param("parent",current.get("parent_version_id"),java.sql.Types.OTHER).param("source",request.sourceId())
+            .param("tenant",p.tenantId()).param("subject",p.subjectId()).param("asset",selected)
+            .param("profile",UUID.fromString((String)selection.get("fileProfileId"))).query(Boolean.class).single();
+        if(!sameRefusedInput)throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT");
+      }
+      var asset=files.asset(selected);
       var complete=ManagedFileExecutionProposal.compile(configuration,asset,p.tenantId(),request.executionProposal());
       current=onboarding.patchVersion(request.sourceId(),request.onboardingVersionId(),version,complete,actor,correlation);
       version=((Number)current.get("lock_version")).longValue();
@@ -132,6 +153,28 @@ public class ManagedOnboardingReviewService {
         .param("t",p.tenantId()).param("s",p.subjectId()).param("k",request.commandKey()).param("r",fingerprint)
         .param("source",request.sourceId()).param("v",request.onboardingVersionId())
         .param("c",challenge.get("challenge_id")).param("h",current.get("configuration_hash")).update();
+    if(current.get("parent_version_id") instanceof UUID parent){
+      // Carry the original activation fence through a refusal, even across several redrafts.
+      db.sql("""
+          insert into ouf_onboarding.source_property_revision(tenant_id,subject_id,command_key,request_hash,source_id,
+            parent_version_id,parent_configuration_hash,onboarding_version_id,publication_effect,replacement_profile_id,parent_state_at_prepare)
+          select r.tenant_id,r.subject_id,:key,:hash,r.source_id,coalesce(base.parent_version_id,r.onboarding_version_id),
+            coalesce(base.parent_configuration_hash,r.configuration_hash),:v,'NEW_PUBLICATION_MAY_START_ACQUISITION',
+            cast(parent.configuration #>> '{extractionProfile,selection,fileProfileId}' as uuid),
+            coalesce(base.parent_state_at_prepare,'REJECTED')
+          from ouf_onboarding.managed_onboarding_review r
+          join ouf_onboarding.onboarding_version parent using(onboarding_version_id,source_id)
+          join ouf_onboarding.approval_decision d on d.challenge_id=r.challenge_id and d.decision='REJECT'
+            and d.target_hash=r.configuration_hash
+          left join ouf_onboarding.source_property_revision base on base.onboarding_version_id=r.onboarding_version_id and base.source_id=r.source_id
+          where r.onboarding_version_id=:parent and r.source_id=:source and parent.state='REJECTED'
+            and r.tenant_id=:tenant and r.subject_id=:subject
+            and not exists(select 1 from ouf_onboarding.managed_candidate_recovery w where w.result_id=:v and w.operation='RESTART_DRAFT')
+          """).param("key","redraft:"+request.onboardingVersionId()).param("hash",fingerprint)
+          .param("v",request.onboardingVersionId()).param("parent",parent).param("source",request.sourceId())
+          .param("tenant",p.tenantId()).param("subject",p.subjectId()).update();
+    }
+    freezeSnapshot(current);
     return receipt(current,Map.of("challenge_id",challenge.get("challenge_id"),"configuration_hash",current.get("configuration_hash")));
   }
 
@@ -244,12 +287,42 @@ public class ManagedOnboardingReviewService {
     db.sql("insert into ouf_onboarding.managed_onboarding_review(tenant_id,subject_id,command_key,request_hash,source_id,onboarding_version_id,challenge_id,configuration_hash) values(:t,:s,:k,:r,:source,:v,:c,:h)")
         .param("t",p.tenantId()).param("s",p.subjectId()).param("k",key).param("r",fingerprint)
         .param("source",source).param("v",version).param("c",challenge.get("challenge_id")).param("h",frozen.get("configuration_hash")).update();
+    freezeSnapshot(frozen);
     return receipt(frozen,Map.of("challenge_id",challenge.get("challenge_id"),"configuration_hash",frozen.get("configuration_hash")));
   }
 
 
+  private Map<?,?> buildSnapshot(Map<String,Object> version){
+    var config=ManagedReviewSnapshot.object(version.get("configuration"));
+    var extraction=ManagedReviewSnapshot.child(config,"extractionProfile");
+    var selection=ManagedReviewSnapshot.child(extraction,"selection");
+    var runtime=ManagedReviewSnapshot.child(extraction,"runtime");
+    if(!selection.containsKey("assetId")&&!selection.containsKey("fileProfileId"))return Map.of(); // Non-file revision.
+    UUID assetId=UUID.fromString((String)selection.get("assetId")),profileId=UUID.fromString((String)selection.get("fileProfileId"));
+    var asset=files.asset(assetId);
+    if(!Objects.equals(asset.get("source_id"),version.get("source_id"))||!Objects.equals(asset.get("content_hash"),runtime.get("contentHash")))
+      throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_CONFIGURATION_DRIFT");
+    var profile=files.selectedProfile(files.fileProfile(assetId,profileId),(String)runtime.get("layer"));
+    var source=onboarding.source((String)version.get("source_id"));
+    return ManagedReviewSnapshot.build(config,asset,profile,source.get("owner_ref"),source.get("name"));
+  }
+  private void freezeSnapshot(Map<String,Object> version){
+    db.sql("insert into ouf_onboarding.managed_review_snapshot values(:v,cast(:snapshot as jsonb))")
+        .param("v",version.get("onboarding_version_id")).param("snapshot",onboarding.write(buildSnapshot(version))).update();
+  }
+  private Map<?,?> snapshot(Map<String,Object> version){
+    return db.sql("select snapshot::text from ouf_onboarding.managed_review_snapshot where onboarding_version_id=:v")
+        .param("v",version.get("onboarding_version_id")).query(String.class).optional()
+        .<Map<?,?>>map(value->onboarding.retainedJson(value,Map.class)).orElseGet(()->buildSnapshot(version));
+  }
+  private List<?> feedback(Object version){
+    return db.sql("select review_feedback::text from ouf_onboarding.approval_decision where onboarding_version_id=:v and review_outcome='CHANGES_REQUESTED'")
+        .param("v",version).query(String.class).optional().map(value->onboarding.retainedJson(value,List.class)).orElse(List.of());
+  }
+
   /** Resolve a current reference from owner state, not chatbot memory. */
-  @Transactional(readOnly=true) @SuppressWarnings("unchecked")
+  // The owner read also persists the authorization decision in this transaction.
+  @Transactional @SuppressWarnings("unchecked")
   public Map<String,Object> readLatest(PrincipalContext p,String source){
     if(source==null||!source.matches("[A-Za-z0-9_.:-]{1,160}"))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_ARGUMENTS_INVALID");
     var rows=db.sql("select onboarding_version_id from ouf_onboarding.onboarding_version where source_id=:s order by version desc limit 1")
@@ -296,6 +369,17 @@ public class ManagedOnboardingReviewService {
             "onboardingVersionId",current.get("onboarding_version_id"),"expectedVersion",current.get("lock_version"),
             "newCommandKeyRequired",true));
     }
+    if("REJECTED".equals(current.get("state"))&&review!=null&&!"WITHDRAWN".equals(result.get("candidateDisposition"))){
+      var notes=feedback(current.get("onboarding_version_id"));
+      if(!notes.isEmpty())result.put("state","CHANGES_REQUESTED");
+      result.put("reviewFeedback",notes);
+      var selection=ManagedReviewSnapshot.child(ManagedReviewSnapshot.child(ManagedReviewSnapshot.object(current.get("configuration")),"extractionProfile"),"selection");
+      if(selection.containsKey("assetId")&&selection.containsKey("fileProfileId")&&db.sql(
+          "select not exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s and version>:n)")
+          .param("s",current.get("source_id")).param("n",current.get("version")).query(Boolean.class).single())result.put("nextAction",Map.of("tool","source.onboarding.create","sourceId",current.get("source_id"),
+          "assetId",selection.get("assetId"),"profileId",selection.get("fileProfileId"),"newCommandKeyRequired",true,
+          "instruction","Prepara una nuova bozza sullo stesso file tenendo conto delle modifiche richieste."));
+    }
     var publications=db.sql("select publication_id,checksum,active from ouf_onboarding.published_configuration where onboarding_version_id=:v order by created_at desc limit 1")
         .param("v",current.get("onboarding_version_id")).query().listOfRows();
     if(!publications.isEmpty())result.put("publication",publications.getFirst());
@@ -337,7 +421,18 @@ public class ManagedOnboardingReviewService {
     var review=humanReview(p,challenge);var card=new LinkedHashMap<>(onboarding.approvalCard(challenge));
     var version=onboarding.version(String.valueOf(review.get("source_id")),(UUID)review.get("onboarding_version_id"));
     card.put("onboardingState",version.get("state"));card.put("lockVersion",version.get("lock_version"));
-    card.put("progress",receipt(version,review));
+    var progress=receipt(version,review);
+    card.put("progress",progress);card.put("onboardingState",progress.get("state"));
+    var snapshot=snapshot(version);
+    if(!snapshot.isEmpty())card.put("reviewSnapshot",snapshot);
+    if(version.get("parent_version_id") instanceof UUID parentId){
+      var parent=onboarding.version((String)version.get("source_id"),parentId);
+      // Compare only reviews in the same delegated ownership scope.
+      boolean sameScope=db.sql("select exists(select 1 from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:p and tenant_id=:t and subject_id=:s)")
+          .param("p",parentId).param("t",review.get("tenant_id")).param("s",review.get("subject_id")).query(Boolean.class).single();
+      if(sameScope)card.put("previousReview",Map.of("version",parent.get("version"),"feedback",feedback(parentId),
+          "changes",ManagedReviewSnapshot.differences(snapshot(parent),snapshot)));
+    }
     var revision=db.sql("""
         select r.parent_version_id,r.parent_configuration_hash,r.publication_effect,p.asset_id,r.replacement_profile_id,r.new_columns
         from ouf_onboarding.source_property_revision r left join ouf_onboarding.file_profile p on p.profile_id=r.replacement_profile_id
@@ -613,9 +708,29 @@ public class ManagedOnboardingReviewService {
     return receipt(current,review);
   }
 
-  public record Decision(String configurationHash,long expectedVersion){}
+  public record Feedback(String section,String target,String comment){}
+  public record Decision(String configurationHash,long expectedVersion,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      List<Feedback> reviewFeedback){
+    public Decision(String hash,long version){this(hash,version,null);}
+  }
+  private String validateFeedback(Map<String,Object> version,List<Feedback> feedback){
+    if(feedback==null||feedback.isEmpty()||feedback.size()>128)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_FEEDBACK_INVALID");
+    var snapshot=snapshot(version);var seen=new HashSet<List<String>>();
+    for(var note:feedback){
+      if(note==null||note.section()==null||!Set.of("FIELD","IDENTITY","SEMANTIC","LIMITS").contains(note.section())
+          ||note.target()==null||!ManagedReviewSnapshot.child(snapshot,note.section()).containsKey(note.target())
+          ||!seen.add(List.of(note.section(),note.target()))||note.comment()!=null&&(note.comment().length()>500
+          ||note.comment().chars().anyMatch(c->Character.isISOControl(c)&&c!='\n'&&c!='\r'&&c!='\t')))
+        throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_FEEDBACK_INVALID");
+    }
+    String value=onboarding.write(feedback);
+    if(value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>48*1024)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_FEEDBACK_TOO_LARGE");
+    return value;
+  }
   @Transactional public Map<String,Object> humanAction(PrincipalContext p,UUID challenge,String action,Decision decision,String authentication){
-    if(!Set.of("confirm","reject","activate").contains(action)||decision==null)
+    if(!Set.of("confirm","reject","changes","activate").contains(action)||decision==null
+        ||(!"changes".equals(action)&&decision.reviewFeedback()!=null))
       throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_ACTION_INVALID");
     var review=humanReview(p,challenge);String source=String.valueOf(review.get("source_id"));UUID id=(UUID)review.get("onboarding_version_id");
     db.sql("select onboarding_version_id from ouf_onboarding.onboarding_version where onboarding_version_id=:v for update").param("v",id).query(UUID.class).single();
@@ -627,6 +742,7 @@ public class ManagedOnboardingReviewService {
     var actor=new OnboardingService.Actor(p.subjectId(),"HUMAN_USER",Set.of("ouf.onboarding.configuration.write"));
     String correlation=UUID.randomUUID().toString();
     if("confirm".equals(action))onboarding.confirm(source,id,challenge,actor,correlation,authentication);
+    else if("changes".equals(action))onboarding.closeWithoutApproval(source,id,challenge,actor,correlation,authentication,validateFeedback(current,decision.reviewFeedback()));
     else if("reject".equals(action))onboarding.reject(source,id,challenge,actor,correlation,authentication);
     else {
       if(!"CONFIRMED".equals(onboarding.approvalCard(challenge).get("status")))

@@ -57,16 +57,24 @@ public class WorkflowThsApi {
   }
   @PostMapping("/api/{id}/{action}") public ResponseEntity<String> action(@PathVariable String flow,@PathVariable UUID id,
       @PathVariable String action,@RequestBody byte[] body,HttpServletRequest request)throws Exception{
-    String access=token(request);if(body.length>4096)throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
+    String access=token(request);if(body.length>("onboarding".equals(flow)&&"changes".equals(action)?52*1024:4096))throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
     JsonNode proposed=json.readTree(body);
     if(proposed==null||!proposed.isObject())throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
     if("onboarding".equals(flow)){
       boolean budget="budget".equals(action);
-      if(!Set.of("confirm","reject","activate","resume","budget").contains(action)||proposed.size()!=(budget?7:"resume".equals(action)?4:2)
+      if(!Set.of("confirm","reject","changes","activate","resume","budget").contains(action)||proposed.size()!=(budget?7:"resume".equals(action)?4:"changes".equals(action)?3:2)
           ||!proposed.hasNonNull("configurationHash")||!proposed.has("expectedVersion")
           ||!proposed.get("configurationHash").isTextual()||!proposed.get("configurationHash").asText().matches("sha256:[a-f0-9]{64}")
           ||!proposed.get("expectedVersion").isIntegralNumber()||!proposed.get("expectedVersion").canConvertToLong()||proposed.get("expectedVersion").asLong()<0)
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+      if("changes".equals(action)){
+        var notes=proposed.path("reviewFeedback");
+        if(!notes.isArray()||notes.isEmpty()||notes.size()>128)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+        for(var note:notes)if(!note.isObject()||note.size()!=(note.has("comment")?3:2)
+            ||!Set.of("FIELD","IDENTITY","SEMANTIC","LIMITS").contains(note.path("section").asText(""))
+            ||!note.path("target").isTextual()||note.has("comment")&&(!note.get("comment").isTextual()||note.get("comment").textValue().length()>500))
+          throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+      }
       if("resume".equals(action)&&(!proposed.has("expectedGeneration")||!proposed.get("expectedGeneration").isIntegralNumber()
           ||!proposed.get("expectedGeneration").canConvertToLong()||proposed.get("expectedGeneration").asLong()<1
           ||!proposed.path("blockedCode").isTextual()

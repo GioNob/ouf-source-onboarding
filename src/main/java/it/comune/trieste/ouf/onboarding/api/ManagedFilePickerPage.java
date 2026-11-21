@@ -123,6 +123,8 @@ public class ManagedFilePickerPage {
       connection.setRequestProperty("Authorization", "Bearer " + client.getAccessToken().getTokenValue());
       connection.setRequestProperty("Content-Type", "text/csv");
       connection.setRequestProperty("X-Content-SHA256", hash);
+      String fileName=request.getHeader("X-OUF-File-Name");
+      if(fileName!=null && fileName.matches("[!-~]{1,3072}"))connection.setRequestProperty("X-OUF-File-Name",fileName);
       try (var source = request.getInputStream(); var target = connection.getOutputStream()) {
         copyBounded(source, target, declaredSize);
       }

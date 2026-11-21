@@ -52,7 +52,7 @@ form.addEventListener('submit', async event => {
     const uploadPath = '/trusted-human/managed-files/upload' + (handoff ? '?handoff=' + encodeURIComponent(handoff) : '');
     const response = await ThsSession.fetch(uploadPath, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
-      headers: { 'Content-Type': 'text/csv', 'X-Content-SHA256': hash, [csrfHeader]: csrfToken }, body: file,
+      headers: { 'Content-Type': 'text/csv', 'X-OUF-File-Name': encodeURIComponent(file.name), 'X-Content-SHA256': hash, [csrfHeader]: csrfToken }, body: file,
     });
     if (!response.ok) throw new Error('HTTP_' + response.status);
     const uploaded = await response.json();

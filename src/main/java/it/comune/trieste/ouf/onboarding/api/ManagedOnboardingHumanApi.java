@@ -24,7 +24,7 @@ public class ManagedOnboardingHumanApi {
     actors.requireHuman(request,"ouf.onboarding.configuration.write");
     return service.resumeActivation(ServletAuthorization.principal(request).context(),id,body,actors.authenticationContextRef(request));
   }
-  @PostMapping("/{id}/review/{action:confirm|reject|activate}") public Map<String,Object> action(
+  @PostMapping("/{id}/review/{action:confirm|reject|changes|activate}") public Map<String,Object> action(
       @PathVariable UUID id,@PathVariable String action,@RequestBody ManagedOnboardingReviewService.Decision body,HttpServletRequest request){
     actors.requireHuman(request,"ouf.onboarding.configuration.write");
     if("activate".equals(action))return activation.activate(ServletAuthorization.principal(request).context(),id,body,actors.authenticationContextRef(request),request.getHeader("Authorization"));

@@ -113,7 +113,7 @@ class PermissionProposalRuntimeTest {
   assertThat(afterLogin.getRedirectedUrl()).isEqualTo(page);
   var nextLogin=new org.springframework.mock.web.MockHttpServletResponse();
   thsLoginSuccess.onAuthenticationSuccess(request,nextLogin,null);
-  assertThat(nextLogin.getRedirectedUrl()).isEqualTo("/");
+  assertThat(nextLogin.getRedirectedUrl()).isEqualTo("/trusted-human/onboarding/");
   verify(decoder,never()).decode("fixture-expired");
  }
  @Test void expiredSessionOnApiReadOrWriteIsJsonEvenWithStaleCsrf()throws Exception{

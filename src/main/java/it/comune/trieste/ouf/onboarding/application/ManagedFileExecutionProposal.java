@@ -7,7 +7,12 @@ import java.util.*;
 public final class ManagedFileExecutionProposal {
   private static final Map<String,String> DATATYPES=Map.of("IDENTITY","string","DECIMAL_DOT_V1","decimal","DECIMAL_COMMA_V1","decimal","DATE_ISO_V1","date","DATE_DMY_V1","date");
   static String datatype(String transform){return "http://www.w3.org/2001/XMLSchema#"+DATATYPES.get(transform);}
-  public record SemanticBinding(String semanticId,String semanticVersion,String revisionId,String publicationSetId) {}
+  public record ReviewTerm(String iri,String labelIt,String descriptionIt,String license) {}
+  public record SemanticBinding(String semanticId,String semanticVersion,String revisionId,String publicationSetId,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      List<ReviewTerm> reviewTerms) {
+    public SemanticBinding(String id,String version,String revision,String set){this(id,version,revision,set,null);}
+  }
   public record Limits(int maxRows,int maxColumns,int maxCellChars) {}
   public record Proposal(List<SemanticBinding> semanticBindings,String semanticPublicationSetRef,
                          Map<String,Object> udp,Limits limits) {}
@@ -52,12 +57,26 @@ public final class ManagedFileExecutionProposal {
     require(!config.containsKey("relationshipMappings") || list(config.get("relationshipMappings"),0,0).isEmpty());
     String publication=uuid(proposal.semanticPublicationSetRef());
     require(proposal.semanticBindings()!=null && !proposal.semanticBindings().isEmpty() && proposal.semanticBindings().size()<=32);
+    var descriptions=new LinkedHashMap<String,Object>();
     Set<String> refs=new LinkedHashSet<>();List<Map<String,Object>> bindings=new ArrayList<>();
     for(SemanticBinding binding:proposal.semanticBindings()){
       require(binding!=null);String id=atom(binding.semanticId()),version=atom(binding.semanticVersion());
       require(refs.add(id+"@"+version) && publication.equals(uuid(binding.publicationSetId())));
-      bindings.add(Map.of("semanticId",id,"semanticVersion",version,"revisionId",uuid(binding.revisionId()),"publicationSetId",publication));
+      var pinned=new LinkedHashMap<String,Object>(Map.of("semanticId",id,"semanticVersion",version,
+          "revisionId",uuid(binding.revisionId()),"publicationSetId",publication));
+      if(binding.reviewTerms()!=null){
+        require(binding.reviewTerms().size()<=classes.size()+mapped.size());
+        for(var term:binding.reviewTerms()){
+          require(term!=null && (classes.contains(term.iri())||mapped.contains(term.iri())) && !descriptions.containsKey(term.iri()));
+          for(String value:Arrays.asList(term.labelIt(),term.descriptionIt(),term.license()))
+            require(value==null || (value.length()<=2048 && value.chars().noneMatch(Character::isISOControl)));
+          descriptions.put(term.iri(),Map.of("term",term,"binding",pinned));
+        }
+      }
+      bindings.add(pinned);
     }
+    config.remove("semanticReviewTerms");
+    if(!descriptions.isEmpty())config.put("semanticReviewTerms",descriptions);
     List<?> expectedRefs=list(semantic.get("semanticRefs"),1,32);
     require(new HashSet<>(expectedRefs).size()==expectedRefs.size() && refs.equals(new HashSet<>(expectedRefs)));
     for(Object raw:list(semantic.get("targetClasses"),1,32)){

@@ -174,7 +174,7 @@ public class PermissionThsSecurity {
       var session = r.getSession();
       var page = (String) session.getAttribute(RETURN_PAGE);
       session.removeAttribute(RETURN_PAGE);
-      s.sendRedirect(page != null ? page : r.getContextPath() + "/");
+      s.sendRedirect(page != null ? page : r.getContextPath() + "/trusted-human/onboarding/");
     };
   }
 

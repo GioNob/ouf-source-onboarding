@@ -25,6 +25,18 @@
           "publicationSetId"
         ],
         "properties": {
+          "reviewTerms": {
+            "type": "array", "maxItems": 1056,
+            "items": {
+              "type": "object", "additionalProperties": false, "required": ["iri"],
+              "properties": {
+                "iri": {"type": "string", "format": "uri"},
+                "labelIt": {"type": ["string","null"], "maxLength": 2048},
+                "descriptionIt": {"type": ["string","null"], "maxLength": 2048},
+                "license": {"type": ["string","null"], "maxLength": 2048}
+              }
+            }
+          },
           "semanticId": {
             "type": "string",
             "minLength": 1,
