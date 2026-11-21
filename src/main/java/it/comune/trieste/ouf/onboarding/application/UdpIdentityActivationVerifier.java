@@ -39,7 +39,11 @@ public class UdpIdentityActivationVerifier {
       var request=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(5))
           .header("Authorization","Bearer "+credential).GET().build();
       var response=http.send(request,HttpResponse.BodyHandlers.ofByteArray());
-      if(response.statusCode()!=200||response.body().length>65536)throw unavailable();
+      int status=response.statusCode();
+      if(Set.of(408,429,502,503,504).contains(status))
+        throw new TransientFailure("ONB_READINESS_DEPENDENCY_"+status,
+            ManagedActivationCoordinator.retryAfter(response.headers().firstValue("Retry-After").orElse("")));
+      if(status!=200||response.body().length>65536)throw unavailable();
       @SuppressWarnings("unchecked") Map<String,Object> attestation=json.readValue(response.body(),Map.class);
       if(!Boolean.TRUE.equals(attestation.get("valid"))
           ||!Objects.equals(configurationHash,attestation.get("configurationHash"))
@@ -50,10 +54,25 @@ public class UdpIdentityActivationVerifier {
           ||!Objects.equals(policy.get("version"),attestation.get("policyVersion"))
           ||!(attestation.get("coverageRef") instanceof String ref)
           ||!ref.startsWith("coverage://"))throw unavailable();
-    }catch(InterruptedException failure){Thread.currentThread().interrupt();throw unavailable();}
+    }catch(InterruptedException failure){
+      Thread.currentThread().interrupt();
+      throw new TransientFailure("ONB_READINESS_INTERRUPTED",0);
+    }catch(HttpTimeoutException|ConnectException failure){
+      for(Throwable cause=failure.getCause();cause!=null;cause=cause.getCause())
+        if(cause instanceof java.nio.channels.UnresolvedAddressException||cause instanceof UnknownHostException
+            ||cause instanceof javax.net.ssl.SSLException)throw unavailable();
+      throw new TransientFailure("ONB_READINESS_DEPENDENCY_UNAVAILABLE",0);
+    }
     catch(java.io.IOException|IllegalArgumentException failure){throw unavailable();}
+  }
+  static final class TransientFailure extends DomainFailure {
+    final int retryAfterSeconds;
+    TransientFailure(String code,int retryAfterSeconds){
+      super(HttpStatus.SERVICE_UNAVAILABLE,code,"UDP identity verification temporarily unavailable");
+      this.retryAfterSeconds=retryAfterSeconds;
+    }
   }
   private static String escape(String value){return URLEncoder.encode(value,StandardCharsets.UTF_8);}
   private static DomainFailure unavailable(){return new DomainFailure(HttpStatus.CONFLICT,
-      "ONB_UDP_IDENTITY_PREFLIGHT_REQUIRED","UDP identity coverage for the frozen configuration is unavailable or stale");}
+      "ONB_UDP_IDENTITY_EVIDENCE_UNPROVEN","UDP identity coverage for the frozen configuration is unavailable or stale");}
 }

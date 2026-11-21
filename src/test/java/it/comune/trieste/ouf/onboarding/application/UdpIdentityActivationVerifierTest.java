@@ -12,6 +12,34 @@ import org.junit.jupiter.api.io.TempDir;
 class UdpIdentityActivationVerifierTest {
   @TempDir Path temp;
 
+  @Test void finalReadClassifiesOnlyExplicitTemporaryStatusesAndRetainsRetryAfter()throws Exception{
+    var status=new java.util.concurrent.atomic.AtomicInteger();
+    var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+    server.createContext("/",exchange->{
+      exchange.getResponseHeaders().set("Retry-After","90");
+      exchange.sendResponseHeaders(status.get(),-1);exchange.close();
+    });
+    server.start();
+    try{
+      var token=Files.writeString(temp.resolve("fixture"),"test-workload");
+      var verifier=new UdpIdentityActivationVerifier(new ObjectMapper(),"http://127.0.0.1:"+server.getAddress().getPort(),token.toString());
+      for(int code:List.of(408,429,502,503,504)){
+        status.set(code);
+        assertThatThrownBy(()->verifier.requireCurrent("s","sha256:"+"1".repeat(64),Map.of()))
+            .isInstanceOfSatisfying(UdpIdentityActivationVerifier.TransientFailure.class,e->{
+              assertThat(e.code()).isEqualTo("ONB_READINESS_DEPENDENCY_"+code);
+              assertThat(e.retryAfterSeconds).isEqualTo(90);
+            });
+      }
+      for(int code:List.of(401,403,404,500)){
+        status.set(code);
+        assertThatThrownBy(()->verifier.requireCurrent("s","sha256:"+"1".repeat(64),Map.of()))
+            .isInstanceOfSatisfying(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,
+                e->assertThat(e.code()).isEqualTo("ONB_UDP_IDENTITY_EVIDENCE_UNPROVEN"));
+      }
+    }finally{server.stop(0);}
+  }
+
   @Test void exactFrozenConfigurationRequiresCurrentUdpAttestation()throws Exception{
     var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
     var valid=new java.util.concurrent.atomic.AtomicBoolean(true);

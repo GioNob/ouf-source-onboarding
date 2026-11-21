@@ -52,6 +52,17 @@ class ManagedFileRuntimeTest {
     var first=files.onboardIdempotent(asset,profile,"cinema-test","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"corr-1","create-1");
     var retry=files.onboardIdempotent(asset,profile,"cinema-test","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"corr-2","create-1");
     assertThat(retry).isEqualTo(first).containsEntry("state","DRAFT");
+    UUID nextAsset=(UUID)files.register(null,"object://staging/second.csv",hashes.ofBytes(csv),"text/csv",csv.length,"human:test","retention://30d").get("asset_id");
+    UUID nextProfile=(UUID)files.profile(nextAsset,csv,"object://samples/second.json").get("profile_id");
+    assertThatThrownBy(()->files.onboardIdempotent(nextAsset,nextProfile,"cinema-test","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"c","create-2"))
+        .isInstanceOfSatisfying(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,error->{
+          assertThat(error.status().value()).isEqualTo(409);
+          assertThat(error.code()).isEqualTo("ONB_SOURCE_ID_OCCUPIED");
+          assertThat(error.properties()).containsEntry("sourceId","cinema-test")
+              .containsEntry("nextActions",List.of("REVISION_PREPARE_WITH_NEW_FILE","USE_DIFFERENT_SOURCE_ID"));
+        });
+    var second=files.onboardIdempotent(nextAsset,nextProfile,"cinema-second","Cinema","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"c","create-3");
+    assertThat(second.get("onboardingVersionId")).isNotEqualTo(first.get("onboardingVersionId"));
     assertThat(first).doesNotContainKeys("configuration","stagingRef","contentHash");
     assertThat(db.sql("select count(*) from ouf_onboarding.onboarding_version where source_id='cinema-test'").query(Long.class).single()).isEqualTo(1);
     assertThatThrownBy(()->files.onboardIdempotent(asset,profile,"cinema-test","Changed","Comune","https://example.org/Cinema",List.of("core@1"),List.of(),List.of(),null,human,"corr-3","create-1"))

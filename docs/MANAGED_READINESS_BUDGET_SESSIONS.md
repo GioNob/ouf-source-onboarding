@@ -24,12 +24,16 @@ attempt lease. One active session is enforced by row locking and a partial
 unique index. Identical command keys reconcile a lost grant response instead
 of extending its deadline; changed intent conflicts.
 
-Only elapsed/exhausted, known transient PAUSED/EXHAUSTED states are eligible.
-An active lease, outstanding Retry-After/backoff, unknown outcome, BLOCKED
-state, unconfirmed approval, configuration drift, source ownership or current
-authorization denial cannot be bypassed by granting a budget. Old workers are
-fenced by the new generation. A session cannot undo a publication or start an
-acquisition by itself. No MCP grant/activation capability is introduced.
+V42 also reconciles interrupted claims after lease and budget expiry. The grant
+serializes with publication and verifies the confirmed decision, frozen hash,
+generation, elapsed budget, ownership and absence of a publication for that
+version. The card shows the reconciled reason. The journal retains the prior
+phase and records when the original error code was absent. A historical 403
+or an undifferentiated pre-V42 UDP failure can receive a fresh HUMAN budget
+for rechecking the dependency. Outstanding backoff, a live lease, unknown
+failures and inconsistent publication evidence keep the grant unavailable.
+The next activation verifies current authority and dependencies under a new
+generation. The grant itself writes only budget and audit state.
 
 The new operation is `POST .../approval-challenges/{id}/review/budget` through
 the current HUMAN Gateway namespace and existing configuration-write policy.

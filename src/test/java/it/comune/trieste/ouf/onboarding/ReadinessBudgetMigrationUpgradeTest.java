@@ -51,6 +51,17 @@ class ReadinessBudgetMigrationUpgradeTest {
           assertThatThrownBy(()->sql.execute("UPDATE ouf_onboarding.source_property_revision SET command_key='forbidden'"))
               .isInstanceOf(SQLException.class).hasMessageContaining("append-only");
           assertThat(one(sql,"SELECT to_jsonb(r)::text FROM ouf_onboarding.source_property_revision r")).isEqualTo(revision);
+
+          Flyway.configure().dataSource(isolated,user,password).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").target("40").load().migrate();
+          String beforeV42=one(sql,"SELECT to_jsonb(r)::text FROM ouf_onboarding.source_property_revision r");
+          String retained=one(sql,"SELECT to_jsonb(r)::text FROM ouf_onboarding.managed_onboarding_review r");
+          var recovery=Flyway.configure().dataSource(isolated,user,password).schemas("ouf_onboarding").defaultSchema("ouf_onboarding").target("42").load();
+          recovery.migrate();recovery.validate();
+          assertThat(recovery.migrate().migrationsExecuted).isZero();
+          assertThat(one(sql,"SELECT (to_jsonb(r)-'parent_state_at_prepare')::text FROM ouf_onboarding.source_property_revision r")).isEqualTo(beforeV42);
+          assertThat(one(sql,"SELECT parent_state_at_prepare FROM ouf_onboarding.source_property_revision")).isEqualTo("ACTIVE");
+          assertThat(one(sql,"SELECT to_jsonb(r)::text FROM ouf_onboarding.managed_onboarding_review r")).isEqualTo(retained);
+          assertThat(one(sql,"SELECT count(*) FROM ouf_onboarding.managed_candidate_recovery")).isEqualTo("0");
         }
       } finally { admin.execute("DROP DATABASE "+database+" WITH (FORCE)"); }
     }

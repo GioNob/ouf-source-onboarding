@@ -17,8 +17,11 @@ public class OnboardingService {
 
   @Transactional public Map<String,Object> createSource(String id,String name,String kind,String mode,String owner,Map<String,Object> metadata,Actor actor,String correlation){
     if("INTERNAL_MANAGED".equals(kind)&&!"MANAGED".equals(mode))throw bad("ONB_SOURCE_MODE_INVALID","INTERNAL_MANAGED requires MANAGED acquisition");
-    db.sql("insert into ouf_onboarding.source(source_id,name,source_kind,acquisition_mode,owner_ref,metadata) values(:i,:n,:k,:m,:o,cast(:x as jsonb))")
+    int inserted=db.sql("insert into ouf_onboarding.source(source_id,name,source_kind,acquisition_mode,owner_ref,metadata) values(:i,:n,:k,:m,:o,cast(:x as jsonb)) on conflict (source_id) do nothing")
       .param("i",id).param("n",name).param("k",kind).param("m",mode).param("o",owner).param("x",write(metadata)).update();
+    if(inserted==0)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_SOURCE_ID_OCCUPIED",
+        "Use a different sourceId or prepare an authorized revision with a new file.",
+        Map.of("sourceId",id,"nextActions",List.of("REVISION_PREPARE_WITH_NEW_FILE","USE_DIFFERENT_SOURCE_ID")));
     audit(id,null,correlation,actor,"SOURCE_CREATED",Map.of("sourceKind",kind)); return source(id);
   }
   public Map<String,Object> source(String id){return jsonRow(db.sql("select source_id,name,source_kind,acquisition_mode,status,owner_ref,metadata::text metadata,lock_version,created_at,updated_at from ouf_onboarding.source where source_id=:i").param("i",id).query().listOfRows().stream().findFirst().orElseThrow(()->missing("source")),"metadata");}
@@ -46,6 +49,18 @@ public class OnboardingService {
 
   @Transactional public Map<String,Object> submit(String sourceId,UUID id,long expected,Actor actor,String correlation){
     Map<String,Object> current=version(sourceId,id);Map<String,Object> validation=validate(sourceId,id,actor,correlation);if(!"PASS".equals(validation.get("result")))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALIDATION_FAILED","Configuration contains blocking validation errors");String hash=hashes.of(current.get("configuration"));
+    if(db.sql("""
+        select exists(select 1 from ouf_onboarding.managed_candidate_recovery w
+          join ouf_onboarding.managed_onboarding_review r on r.onboarding_version_id=w.candidate_id
+          join ouf_onboarding.onboarding_version prior on prior.onboarding_version_id=w.candidate_id
+          join ouf_onboarding.onboarding_version draft on draft.onboarding_version_id=:v
+          where w.source_id=:s and w.operation='WITHDRAW' and r.readiness_attempts>0
+            and (prior.parent_version_id is not distinct from draft.parent_version_id
+              or not exists(select 1 from ouf_onboarding.published_configuration where source_id=:s))
+            and ouf_onboarding.candidate_intent(prior.configuration)=ouf_onboarding.candidate_intent(draft.configuration))
+        """).param("s",sourceId).param("v",id).query(Boolean.class).single())
+      throw new DomainFailure(HttpStatus.CONFLICT,"ONB_WITHDRAWN_CONFIGURATION_REQUIRES_NEW_INTENT",
+          "A withdrawn verification requires a changed candidate");
     int rows=db.sql("update ouf_onboarding.onboarding_version set state='IN_REVIEW',configuration_hash=:h,frozen_at=transaction_timestamp(),lock_version=lock_version+1,updated_at=transaction_timestamp() where source_id=:s and onboarding_version_id=:i and state='DRAFT' and lock_version=:l")
       .param("h",hash).param("s",sourceId).param("i",id).param("l",expected).update();
     if(rows!=1)throw precondition();audit(sourceId,id,correlation,actor,"VERSION_SUBMITTED",Map.of("configurationHash",hash));return version(sourceId,id);
@@ -59,8 +74,13 @@ public class OnboardingService {
     Map<String,Object> response=new LinkedHashMap<>();response.put("validationRunId",runId);response.put("sourceId",sourceId);response.put("onboardingVersionId",id);response.put("configurationHash",hash);response.put("result",result.valid()?"PASS":"FAIL");response.put("errorCount",result.errors());response.put("warningCount",result.warnings());response.put("findings",result.findings());return response;
   }
 
+  private Map<String,Object> lockChallengeVersion(String source,UUID version){
+    db.sql("select onboarding_version_id from ouf_onboarding.onboarding_version where source_id=:s and onboarding_version_id=:v for update")
+        .param("s",source).param("v",version).query(UUID.class).optional().orElseThrow(()->missing("version"));
+    return version(source,version);
+  }
   @Transactional public Map<String,Object> createChallenge(String sourceId,UUID versionId,Actor actor,String correlation){
-    Map<String,Object> v=version(sourceId,versionId);if(!"IN_REVIEW".equals(v.get("state")))throw invalid("Version must be IN_REVIEW");
+    Map<String,Object> v=lockChallengeVersion(sourceId,versionId);if(!"IN_REVIEW".equals(v.get("state")))throw invalid("Version must be IN_REVIEW");
     UUID id=UUID.randomUUID();Instant expires=Instant.now().plus(challengeTtl);
     db.sql("insert into ouf_onboarding.approval_challenge(challenge_id,onboarding_version_id,source_id,configuration_hash,status,expires_at) values(:c,:v,:s,:h,'CREATED',:e)")
       .param("c",id).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).param("e",OffsetDateTime.ofInstant(expires,ZoneOffset.UTC)).update();
@@ -72,8 +92,8 @@ public class OnboardingService {
 
   @Transactional public Map<String,Object> confirm(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){
     if(!"HUMAN_USER".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_HUMAN_APPROVAL_REQUIRED","Approval requires a HUMAN_USER identity");
-    Map<String,Object> v=version(sourceId,versionId);
-    int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=transaction_timestamp() where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>transaction_timestamp() and configuration_hash=:h")
+    Map<String,Object> v=lockChallengeVersion(sourceId,versionId);
+    int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=clock_timestamp() where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>clock_timestamp() and configuration_hash=:h")
       .param("c",challengeId).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).update();
     if(challenge!=1)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");
     int changed=db.sql("update ouf_onboarding.onboarding_version set state='APPROVED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and source_id=:s and state='IN_REVIEW'")
@@ -88,10 +108,15 @@ public class OnboardingService {
     // Serialize publications and revision preparation on the same source fence.
     db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:s,0))) locked").param("s",sourceId).query(Integer.class).single();
     db.sql("select source_id from ouf_onboarding.source where source_id=:s for update").param("s",sourceId).query(String.class).single();
-    var revision=db.sql("select r.parent_version_id,r.parent_configuration_hash,r.replacement_profile_id,v.state,v.configuration_hash from ouf_onboarding.source_property_revision r join ouf_onboarding.onboarding_version v on v.onboarding_version_id=r.parent_version_id where r.onboarding_version_id=:v").param("v",versionId).query().listOfRows();
+    var revision=db.sql("select r.parent_version_id,r.parent_configuration_hash,r.parent_state_at_prepare,r.replacement_profile_id,v.state,v.configuration_hash from ouf_onboarding.source_property_revision r join ouf_onboarding.onboarding_version v on v.onboarding_version_id=r.parent_version_id where r.onboarding_version_id=:v").param("v",versionId).query().listOfRows();
     if(!revision.isEmpty()){
       var base=revision.getFirst();
-      if(!"ACTIVE".equals(base.get("state"))||!Objects.equals(base.get("parent_configuration_hash"),base.get("configuration_hash")))
+      boolean firstPublicationChanged="REJECTED".equals(base.get("parent_state_at_prepare"))&&db.sql("""
+          select exists(select 1 from ouf_onboarding.published_configuration where source_id=:s)
+            or exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s and state in ('ACTIVE','REVOKED'))
+          """).param("s",sourceId).query(Boolean.class).single();
+      if(firstPublicationChanged||!Objects.equals(base.get("parent_state_at_prepare"),base.get("state"))
+          ||!Objects.equals(base.get("parent_configuration_hash"),base.get("configuration_hash")))
         throw new DomainFailure(HttpStatus.PRECONDITION_FAILED,"ONB_REVISION_PARENT_DRIFT","ONB_REVISION_PARENT_DRIFT");
     }
     surveillance.assertActivationAllowed(sourceId);
@@ -147,7 +172,7 @@ public class OnboardingService {
 
   public Map<String,Object> approvalCard(UUID challengeId){Map<String,Object> row=jsonRow(db.sql("select c.challenge_id,c.source_id,c.onboarding_version_id,c.configuration_hash,c.status,c.expires_at,c.created_at,v.version,v.configuration::text configuration,s.name source_name from ouf_onboarding.approval_challenge c join ouf_onboarding.onboarding_version v on v.onboarding_version_id=c.onboarding_version_id join ouf_onboarding.source s on s.source_id=c.source_id where c.challenge_id=:i").param("i",challengeId).query().listOfRows().stream().findFirst().orElseThrow(()->missing("approval challenge")),"configuration");Map<String,Object> out=new LinkedHashMap<>(row);out.put("trustedApprovalRef","ths://approval-challenges/"+challengeId);out.put("changedSections",changedSections((Map<String,Object>)row.get("configuration"),latestConfigurationBefore(String.valueOf(row.get("source_id")),((Number)row.get("version")).intValue())));
     var configuration=(Map<String,Object>)row.get("configuration");ConfigurationValidator.spatial(configuration).ifPresent(profile->{out.put("spatialDecision",profile);out.put("spatialDecisionFindings",validator.validate(String.valueOf(row.get("source_id")),configuration).findings().stream().filter(f->f.path().startsWith("/extractionProfile/runtime/udp/spatial")).toList());});return out;}
-  @Transactional public Map<String,Object> reject(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){if(!"HUMAN_USER".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_HUMAN_APPROVAL_REQUIRED","Rejection requires a HUMAN_USER identity");Map<String,Object> v=version(sourceId,versionId);int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CANCELLED' where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>transaction_timestamp() and configuration_hash=:h").param("c",challengeId).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).update();if(challenge!=1)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");db.sql("update ouf_onboarding.onboarding_version set state='REJECTED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and state='IN_REVIEW'").param("v",versionId).update();db.sql("insert into ouf_onboarding.approval_decision(decision_id,challenge_id,onboarding_version_id,actor_subject,decision,target_hash,authentication_context_ref) values(:d,:c,:v,:a,'REJECT',:h,:x)").param("d",UUID.randomUUID()).param("c",challengeId).param("v",versionId).param("a",actor.subject()).param("h",v.get("configuration_hash")).param("x",authenticationContextRef).update();audit(sourceId,versionId,correlation,actor,"VERSION_REJECTED",Map.of("challengeId",challengeId.toString()));return version(sourceId,versionId);}
+  @Transactional public Map<String,Object> reject(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){if(!"HUMAN_USER".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_HUMAN_APPROVAL_REQUIRED","Rejection requires a HUMAN_USER identity");Map<String,Object> v=lockChallengeVersion(sourceId,versionId);if(!"IN_REVIEW".equals(v.get("state")))throw new DomainFailure(HttpStatus.CONFLICT,"ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CANCELLED' where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>clock_timestamp() and configuration_hash=:h").param("c",challengeId).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).update();if(challenge!=1)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");db.sql("update ouf_onboarding.onboarding_version set state='REJECTED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and state='IN_REVIEW'").param("v",versionId).update();db.sql("insert into ouf_onboarding.approval_decision(decision_id,challenge_id,onboarding_version_id,actor_subject,decision,target_hash,authentication_context_ref) values(:d,:c,:v,:a,'REJECT',:h,:x)").param("d",UUID.randomUUID()).param("c",challengeId).param("v",versionId).param("a",actor.subject()).param("h",v.get("configuration_hash")).param("x",authenticationContextRef).update();audit(sourceId,versionId,correlation,actor,"VERSION_REJECTED",Map.of("challengeId",challengeId.toString()));return version(sourceId,versionId);}
 
   void auditReadinessResume(String source,UUID version,Actor actor,Map<String,Object> detail){audit(source,version,UUID.randomUUID().toString(),actor,"READINESS_RESUME_REQUESTED",detail);}
   private void audit(String source,UUID version,String correlation,Actor actor,String event,Object payload){db.sql("insert into ouf_onboarding.audit_event(audit_event_id,source_id,onboarding_version_id,correlation_id,actor_subject,actor_type,event_type,payload_summary) values(:i,:s,:v,:c,:a,:t,:e,cast(:p as jsonb))").param("i",UUID.randomUUID()).param("s",source).param("v",version).param("c",correlation).param("a",actor.subject()).param("t",actor.type()).param("e",event).param("p",write(payload)).update();}
