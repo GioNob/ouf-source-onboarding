@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class TrustedActorResolver {
+  public PrincipalContext principal(HttpServletRequest request){return context(request).principal();}
   public OnboardingService.Actor actor(HttpServletRequest request){return actor(context(request));}
   public OnboardingService.Actor requireHuman(HttpServletRequest request,String capability){return require(request,capability,PrincipalContext.ActorType.HUMAN);}
   public OnboardingService.Actor requireService(HttpServletRequest request,String capability){return require(request,capability,PrincipalContext.ActorType.SERVICE);}

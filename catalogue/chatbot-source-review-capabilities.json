@@ -53,5 +53,14 @@
         "HUMAN"
       ]
     }
+  },
+  {
+    "ownerRef": "onboarding",
+    "descriptor": {
+      "capabilityId": "ouf.onboarding.schema-notices.read",
+      "operation": "READ",
+      "requiredScope": "ouf.onboarding.schema-notices.read",
+      "allowedActors": ["HUMAN"]
+    }
   }
 ]
