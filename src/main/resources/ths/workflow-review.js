@@ -11,6 +11,60 @@
   const status = (text, error = false) => { $('status').textContent = text; $('status').classList.toggle('error', error); };
   function element(tag, value, parent) { const e = document.createElement(tag); e.textContent = String(value ?? '—'); parent.append(e); return e; }
   function detail(label, value, parent) { const e = document.createElement('details'); element('summary', label, e); element('pre', JSON.stringify(value, null, 2), e); parent.append(e); }
+  function sourceLink(parent, label, value) {
+    if (!value) return;
+    let url;
+    try { url = new URL(value); } catch { /* Preserve non-web identifiers as text. */ }
+    if (url && ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) {
+      const link = element('a', label, parent);
+      link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    } else element('span', label, parent);
+  }
+  function semanticSummary(card, article) {
+    const types = {CLASS:'della classe', PROPERTY:'della proprietà', RELATIONSHIP:'della relazione',
+      VOCABULARY:'del vocabolario', CONCEPT:'del concetto', ONTOLOGY:'dell’ontologia'};
+    const source = card.adoptionProvenance || {};
+    const label = card.label_json?.it || card.local_name || card.semantic_id;
+    const english = card.label_json?.en;
+    const heading = card.status === 'OPEN' && !expired(card) ? 'Stai approvando l’adozione' : 'Richiesta di adozione';
+    element('h2', `${heading} ${types[card.artifact_type] || 'della definizione'} «${label}»${english ? ' (' + english + ')' : ''}`, article);
+    const facts = document.createElement('dl');
+    const fact = (name, value) => { element('dt', name, facts); return element('dd', value, facts); };
+    const iri = source.canonicalUri || card.semantic_id;
+    const id = fact('Identificativo (IRI)', '');
+    sourceLink(id, iri, iri);
+    if (source.sourceLocation && source.sourceLocation !== iri) {
+      id.append(' · '); sourceLink(id, 'Consulta la fonte', source.sourceLocation);
+    }
+    if (card.semantic_id && card.semantic_id !== iri) fact('Identificativo nel registro', card.semantic_id);
+    const poi = /^https?:\/\/w3id\.org\/italia\/onto\/POI\/?$/.test(card.namespace);
+    fact('Ontologia di provenienza (namespace)', poi ? `Punti di interesse (POI) · ${card.namespace}` : card.namespace);
+    const publisher = source.publisher;
+    const agid = /^https?:\/\/spcdata\.digitpa\.gov\.it\/Amministrazione\/agid\/?$/i.test(publisher);
+    fact('Editore (publisher)', agid ? `Agenzia per l’Italia Digitale (AgID) · ${publisher}` : publisher);
+    if (card.authority_ref && card.authority_ref !== publisher) fact('Autorità di riferimento', card.authority_ref);
+    fact('Descrizione', card.description_json?.it || card.description_json?.en ||
+      card.definition_json?.description?.it || 'Descrizione non disponibile nella fonte.');
+    if (source.license) fact('Licenza', source.license);
+    fact('Versione semantica', card.semantic_version); fact('Revisione', card.revision_no);
+    const date = new Date(card.expires_at);
+    fact('Scadenza della richiesta', Number.isFinite(date.valueOf()) ? date.toLocaleString('it-IT', {timeZoneName:'short'}) : card.expires_at);
+    article.append(facts);
+    const warnings = [];
+    if (source.licenseWarning || !source.license) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
+    for (const finding of card.validationFindings || []) {
+      warnings.push(typeof finding === 'string' ? finding : finding.message || finding.code || JSON.stringify(finding));
+    }
+    if (warnings.length) {
+      const section = document.createElement('section'); section.className = 'warnings';
+      element('h3', 'Avvisi da esaminare', section);
+      const list = document.createElement('ul');
+      for (const warning of warnings) element('li', warning, list);
+      section.append(list); article.append(section);
+    }
+    element('h3', 'Cosa comporta l’approvazione', article);
+    element('p', 'Approvi questa revisione. Con il successivo comando «Pubblica» la definizione diventa pubblicata e utilizzabile nei mapping delle fonti dell’ente. Non modifica dati esistenti e può essere deprecata in seguito.', article);
+  }
   const selected = () => [...cards.values()].filter(item => !semantic || item.checkbox.checked);
   const expired = card => Date.parse(card.expires_at) <= Date.now();
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
@@ -37,19 +91,20 @@
     let reason;
     if (card.challenge_id !== id) throw new Error('La risposta non appartiene alla revisione richiesta.');
     const article = document.createElement('article'); article.className = 'card';
-    element('h2', semantic ? (card.label_json?.it || card.local_name || card.semantic_id) : (card.source_name || card.source_id), article);
-    element('p', semantic ? `Semantica · ${card.artifact_type}` : `Fonte dati · ${card.source_id}`, article);
+    if (semantic) semanticSummary(card, article);
+    else {
+      element('h2', card.source_name || card.source_id, article);
+      element('p', `Fonte dati · ${card.source_id}`, article);
+    }
     element('p', semantic ? `Stato: ${card.lifecycleStatus || card.status}` : `Stato: ${card.onboardingState}`, article).className = 'state';
     if (expired(card) && ["CREATED", "OPEN"].includes(card.status)) element('p', 'La richiesta è scaduta. Torna alla chat per la riconciliazione.', article);
     if (semantic) {
       const definition = card.definition_json || {};
-      const description = card.description_json?.it || definition.description?.it;
-      if (description) element('p', description, article);
       detail('Definizione, ambito e vincoli', definition, article);
-      if (card.validationFindings?.length) detail('Avvertenze del validatore', card.validationFindings, article);
       if (card.interchangeSnapshot) detail('Contenuto semantico esatto', card.interchangeSnapshot, article);
     } else {
       const config = card.configuration || {}, mapping = config.semanticMapping || {};
+      element('h3', 'Classi di destinazione', article);
       for (const target of mapping.targetClasses || []) {
         element('h3', target.classIri, article);
         if (target.category) {
@@ -58,12 +113,25 @@
         } else element('p', 'Categoria assente', article);
       }
       const rows = mapping.propertyMappings || [];
+      const labels = new Map((config.dataAccessPolicies || []).filter(p => p.scope === 'PROPERTY').map(p => [p.target, p.label]));
       element('h3', 'Campi inclusi e corrispondenze', article);
       const table = document.createElement('table'), head = document.createElement('tr');
-      for (const name of ['Campo della fonte', 'Proprietà', 'Trasformazione']) element('th', name, head);
+      for (const name of ['Campo della fonte', 'Proprietà', 'Trasformazione', 'Etichetta di accesso']) element('th', name, head);
       table.append(head);
-      for (const row of rows) { const tr = document.createElement('tr'); for (const value of [row.sourceField, row.targetPropertyIri, row.transform]) element('td', value, tr); table.append(tr); }
+      const appendField = (field, property, transform) => {
+        const tr = document.createElement('tr');
+        for (const value of [field, property, transform, labels.get(property) || labels.get(field)]) element('td', value, tr);
+        table.append(tr);
+      };
+      for (const row of rows) appendField(row.sourceField, row.targetPropertyIri, row.transform);
+      const mapped = new Set(rows.map(row => row.sourceField));
+      const projection = config.extractionProfile?.projection?.[mapping.sourceType?.typeCode || 'FILE'] || [];
+      for (const field of projection) if (!mapped.has(field)) appendField(field, null, null);
       article.append(table);
+      element('h3', 'Campi esclusi', article);
+      const excluded = (card.newColumns || []).filter(item => item.decision === 'EXCLUDE');
+      if (!excluded.length) element('p', 'La scheda della fonte non elenca campi esclusi.', article);
+      for (const item of excluded) element('p', `${item.column} · Nessuna proprietà pubblicata · Accesso: ${item.accessLabel || 'non indicato'}`, article);
       if (card.newColumns?.length) {
         element('h3', 'Decisioni sulle colonne nuove', article);
         const decisions = document.createElement('table'), header = document.createElement('tr');
@@ -114,11 +182,19 @@
       label.append(checkbox); element('span', 'Ho esaminato questa proposta e la seleziono per la decisione.', label); article.append(label);
     }
     const previous = cards.get(id); if (previous) { previous.article.replaceWith(article); } else $('cards').append(article);
-    cards.set(id, { card, csrfHeader: response.csrfHeader, csrfToken: response.csrfToken, checkbox, article, reason }); checkbox.onchange = controls;
+    const intent = document.createElement('output'); intent.hidden = true; article.append(intent);
+    intent.oninput = () => { intent.hidden = !intent.value; };
+    cards.set(id, { card, csrfHeader: response.csrfHeader, csrfToken: response.csrfToken, checkbox, article, reason, intent });
+    checkbox.onchange = controls;
+    const fields = [intent];
+    if (semantic) fields.push(checkbox);
+    if (reason) fields.push(reason);
+    ThsSession.bind(JSON.stringify([id, card.target_content_hash || card.configuration_hash, card.status, card.lifecycleStatus,
+      card.lockVersion, card.progress?.activationProgress?.readiness_generation]), fields);
   }
   async function load(id) {
-    const response = await fetch(`api/${encodeURIComponent(id)}`, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
-    if (!response.ok) throw new Error(`Revisione non disponibile (${response.status}). La sessione o i permessi potrebbero richiedere un nuovo accesso.`);
+    const response = await ThsSession.fetch(`api/${encodeURIComponent(id)}`, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error(`Revisione non disponibile (HTTP ${response.status}).`);
     render(id, await response.json());
   }
   async function refresh() {
@@ -131,6 +207,7 @@
     const items = selected(); if (busy || !items.length) return;
     if (action === 'resume' ? !items.every(canResume) : action === 'budget' ? !items.every(canBudget) : action === 'complete' ? !items.every(canComplete) : !items.every(canApprove)) return;
     busy = true; controls(); let completed = 0;
+    for (const item of items) item.intent.value = `Scelta da verificare dopo il nuovo accesso: «${$(action).textContent}».`;
     try {
       for (const item of items) {
         const card = item.card, id = card.challenge_id;
@@ -146,8 +223,13 @@
             maximumAttempts: 3, maximumElapsedSeconds: 900 };
         }
         if (operation === 'resume') Object.assign(body, { expectedGeneration: card.progress.activationProgress.readiness_generation, blockedCode: card.progress.activationProgress.readiness_last_code });
-        const response = await fetch(`api/${encodeURIComponent(id)}/${operation}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', [item.csrfHeader]: item.csrfToken }, body: JSON.stringify(body) });
-        if (!response.ok) { let reason = ''; try { const failure = await response.json(); reason = failure.code || failure.detail || ''; } catch {} throw new Error(`Operazione non completata (${response.status})${reason ? ': ' + reason : ''}.`); }
+        const response = await ThsSession.fetch(`api/${encodeURIComponent(id)}/${operation}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', [item.csrfHeader]: item.csrfToken }, body: JSON.stringify(body) });
+        if (!response.ok) {
+          const failure = await response.json().catch(() => null);
+          const code = failure?.code || failure?.detail;
+          const reason = typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,159}$/.test(code) ? ' · ' + code : '';
+          throw new Error(`Operazione non completata (HTTP ${response.status}${reason}).`);
+        }
         await load(id); completed++;
       }
       status(action === 'resume' ? 'Ripresa registrata. Per proseguire scegli “Verifica e attiva”.' : `${completed} decisioni registrate. Puoi tornare alla chat per proseguire.`);

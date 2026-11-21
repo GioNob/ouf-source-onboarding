@@ -190,6 +190,7 @@
       details.append(node('summary', null, 'Mostra JSON, motivo ed evidenze'), node('pre', null, JSON.stringify(issue, null, 2)));
       row.append(details); rows.append(row);
       if (defer.checked) { action.disabled = true; target.disabled = true; reason.disabled = true; row.classList.add('deferred'); }
+      ThsSession.bind(JSON.stringify([issue.issueId,issue.version,issue.reviewHash,pkg.snapshotHash]), [defer,action,target,reason]);
       updateEffect();
     });
     selectionSummary(); message(`${pkg.issues.length} casi aperti. Confronta i dati; lascia in quarantena quelli su cui vuoi decidere più tardi.`);
@@ -199,7 +200,7 @@
     if (submitting) return;
     confirm.disabled = true; message('Caricamento dei casi…');
     try {
-      const response = await fetch('api/package', {credentials: 'same-origin', cache: 'no-store'});
+      const response = await ThsSession.fetch('api/package', {credentials: 'same-origin', cache: 'no-store'});
       if (!response.ok) throw new Error(`Lettura non disponibile (HTTP ${response.status}).`);
       const data = await response.json(); current = data.package; csrf = {[data.csrfHeader]: data.csrfToken}; render(current);
     } catch (error) { current = null; rows.replaceChildren(); message(error.message, true); }
@@ -216,7 +217,7 @@
       targetUrbanObjectId: row.querySelector('.action').value === 'APPROVE' ? row.querySelector('.target').value : null,
       reason: row.querySelector('.reason-input').value.trim()}));
     try {
-      const response = await fetch('api/package/confirm', {method: 'POST', credentials: 'same-origin',
+      const response = await ThsSession.fetch('api/package/confirm', {method: 'POST', credentials: 'same-origin',
         headers: {'Content-Type': 'application/json', ...csrf}, body: JSON.stringify({snapshotHash: current.snapshotHash, choices})});
       if (!response.ok) {
         let code = '';

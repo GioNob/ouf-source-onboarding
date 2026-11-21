@@ -23,13 +23,15 @@
     $('identity').textContent=`File: ${asset}\nJob: ${job}\nContenuto: ${card.contentHash}\n${card.sessionId?'Sessione: '+card.sessionId+'\nDecisione: '+card.decisionRef:''}`;
     $('history').replaceChildren();for(const event of card.history||[]){const li=document.createElement('li');li.textContent=`${event.created_at} · ${event.event_type} · tentativi ${event.cumulative_attempts}`;$('history').append(li);}
     $('truncated').textContent=card.historyTruncated?'Sono mostrate le ultime 16 transizioni. La storia completa è conservata.':'';
-    $('confirmed').checked=false;controls();
+    $('confirmed').checked=false;
+    ThsSession.bind(JSON.stringify([asset,job,card.reviewHash,card.expectedGeneration,card.expectedVersion,card.status]), [$('reason'),$('confirmed')]);controls();
   }
   function renderOwnership(){
     $('review').hidden=true;$('ownership-review').hidden=false;$('ownership-facts').replaceChildren();
     const facts=[['Tenant della sessione',ownershipCard.tenantId],['Identità OUF',ownershipCard.subjectId],['File conservato',asset],['Job conservato',job],['Contenuto',ownershipCard.contentHash],['Dimensione',`${ownershipCard.sizeBytes} byte`],['Tentativi cumulativi',ownershipCard.cumulativeAttempts]];
     for(const[label,value]of facts){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=String(value);$('ownership-facts').append(dt,dd);}
-    $('ownership-confirmed').checked=false;controls();
+    $('ownership-confirmed').checked=false;
+    ThsSession.bind(JSON.stringify([asset,job,'ownership',ownershipCard.reviewHash,ownershipCard.tenantId,ownershipCard.subjectId]), [$('ownership-reason'),$('ownership-confirmed')]);controls();
   }
   const denialCodes=new Set(['ONB_CAPABILITY_DENIED','ONB_AUTHORIZATION_DENIED','ONB_ACTOR_TYPE_DENIED','ONB_PROFILE_HUMAN_CAPABILITY_REQUIRED','ONB_FILE_OWNER_SCOPE_UNPROVEN','ONB_FILE_OWNER_DENIED','THS_SESSION_REQUIRED']);
   function accessFailure(error,action=false){
@@ -41,7 +43,7 @@
     return 'Accesso negato (HTTP 403). '+cause+' Un nuovo login non concede permessi.'+(action?' Conserva e riconcilia la stessa richiesta; non concedere un altro budget.':' Il lavoro è conservato; nessuna azione è stata inviata.')+code+reference;
   }
   async function request(path,options={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),16000);
-    try{const response=await fetch(path,{credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,...options});
+    try{const response=await ThsSession.fetch(path,{credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,...options});
       if(!response.ok){const error=new Error();error.status=response.status;
         // Never render arbitrary error detail, HTML, credentials or storage references.
         try{const raw=await response.text();if(raw.length<=4096){const problem=JSON.parse(raw);const code=problem.code||problem.Code;
