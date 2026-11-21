@@ -10,7 +10,7 @@ function ownerReview(asset,job){return{status:'OWNER_BINDING_REVIEW_REQUIRED',as
 async function surface(run){
   const root=path.resolve('src/main/resources/ths');
   const server=http.createServer((req,res)=>{const part=req.url.split('?')[0];const name=part.endsWith('/session.js')?'session.js':part.endsWith('/recovery.js')?'profile-recovery.js':part.endsWith('/recovery.css')?'profile-recovery.css':'profile-recovery.html';
-    res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");res.end(fs.readFileSync(path.join(root,name)));});
+    res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");res.end(require('./ths-asset.cjs')(name));});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const browser=await chromium.launch({headless:true});
   const asset='00000000-0000-4000-8000-000000000001',job='00000000-0000-4000-8000-000000000002';
   try{await run(await browser.newPage(),`http://127.0.0.1:${server.address().port}/trusted-human/managed-files/recovery/?asset=${asset}&job=${job}`,asset,job);}

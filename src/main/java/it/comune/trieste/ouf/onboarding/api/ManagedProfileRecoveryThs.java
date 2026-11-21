@@ -90,6 +90,6 @@ public class ManagedProfileRecoveryThs {
   private ResponseEntity<byte[]> asset(String name,MediaType type)throws IOException{return ResponseEntity.ok().contentType(type).cacheControl(CacheControl.noStore())
       .header("X-Content-Type-Options","nosniff").header("Referrer-Policy","no-referrer").header("X-Frame-Options","DENY")
       .header("Content-Security-Policy","default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-      .body(new ClassPathResource("ths/"+name).getContentAsByteArray());}
+      .body(ThsAssets.read(name));}
 }
 
