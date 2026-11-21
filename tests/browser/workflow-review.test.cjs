@@ -71,6 +71,10 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     assert.equal(await page.locator('article input').isChecked(),false);assert.equal(posts.length,2);
     let sourcePosts=0,budgetPosts=0,budgetCommand;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{targetClasses:[{classIri:"urn:example:class",category:{schemeIri:"urn:example:scheme",conceptIri:"urn:example:concept"}},{classIri:"urn:example:other"}],propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
     source.configuration.dataAccessPolicies=[{scope:'PROPERTY',target:'urn:name',label:'RESTRICTED'}];
+    source.termVerification='COMPLETE';
+    source.verifiedTerms=Object.fromEntries(['urn:example:class','urn:example:other','urn:name'].map(iri=>[iri,{
+      artifactType:iri==='urn:name'?'PROPERTY':'CLASS',labelIt:'Termine '+iri,descriptionIt:'Descrizione',
+      semanticVersion:'1',revisionId:id,publicationSetId:id,publisher:'Comune',license:'CC BY'}]));
     source.newColumns=[{column:'note',decision:'EXCLUDE'},{column:'nome',decision:'MAP',mapping:{propertyIri:'urn:name',transform:'IDENTITY',reconciliation:{cardinality:'SINGLE'}}}];
     await page.route('**/trusted-human/onboarding/api/**',async route=>{
       if(route.request().method()==='POST' && route.request().url().endsWith('/resume')){
@@ -96,14 +100,14 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
       else await route.fulfill({json:{card:source,csrfHeader:'X-CSRF-TOKEN',csrfToken:'test-csrf'}});
     });
     await page.goto(`${base}/trusted-human/onboarding/?challenge=${id}`);
-    for(const label of ['urn:example:class','Vocabolario: urn:example:scheme','Categoria: urn:example:concept','Categoria assente'])
+    for(const label of ['Termine urn:example:class · urn:example:class','Vocabolario: urn:example:scheme','Categoria: urn:example:concept','Categoria assente'])
       await page.getByText(label,{exact:true}).waitFor({state:'visible'});
     await page.locator('article.card').waitFor();assert.equal(sourcePosts,0);
     assert.match(await page.locator('article').innerText(),/RESTRICTED/);
     await page.getByText('note · Nessuna proprietà pubblicata · Accesso: non indicato',{exact:true}).waitFor();
     const decisions=page.getByRole('table').filter({has:page.getByRole('columnheader',{name:'Decisione',exact:true})});
     assert.equal(await decisions.getByRole('row',{name:/note EXCLUDE Conservata solo nel file/}).isVisible(),true);
-    const mapped=decisions.getByRole('row',{name:/nome MAP urn:name/});
+    const mapped=decisions.getByRole('row',{name:/nome MAP Termine urn:name · urn:name/});
     await mapped.getByText('Trasformazione e regole').click();
     assert.match(await mapped.innerText(),/IDENTITY/);assert.match(await mapped.innerText(),/SINGLE/);
     await page.locator('#approve').click();

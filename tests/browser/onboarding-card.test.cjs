@@ -1,6 +1,5 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const {chromium} = require('playwright');
 
 test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisione dal rifiuto', async () => {
@@ -12,7 +11,7 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
     const names = ['codice','nome','latitudine','capienza','apertura','referente','indirizzo','civico','frazione','provincia','telefono','mail','sito','orario','note','zona','stato','gestore','anno','ingresso','uscita'];
     const labels = ['ha codice','denominazione','latitudine','capienza','data di apertura'];
     const field = {}, semantic = {}, signals = {};
-    const ref = (kind,labelIt) => ({kind,labelIt,semanticVersion:'1.3',publicationSetId:'set-luoghi',descriptionIt:'Definizione del catalogo',license:'CC BY 4.0'});
+    const ref = (artifactType,labelIt) => ({artifactType,labelIt,semanticVersion:'1.3',revisionId:id,publicationSetId:'set-luoghi',descriptionIt:'Definizione del catalogo',publisher:'Comune di Trieste',license:'CC BY 4.0'});
     semantic[cls] = ref('CLASS','Luogo pubblico');
     for (const [i,name] of names.entries()) {
       const iri = 'https://example.org/luoghi/' + name;
@@ -24,11 +23,14 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
       }
     }
     semantic[field.latitudine.property].license = null;
+    semantic[field.latitudine.property].descriptionIt = null;
+    const agent = {labelIt:'FALSO-AGENTE',descriptionIt:'FALSO-AGENTE',license:'FALSO-AGENTE'};
     const snapshot = {sourceName:'Luoghi civici',owner:'Comune',file:{name:'Luoghi.csv',size:4217,rows:27,columns:21,format:'CSV'},
-      columnOrder:names,FIELD:field,SEMANTIC:semantic,LIMITS:{maxRows:1500,maxColumns:25,maxCellChars:800},
+      columnOrder:names,FIELD:field,SEMANTIC:Object.fromEntries(Object.keys(semantic).map(iri=>[iri,agent])),LIMITS:{maxRows:1500,maxColumns:25,maxCellChars:800},
       IDENTITY:{sourceKey:['codice'],...signals,'sufficientRules:codice':{id:'codice',signalIds:[field.codice.property]},allowAutoNew:false,maxCandidates:5}};
     const card = {challenge_id:id,source_id:'luoghi',version:1,status:'CREATED',onboardingState:'IN_REVIEW',configuration_hash:'sha256:'+'b'.repeat(64),lockVersion:2,
-      expires_at:'2999-01-01T00:00:00Z',reviewSnapshot:snapshot,configuration:{semanticMapping:{targetClasses:[{classIri:cls}]}}};
+      expires_at:'2999-01-01T00:00:00Z',reviewSnapshot:snapshot,verifiedTerms:semantic,termVerification:'COMPLETE',
+      configuration:{semanticReviewTerms:{[cls]:agent},semanticReferenceBindings:[{reviewTerms:[agent]}],semanticMapping:{targetClasses:[{classIri:cls}]}}};
     const posts=[], errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/*',async route=>{
@@ -54,13 +56,30 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
     assert.equal(await table.getByRole('rowheader').count(),21);
     assert.equal(await table.getByText('Inclusa',{exact:true}).count(),5);
     assert.equal(await table.getByText('Esclusa · non verrà acquisita',{exact:true}).count(),16);
-    assert.equal(await table.getByRole('link',{name:'codice'}).getAttribute('href'),field.codice.property);
+    assert.equal(await table.getByRole('link',{name:field.codice.property,exact:true}).getAttribute('href'),field.codice.property);
     assert.match(await table.innerText(),/dato personale/);
     for(const text of ['testo','numero','data','ha codice','chiave della fonte','segnale d’identità'])assert.ok((await table.innerText()).includes(text));
     const article=page.locator('article');
     for(const text of ['Luoghi.csv','4217 byte','27 righe · 21 colonne','Luogo pubblico','del proprietario Comune','Cosa comporta l’approvazione','Ingestion acquisisce','UDP materializza','disattivare','1500','set-luoghi','tutti i segnali','creazione richiede'])assert.ok((await article.innerText()).includes(text),text);
     const warnings=await page.locator('.warnings').innerText();
-    for(const text of ['latitudine · il profilo rileva un numero','latitudine · licenza','referente · dato personale · esclusa'])assert.ok(warnings.includes(text),text);
+    for(const text of ['latitudine · il profilo rileva un numero','latitudine · licenza','latitudine · descrizione italiana assente','referente · dato personale · esclusa'])assert.ok(warnings.includes(text),text);
+    for(const text of ['verificato dal registro semantico','Definizione del catalogo','Classe','Proprietà','Comune di Trieste','CC BY 4.0']) assert.ok((await article.innerText()).includes(text),text);
+    assert.doesNotMatch(await article.textContent(),/FALSO-AGENTE/);
+    assert.ok(await page.locator('#approve').isEnabled());
+    for (const state of ['UNAVAILABLE','INCOMPLETE']) {
+      card.termVerification=state;card.verifiedTerms=state==='UNAVAILABLE'?{}:{...semantic};
+      delete card.verifiedTerms[cls];
+      await page.reload(); await table.waitFor();
+      const notices=await page.locator('.warnings').allTextContents();
+      assert.ok(notices.some(text=>text.includes(cls+' · etichetta non verificata dal registro')));
+      if(state==='UNAVAILABLE')assert.ok(notices.some(text=>text.includes('Registro semantico non disponibile')));
+      else assert.match(await table.innerText(),/ha codice/);
+      assert.ok(await page.locator('#approve').isDisabled());
+      assert.ok(await page.locator('#reject').isEnabled());
+      assert.doesNotMatch(await article.textContent(),/FALSO-AGENTE/);
+    }
+    card.termVerification='COMPLETE';card.verifiedTerms=semantic;
+    await page.reload();await table.waitFor();assert.ok(await page.locator('#approve').isEnabled());
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
     assert.equal(await page.locator('#changes').isDisabled(),true);
     const flag=table.getByRole('checkbox',{name:'Da modificare · Campo referente',exact:true});
@@ -79,10 +98,12 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
       body:{configurationHash:card.configuration_hash,expectedVersion:2,reviewFeedback:[{section:'FIELD',target:'referente',comment:'Rivedere <b>il contatto</b>'},
         {section:'IDENTITY',target:'maxCandidates',comment:''},{section:'SEMANTIC',target:cls,comment:''},{section:'LIMITS',target:'maxRows',comment:''}]}});
     card.previousReview={version:1,feedback:posts[0].body.reviewFeedback,changes:[{section:'FIELD',target:'referente',before:{...field.referente},after:{...field.referente,access:'RESTRICTED'}}]};
+    card.previousReview.changes.push({section:'SEMANTIC',target:cls,before:{...agent,revisionId:'old'},after:{...agent,revisionId:'new'}});
     field.referente.access='RESTRICTED'; card.version=2; card.status='CREATED'; card.onboardingState='IN_REVIEW';
     await page.reload(); await page.getByRole('heading',{name:'Differenze rispetto alla versione 1'}).waitFor();
     const diff=page.locator('.warnings').first();
     assert.match(await diff.innerText(),/PERSONAL.*→.*RESTRICTED/);
+    assert.doesNotMatch(await diff.textContent(),/FALSO-AGENTE/);
     assert.match(await diff.innerText(),/Rivedere <b>il contatto<\/b>/);
     assert.equal(await diff.locator('b').count(),0);
     assert.equal(await page.locator('#changes').isDisabled(),true);
