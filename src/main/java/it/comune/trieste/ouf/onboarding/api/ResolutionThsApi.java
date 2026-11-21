@@ -99,6 +99,6 @@ public class ResolutionThsApi {
         .header("X-Content-Type-Options","nosniff").header("Referrer-Policy","no-referrer")
         .header("X-Frame-Options","DENY")
         .header("Content-Security-Policy","default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-        .body(new ClassPathResource("ths/"+name).getContentAsByteArray());
+        .body(ThsAssets.read(name));
   }
 }

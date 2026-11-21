@@ -43,7 +43,7 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
         return route.fulfill({json:{card,csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture'}});
       }
       const asset=url.pathname.endsWith('session.js')?'session.js':url.pathname.endsWith('review.js')?'workflow-review.js':url.pathname.endsWith('review.css')?'workflow-review.css':'workflow-review.html';
-      return route.fulfill({path:path.resolve('src/main/resources/ths',asset)});
+      return route.fulfill({body:require('./ths-asset.cjs')(asset),contentType:asset.endsWith('.js')?'text/javascript':asset.endsWith('.css')?'text/css':'text/html'});
     });
     await page.goto(base);
     await page.getByText('Accesso effettuato: apri il link della richiesta da approvare').waitFor();

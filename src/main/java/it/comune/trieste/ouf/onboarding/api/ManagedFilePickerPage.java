@@ -167,6 +167,6 @@ public class ManagedFilePickerPage {
         .header("Referrer-Policy", "no-referrer")
         .header("X-Frame-Options", "DENY")
         .header("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-        .body(new ClassPathResource("ths/" + name).getContentAsByteArray());
+        .body(ThsAssets.read(name));
   }
 }
