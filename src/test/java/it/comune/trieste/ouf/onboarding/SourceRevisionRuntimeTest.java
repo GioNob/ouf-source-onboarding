@@ -123,6 +123,25 @@ class SourceRevisionRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
   }
 
+  @Test void replacementReferenceAloneChecksOwnerAndDriftBeforeFreezingTheRevision() {
+    var p=principal(UUID.randomUUID().toString(),human.subject());
+    var parent=activeCsv(p);
+    var next=csv("id;amount\nr1;10\nr2;20\n",p.tenantId(),null,true);
+    var legacy=replace(parent,next);
+    var page=files.unitView(next.assetId(),next.profileId(),"table:0",0,1);
+    var pin=new SourceUnitProfiles.Reference(next.profileId(),1,"table:0",(String)page.get("schemaHash"));
+    java.util.function.Function<SourceUnitProfiles.Reference,SourceRevisionService.Prepare> command=ref->
+        new SourceRevisionService.Prepare("s",parent,legacy.expectedVersion(),legacy.configurationHash(),
+            legacy.commandKey(),legacy.publicationEffect(),null,null,null,ref);
+    assertThatThrownBy(()->revisions.prepare(p,command.apply(new SourceUnitProfiles.Reference(
+        next.profileId(),1,"table:0","sha256:"+"0".repeat(64))),"drift")).hasMessage("ONB_UNIT_SCHEMA_CHANGED");
+    var receipt=revisions.prepare(p,command.apply(pin),"pin");
+    var extraction=section(configuration((UUID)receipt.get("onboardingVersionId")),"extractionProfile");
+    assertThat(section(extraction,"selection").get("unitProfileRef")).isEqualTo(Map.of("profileId",next.profileId().toString(),
+        "profileVersion",1,"unitRef","table:0","schemaHash",pin.schemaHash()));
+    assertThat(revisions.prepare(p,command.apply(pin),"replay")).isEqualTo(receipt);
+  }
+
   @Test void csvReplacementPublishesOnlyAfterConfirmationAndAttestation(){
     var p=principal(UUID.randomUUID().toString(),human.subject());
     var parent=activeCsv(p);

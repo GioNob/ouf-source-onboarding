@@ -84,19 +84,8 @@ public final class ManagedCsvRevision {
     var additions=decisions.stream().filter(d->"MAP".equals(d.decision())).toList();
     if(!additions.isEmpty())extendMappings(config,additions);
 
-    String id=asset.get("asset_id").toString(),profileId=profile.get("profile_id").toString();
-    String ref=schemaRef(id,profileId);
-    selection.put("assetId",id);
-    selection.put("fileProfileId",profileId);
-    runtime.put("assetId",id);
-    runtime.put("fileProfileId",profileId);
-    runtime.put("stagingRef",asset.get("staging_ref"));
-    runtime.put("contentHash",asset.get("content_hash"));
+    ManagedUnitRevision.bindAsset(selection,runtime,execution,bundle,asset,profile.get("profile_id").toString(),version);
     runtime.put("csvDelimiter",delimiter);
-    execution.put("expectedSize",asset.get("size_bytes"));
-    execution.put("sourceSchemaRef",ref);
-    execution.put("sourceSchemaVersion",String.valueOf(version));
-    bundle.put("schemaRef",ref);
   }
 
   static void checkColumns(Map<String,String> before,Map<String,String> after,Map<String,String> mapped,

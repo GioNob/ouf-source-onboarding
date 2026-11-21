@@ -24,7 +24,13 @@ public class ManagedOnboardingReviewService {
   private final AuthorizationPolicyRegistry policy;
   private final String publicOrigin;
   public record Prepare(String sourceId,UUID onboardingVersionId,long expectedVersion,
-      String commandKey,ManagedFileExecutionProposal.Proposal executionProposal) {}
+      String commandKey,ManagedFileExecutionProposal.Proposal executionProposal,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      SourceUnitProfiles.Reference unitProfileRef) {
+    public Prepare(String sourceId,UUID onboardingVersionId,long expectedVersion,String commandKey,ManagedFileExecutionProposal.Proposal proposal) {
+      this(sourceId,onboardingVersionId,expectedVersion,commandKey,proposal,null);
+    }
+  }
   public ManagedOnboardingReviewService(JdbcClient db,OnboardingService onboarding,
       ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy,
       @Value("${ouf.authorization.ths.public-origin:}") String publicOrigin){
@@ -74,6 +80,9 @@ public class ManagedOnboardingReviewService {
     db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:v,0))) locked")
         .param("v",request.onboardingVersionId().toString()).query(Integer.class).single();
     var current=ownedVersion(p,request.sourceId(),request.onboardingVersionId());
+    @SuppressWarnings("unchecked") var configuration=(Map<String,Object>)current.get("configuration");
+    var pin=request.unitProfileRef()!=null?request.unitProfileRef():files.selectedReference(configuration);
+    var unit=pin==null?null:files.verifySelection(configuration,pin,p.tenantId(),p.subjectId());
     var retained=db.sql("select * from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:v or (tenant_id=:t and subject_id=:s and command_key=:k)")
         .param("v",request.onboardingVersionId()).param("t",p.tenantId()).param("s",p.subjectId())
         .param("k",request.commandKey()).query().listOfRows();
@@ -89,12 +98,21 @@ public class ManagedOnboardingReviewService {
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_VERSION");
     var actor=new OnboardingService.Actor(p.subjectId(),"HUMAN_USER",Set.of(PREPARE));
     long version=request.expectedVersion();
-    if(request.executionProposal()!=null){
-      @SuppressWarnings("unchecked") var configuration=(Map<String,Object>)current.get("configuration");
-      @SuppressWarnings("unchecked") var metadata=(Map<String,Object>)onboarding.source(request.sourceId()).get("metadata");
-      var asset=files.asset(UUID.fromString(String.valueOf(metadata.get("managedFileAssetId"))));
-      var complete=ManagedFileExecutionProposal.compile(configuration,asset,p.tenantId(),request.executionProposal());
-      current=onboarding.patchVersion(request.sourceId(),request.onboardingVersionId(),version,complete,actor,correlation);
+    if(request.unitProfileRef()!=null || request.executionProposal()!=null){
+      @SuppressWarnings("unchecked") var extraction=(Map<String,Object>)configuration.get("extractionProfile");
+      @SuppressWarnings("unchecked") var selection=(Map<String,Object>)extraction.get("selection");
+      if(unit!=null) {
+        selection.put("unitProfileRef",pin.asMap());
+        @SuppressWarnings("unchecked") var runtime=(Map<String,Object>)extraction.get("runtime");
+        if(unit.kind().equals("SHEET"))runtime.put("format","XLSX");
+        if(!unit.kind().equals("TABLE"))runtime.put("readParameters",unit.readParameters());
+      }
+      if(request.executionProposal()!=null) {
+        var metadata=(Map<?,?>)onboarding.source(request.sourceId()).get("metadata");
+        var asset=files.asset(UUID.fromString((String)(unit==null?metadata.get("managedFileAssetId"):selection.get("assetId"))));
+        configuration=ManagedFileExecutionProposal.compile(configuration,asset,p.tenantId(),request.executionProposal());
+      }
+      current=onboarding.patchVersion(request.sourceId(),request.onboardingVersionId(),version,configuration,actor,correlation);
       version=((Number)current.get("lock_version")).longValue();
     }
     current=onboarding.submit(request.sourceId(),request.onboardingVersionId(),version,actor,correlation);
