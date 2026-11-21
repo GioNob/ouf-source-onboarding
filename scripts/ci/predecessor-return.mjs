@@ -33,7 +33,10 @@ async function ready(container, phase) {
     try {
       response = await fetch(app + '/actuator/health/readiness', {redirect: 'manual', signal: AbortSignal.timeout(2000)});
     } catch (error) {
-      if (error.cause?.code !== 'ECONNREFUSED' && error.name !== 'TimeoutError' && error.cause?.code !== 'ECONNRESET') throw error;
+      // While the container starts, the socket may refuse, reset or close early (UND_ERR_SOCKET).
+      // Keep polling until the deadline; a stopped container ends the loop and fails below.
+      const transient = ['ECONNREFUSED', 'ECONNRESET', 'UND_ERR_SOCKET', 'UND_ERR_CLOSED'];
+      if (error.name !== 'TimeoutError' && !transient.includes(error.cause?.code) && error.message !== 'fetch failed') throw error;
     }
     if (response?.status === 200) {
       assert.equal((await response.json()).status, 'UP');
