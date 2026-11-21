@@ -8,6 +8,73 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /source-revision-mcp/prepare:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: prepareSourceRevision
+      description: With property changes the unit reference identifies the parent selection. For asset replacement it identifies the incoming unit. Sheet and layer replacements retain the approved interpretation, schema and stable key.
+      x-ouf-mcp-capability: ouf.onboarding.revision.prepare
+      parameters:
+        - {name: X-OUF-Source-Revision-Receipt, in: header, required: true, schema: {type: string}}
+        - {name: If-Match, in: header, description: Required for an asset replacement., schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Arguments]
+              properties:
+                Arguments:
+                  type: object
+                  required: [sourceId, parentVersionId, expectedVersion, commandKey, configurationHash, publicationEffect]
+                  properties:
+                    sourceId: {type: string}
+                    commandKey: {type: string}
+                    expectedVersion: {type: integer, minimum: 0}
+                    unitProfileRef: {$ref: '#/components/schemas/SourceUnitReference'}
+                    parentVersionId: {type: string, format: uuid}
+                    configurationHash: {type: string}
+                    publicationEffect: {const: NEW_PUBLICATION_MAY_START_ACQUISITION}
+                    changes: {type: array, items: {type: object}}
+                    assetRef:
+                      type: object
+                      required: [assetId, profileId]
+                      properties: {assetId: {type: string, format: uuid}, profileId: {type: string, format: uuid}}
+                    newColumns: {type: array, items: {type: object}}
+      responses:
+        '200': {description: Prepared review receipt}
+        '409': {description: ONB_UNIT_PROFILE_CHANGED or ONB_UNIT_SCHEMA_CHANGED or ONB_UNIT_SELECTION_CHANGED}
+        default: {$ref: '#/components/responses/Problem'}
+  /managed-file-mcp/review-prepare:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: prepareManagedFileReview
+      x-ouf-mcp-capability: ouf.managed-source.onboarding.review.prepare
+      parameters:
+        - {name: X-OUF-Managed-File-Receipt, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Arguments]
+              properties:
+                Arguments:
+                  type: object
+                  required: [sourceId, onboardingVersionId, expectedVersion, commandKey]
+                  properties:
+                    sourceId: {type: string}
+                    commandKey: {type: string}
+                    expectedVersion: {type: integer, minimum: 0}
+                    unitProfileRef: {$ref: '#/components/schemas/SourceUnitReference'}
+                    onboardingVersionId: {type: string, format: uuid}
+                    executionProposal: {type: object}
+      responses:
+        '200': {description: Prepared review receipt}
+        '409': {description: ONB_UNIT_PROFILE_CHANGED or ONB_UNIT_SCHEMA_CHANGED or ONB_UNIT_SELECTION_CHANGED}
+        default: {$ref: '#/components/responses/Problem'}
   /sources:
     get:
       operationId: listSources
@@ -110,13 +177,20 @@ paths:
       parameters:
         - $ref: '#/components/parameters/AssetId'
         - $ref: '#/components/parameters/ProfileId'
+        - {name: view, in: query, schema: {type: string, enum: [UNITS, UNIT]}, description: Omit for the retained file profile.}
+        - {name: unitRef, in: query, schema: {type: string}, description: Required for UNIT only.}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 128, default: 128}}
       responses:
         '200':
           description: Immutable FileProfile
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/FileProfile'
+                oneOf:
+                  - {$ref: '#/components/schemas/FileProfile'}
+                  - {$ref: '#/components/schemas/SourceUnitInventory'}
+                  - {$ref: '#/components/schemas/SourceUnitProfile'}
         default:
           $ref: '#/components/responses/Problem'
   /managed-files/{assetId}/profiles/{profileId}/preview:
@@ -127,13 +201,20 @@ paths:
       parameters:
         - $ref: '#/components/parameters/AssetId'
         - $ref: '#/components/parameters/ProfileId'
+        - {name: view, in: query, schema: {type: string, enum: [UNITS, UNIT]}, description: Omit for the historical file preview.}
+        - {name: unitRef, in: query, schema: {type: string}, description: Required for UNIT only.}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 128, default: 128}}
       responses:
         '200':
           description: Governed preview safe for an agent or UI
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ManagedFilePreview'
+                oneOf:
+                  - {$ref: '#/components/schemas/ManagedFilePreview'}
+                  - {$ref: '#/components/schemas/SourceUnitInventory'}
+                  - {$ref: '#/components/schemas/SourceUnitProfile'}
         default:
           $ref: '#/components/responses/Problem'
   /managed-files/{assetId}/create-onboarding:
@@ -145,7 +226,8 @@ paths:
         - $ref: '#/components/parameters/AssetId'
         - name: profileId
           in: query
-          required: true
+          description: Required unless the body supplies unitProfileRef. Both IDs must agree when supplied.
+          required: false
           schema:
             type: string
             format: uuid
@@ -386,7 +468,7 @@ components:
         contentHash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
         mediaType:
           type: string
-          enum: [text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet]
+          enum: [text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/geopackage+sqlite3]
         sizeBytes: {type: integer, minimum: 1, maximum: 10485760}
         retentionRef: {type: string, minLength: 1}
     ManagedFileAsset:
@@ -469,10 +551,110 @@ components:
         identityProposal: {type: object, additionalProperties: true}
         proposalStatus: {const: PENDING_HUMAN_REVIEW}
       additionalProperties: true
+    SourceUnitReference:
+      type: object
+      required: [profileId, profileVersion, unitRef, schemaHash]
+      additionalProperties: false
+      properties:
+        profileId: {type: string, format: uuid}
+        profileVersion: {type: integer, minimum: 1}
+        unitRef: {type: string, minLength: 1}
+        schemaHash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+    SourceUnitInventory:
+      type: object
+      required: [assetId, profileId, profileVersion, units, hasMore, nextOffset]
+      properties:
+        assetId: {type: string, format: uuid}
+        profileId: {type: string, format: uuid}
+        profileVersion: {type: integer, minimum: 1}
+        inventoryComplete: {type: boolean, description: For historical XLSX profiles only the first sheet may have retained evidence.}
+        units:
+          type: array
+          items:
+            type: object
+            required: [unitRef, unitKind, name, recordCount, columnCount, hasGeometry]
+            properties:
+              unitRef: {type: string}
+              unitKind: {type: string, enum: [TABLE, SHEET, LAYER]}
+              name: {type: string}
+              recordCount: {type: [integer, 'null']}
+              columnCount: {type: [integer, 'null']}
+              hasGeometry: {type: boolean}
+        hasMore: {type: boolean}
+        nextOffset: {type: [integer, 'null']}
+    SourceUnitProfile:
+      type: object
+      required: [schema, profileId, profileVersion, schemaHash, sourceKind, origin, unitRef, unitKind, unitName, recordModel, columnCount, columns, keys, geometry, readParameters, sample, nextOffset, hasMore]
+      properties:
+        schema: {const: ouf.source-unit-profile.v1}
+        profileId: {type: string, format: uuid}
+        profileVersion: {type: integer, minimum: 1}
+        schemaHash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        sourceKind: {const: FILE}
+        origin:
+          type: object
+          required: [assetId]
+          properties: {assetId: {type: string, format: uuid}}
+        unitRef: {type: string}
+        unitKind: {type: string, enum: [TABLE, SHEET, LAYER]}
+        unitName: {type: string}
+        recordModel: {type: string, enum: [ONE_ROW_ONE_SOURCE_OBJECT, ONE_FEATURE_ONE_SOURCE_OBJECT]}
+        columnCount: {type: integer, maximum: 1024}
+        columns:
+          type: array
+          maxItems: 128
+          items:
+            type: object
+            required: [name, nativeType, inferredType, nullable, distinctValues, role]
+            properties:
+              name: {type: string}
+              nativeType: {type: string, description: UNKNOWN when the retained profile has no native declaration.}
+              inferredType: {type: string}
+              nullable: {type: boolean}
+              distinctValues: {type: integer, minimum: 0}
+              role: {type: string, enum: [ATTRIBUTE, GEOMETRY]}
+        keys:
+          type: object
+          required: [declared, candidates]
+          properties:
+            declared: {type: array, items: {type: array, items: {type: string}}}
+            candidates: {type: array, items: {type: array, items: {type: string}}}
+        geometry:
+          type: [object, 'null']
+          required: [column, type, dimensions, srsId, sourceCrs]
+          properties:
+            column: {type: string}
+            type: {type: string}
+            dimensions: {const: 2}
+            srsId: {type: integer}
+            sourceCrs: {type: string}
+        readParameters:
+          type: object
+          minProperties: 1
+          maxProperties: 1
+          additionalProperties: false
+          properties:
+            csv:
+              type: object
+              required: [delimiter, encoding]
+              properties: {delimiter: {enum: [',', ';']}, encoding: {const: UTF-8}}
+            xlsx:
+              type: object
+              required: [sheet, headerRow]
+              properties: {sheet: {type: string}, headerRow: {type: integer, minimum: 1}}
+            geopackage:
+              type: object
+              required: [layer]
+              properties: {layer: {type: string}}
+        sample: {type: array, maxItems: 5, items: {type: object, additionalProperties: {type: string}}}
+        nextOffset: {type: [integer, 'null']}
+        hasMore: {type: boolean}
     CreateManagedFileOnboardingRequest:
       type: object
       required: [sourceId, name, owner, targetClassIri, semanticRefs]
       properties:
+        layer: {type: string, description: Must match the layer selected by unitProfileRef when both are supplied.}
+        unitProfileRef: {$ref: '#/components/schemas/SourceUnitReference'}
         sourceId: {type: string, minLength: 1}
         name: {type: string, minLength: 1}
         owner: {type: string, minLength: 1}

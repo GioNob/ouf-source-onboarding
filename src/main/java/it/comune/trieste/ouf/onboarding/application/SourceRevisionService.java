@@ -24,7 +24,12 @@ public class SourceRevisionService {
   public record Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
       String commandKey,String publicationEffect,List<Change> changes,
       @JsonInclude(JsonInclude.Include.NON_NULL) AssetRef assetRef,
-      @JsonInclude(JsonInclude.Include.NON_NULL) List<ManagedCsvRevision.NewColumn> newColumns){
+      @JsonInclude(JsonInclude.Include.NON_NULL) List<ManagedCsvRevision.NewColumn> newColumns,
+      @JsonInclude(JsonInclude.Include.NON_NULL) SourceUnitProfiles.Reference unitProfileRef){
+    public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
+        String commandKey,String publicationEffect,List<Change> changes,AssetRef assetRef,List<ManagedCsvRevision.NewColumn> newColumns){
+      this(sourceId,parentVersionId,expectedVersion,configurationHash,commandKey,publicationEffect,changes,assetRef,newColumns,null);
+    }
     // The absent extension must serialize exactly as before for historical command fingerprints.
     public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
         String commandKey,String publicationEffect,List<Change> changes){
@@ -73,6 +78,11 @@ public class SourceRevisionService {
   @Transactional(timeout=8) public Map<String,Object> prepare(PrincipalContext p,Prepare r,String correlation){
     if(r==null)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
     authorize(p,PREPARE,"COMMAND",r.sourceId(),r.parentVersionId());
+    if(r.changes()==null && r.assetRef()==null && r.unitProfileRef()!=null) {
+      var ref=r.unitProfileRef();
+      r=new Prepare(r.sourceId(),r.parentVersionId(),r.expectedVersion(),r.configurationHash(),r.commandKey(),
+          r.publicationEffect(),null,new AssetRef(files.ownedProfileAsset(ref,p.tenantId(),p.subjectId()),ref.profileId()),r.newColumns(),ref);
+    }
     if(r.commandKey()==null||!r.commandKey().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
         ||r.expectedVersion()<0||r.expectedVersion()>9007199254740991L
         ||r.configurationHash()==null||!r.configurationHash().matches("sha256:[a-f0-9]{64}")
@@ -83,6 +93,13 @@ public class SourceRevisionService {
       throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
     // One command across sources, followed by the same source fence used by clone/publication.
     lock("revision-command:"+hashes.of(List.of(p.tenantId(),p.subjectId(),r.commandKey())));
+    if(r.unitProfileRef()!=null) {
+      if(r.assetRef()==null)files.verifySelection(configuration(onboarding.version(r.sourceId(),r.parentVersionId())),r.unitProfileRef(),p.tenantId(),p.subjectId());
+      else {
+        files.requireTenantOwner(r.assetRef().assetId(),p.tenantId(),p.subjectId());
+        new SourceUnitProfiles(files.fileProfile(r.assetRef().assetId(),r.assetRef().profileId()),hashes).verify(r.unitProfileRef());
+      }
+    }
     String fingerprint=hashes.of(r);
     var retained=db.sql("select * from ouf_onboarding.source_property_revision where tenant_id=:t and subject_id=:s and command_key=:k")
         .param("t",p.tenantId()).param("s",p.subjectId()).param("k",r.commandKey()).query().listOfRows();
@@ -105,7 +122,10 @@ public class SourceRevisionService {
     UUID version=(UUID)draft.get("onboarding_version_id");
     var proposed=configuration(draft);
     int number=((Number)draft.get("version")).intValue();
-    if(r.assetRef()==null)proposed=revise(proposed,r.changes());
+    if(r.assetRef()==null) {
+      proposed=revise(proposed,r.changes());
+      if(r.unitProfileRef()!=null)object(object(proposed,"extractionProfile"),"selection").put("unitProfileRef",r.unitProfileRef().asMap());
+    }
     else replaceAsset(p,r,proposed,number);
     revisionMetadata(proposed,number);
     draft=onboarding.patchVersion(r.sourceId(),version,((Number)draft.get("lock_version")).longValue(),proposed,actor,correlation);
@@ -157,8 +177,26 @@ public class SourceRevisionService {
             .param("s",source).param("id",ref.assetId().toString()).query(Boolean.class).single())
       throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT");
     if(!"PROFILED".equals(asset.get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_NOT_PROFILED");
-    ManagedCsvRevision.replace(config,base,files.fileProfile(previous,profile),asset,
-        files.fileProfile(ref.assetId(),ref.profileId()),number,request.newColumns());
+    var nextFile=files.fileProfile(ref.assetId(),ref.profileId());
+    var oldFile=files.fileProfile(previous,profile);
+    var oldPin=files.selectedReference(config);
+    var nextPin=request.unitProfileRef();
+    if(nextPin!=null && Set.of("XLSX","GEOPACKAGE").contains(nextFile.get("format"))) {
+      var runtime=object(object(config,"extractionProfile"),"runtime");
+      if(oldPin==null)oldPin=new SourceUnitProfiles(oldFile,hashes).defaultReference((String)runtime.get("layer"));
+      var from=files.verifySelection(config,oldPin,p.tenantId(),p.subjectId());
+      var to=new SourceUnitProfiles(nextFile,hashes).verify(nextPin);
+      ManagedUnitRevision.replace(config,base,asset,oldPin,nextPin,from,to,
+          request.newColumns()!=null && !request.newColumns().isEmpty(),number);
+    } else {
+      if(oldPin!=null) {
+        files.verifySelection(config,oldPin,p.tenantId(),p.subjectId());
+        selection.remove("unitProfileRef");
+      }
+      ManagedCsvRevision.replace(config,base,oldFile,asset,nextFile,number,request.newColumns());
+      if(nextPin==null && oldPin!=null)nextPin=new SourceUnitProfiles(nextFile,hashes).reference("table:0");
+    }
+    if(nextPin!=null)selection.put("unitProfileRef",nextPin.asMap());
     if(asset.get("source_id")==null)
       db.sql("update ouf_onboarding.managed_file_asset set source_id=:s where asset_id=:a and source_id is null")
           .param("s",source).param("a",ref.assetId()).update();

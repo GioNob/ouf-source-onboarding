@@ -3,7 +3,7 @@ package it.comune.trieste.ouf.onboarding.application;
 import java.net.URI;
 import java.util.*;
 
-/** Pure preparation of an explicitly typed CSV execution profile. It issues no approval or runtime authority. */
+/** Pure preparation of a managed-file execution profile. It issues no approval or runtime authority. */
 public final class ManagedFileExecutionProposal {
   private static final Map<String,String> DATATYPES=Map.of("IDENTITY","string","DECIMAL_DOT_V1","decimal","DECIMAL_COMMA_V1","decimal","DATE_ISO_V1","date","DATE_DMY_V1","date");
   static String datatype(String transform){return "http://www.w3.org/2001/XMLSchema#"+DATATYPES.get(transform);}
@@ -23,9 +23,24 @@ public final class ManagedFileExecutionProposal {
         && sourceId.equals(object(bundle,"source").get("sourceId"))
         && "INTERNAL_MANAGED".equals(object(bundle,"source").get("sourceKind"))
         && "MANAGED".equals(object(bundle,"source").get("acquisitionMode"))
-        && "MANAGED".equals(runtime.get("mode")) && "ONE_ROW_ONE_SOURCE_OBJECT".equals(runtime.get("recordModel")));
-    require(!runtime.containsKey("format") && !runtime.containsKey("layer")
-        && Set.of(",",";").contains(text(runtime,"csvDelimiter")));
+        && "MANAGED".equals(runtime.get("mode")));
+    boolean layer="application/geopackage+sqlite3".equals(asset.get("media_type"));
+    boolean sheet="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".equals(asset.get("media_type"));
+    require((layer?"ONE_FEATURE_ONE_SOURCE_OBJECT":"ONE_ROW_ONE_SOURCE_OBJECT").equals(runtime.get("recordModel")));
+    Map<String,Object> parameters=Map.of();
+    if(layer) {
+      require(!runtime.containsKey("format") && !runtime.containsKey("csvDelimiter"));
+      parameters=Map.of("layer",text(runtime,"layer"));
+      if(runtime.containsKey("readParameters"))require(Map.of("geopackage",parameters).equals(runtime.get("readParameters")));
+    } else if(sheet) {
+      require("XLSX".equals(runtime.get("format")) && !runtime.containsKey("csvDelimiter") && !runtime.containsKey("layer"));
+      parameters=object(object(runtime,"readParameters"),"xlsx");
+      keys(parameters,"sheet","headerRow");text(parameters,"sheet");integer(parameters.get("headerRow"),1,1048576);
+    } else {
+      require(!asset.containsKey("media_type") || "text/csv".equals(asset.get("media_type")));
+      require(!runtime.containsKey("format") && !runtime.containsKey("layer") && !runtime.containsKey("readParameters")
+          && Set.of(",",";").contains(text(runtime,"csvDelimiter")));
+    }
     require(assetId.equals(String.valueOf(asset.get("asset_id")))
         && sourceId.equals(asset.get("source_id"))
         && text(runtime,"stagingRef").equals(asset.get("staging_ref"))
@@ -35,7 +50,7 @@ public final class ManagedFileExecutionProposal {
     require(text(bundle,"schemaRef").equals("profile://managed-files/"+assetId+"/profiles/"+profileId));
     long size=integer(asset.get("size_bytes"),1,10_485_760);
     Limits limits=proposal.limits();require(limits!=null);
-    integer(limits.maxRows(),1,1_000_000);integer(limits.maxColumns(),1,10_000);integer(limits.maxCellChars(),1,1_000_000);
+    integer(limits.maxRows(),1,layer?10_000:1_000_000);integer(limits.maxColumns(),1,10_000);integer(limits.maxCellChars(),1,1_000_000);
     List<?> fields=list(object(extraction,"projection").get("FILE"),1,ManagedFileLimits.MAX_COLUMNS);
     require(fields.size()<=limits.maxColumns() && new HashSet<>(fields).size()==fields.size());
     Set<String> mapped=new LinkedHashSet<>(),mappedFields=new LinkedHashSet<>(),classes=new LinkedHashSet<>();
@@ -63,7 +78,19 @@ public final class ManagedFileExecutionProposal {
     for(Object raw:list(semantic.get("targetClasses"),1,32)){
       Map<String,Object> target=map(raw);require(refs.contains(text(target,"ontologyId")+"@"+text(target,"ontologyVersion")));
     }
-    Map<String,Object> udp=copy(proposal.udp());keys(udp,"resolution","materialization");
+    Map<String,Object> udp=copy(proposal.udp());
+    if(layer) {
+      keys(udp,"resolution","materialization","spatial");
+      var spatialGeometry=object(object(udp,"spatial"),"geometry");
+      String geometryColumn=text(runtime,"geometryColumn");
+      var identityFields=list(object(config,"sourceObjectIdentityPolicy").get("sourceFields"),1,256);
+      require(fields.containsAll(identityFields) && !identityFields.contains(geometryColumn)
+          && new HashSet<>(identityFields).size()==identityFields.size());
+      require(text(runtime,"sourceCrs").equals(spatialGeometry.get("expectedSourceCrs")));
+      require(list(semantic.get("propertyMappings"),1,ManagedFileLimits.MAX_COLUMNS).stream().map(ManagedFileExecutionProposal::map)
+          .anyMatch(m->geometryColumn.equals(m.get("sourceField")) && "IDENTITY".equals(m.get("transform"))
+              && m.get("targetPropertyIri").equals(spatialGeometry.get("sourceField"))));
+    } else keys(udp,"resolution","materialization");
     Map<String,Object> resolution=object(udp,"resolution"),policy=object(resolution,"governedIdentity");
     MappingCategory.validate(semantic.get("targetClasses"),policy);
     GovernedIdentityProposal.validate(resolution,policy,sourceId,classes,mapped);
@@ -80,6 +107,10 @@ public final class ManagedFileExecutionProposal {
       Map<String,Object> label=map(raw);require("PROPERTY".equals(label.get("scope")));
       require(labels.put(text(label,"target"),text(label,"label"))==null);
     }
+    if(layer) {
+      var geometry=object(object(udp,"spatial"),"geometry");
+      require(Objects.equals(labels.get(text(geometry,"sourceField")),text(geometry,"accessLabel")));
+    }
     require(labels.keySet().equals(mapped));Set<String> properties=new HashSet<>();
     for(Object raw:list(materialization.get("properties"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> property=map(raw);keys(property,"sourceField","propertyIri","datatype","accessLabel","authorityOrder");
@@ -91,10 +122,16 @@ public final class ManagedFileExecutionProposal {
     }
     require(properties.equals(mapped));
     Map<String,Object> execution=new LinkedHashMap<>();
-    execution.put("acquisitionMode","INTERNAL_MANAGED_CSV");execution.put("adapterId","managed-tabular-v1");
+    execution.put("acquisitionMode",layer?"INTERNAL_MANAGED_GEOPACKAGE":sheet?"INTERNAL_MANAGED_XLSX":"INTERNAL_MANAGED_CSV");
+    execution.put("adapterId",layer?"managed-geopackage-v1":"managed-tabular-v1");
+    if(sheet || layer) {
+      execution.put("readParameters",Map.of(sheet?"xlsx":"geopackage",parameters));
+      execution.putAll(parameters); // Ingestion v1 consumes the flat sheet/layer fields.
+      if(layer)for(String key:List.of("geometryColumn","sourceCrs"))execution.put(key,text(runtime,key));
+    }
     execution.put("adapterRuntimeVersion","1.0.0");execution.put("sourceSchemaRef",text(bundle,"schemaRef"));
     execution.put("sourceSchemaId",sourceId);execution.put("sourceSchemaVersion",text(extraction,"version"));
-    execution.put("semanticPublicationSetRef",publication);execution.put("adapterProfileRef","adapter://managed-tabular/1");
+    execution.put("semanticPublicationSetRef",publication);execution.put("adapterProfileRef",layer?"adapter://managed-geopackage/1":"adapter://managed-tabular/1");
     execution.put("observationPolicy","ACQUISITION_TIME");execution.put("expectedSize",size);
     execution.put("maxRows",limits.maxRows());execution.put("maxColumns",limits.maxColumns());execution.put("maxCellChars",limits.maxCellChars());
     execution.put("mappingRefs",List.of(text(semantic,"mappingId")));execution.put("authorityPolicyRef",text(materialization,"policyRef"));

@@ -40,8 +40,13 @@ class ManagedOnboardingReviewRuntimeTest {
     var fields=List.of(new ManagedFileService.FieldDecision("name","INCLUDE","OPEN",property,"IDENTITY",null,null,null),
         new ManagedFileService.FieldDecision("unused","EXCLUDE","OPEN",null,null,null,null,null));
     var refs=List.of(semanticId+"@"+adopted.semanticVersion());
+    var unitPage=files.unitView(asset,profile,"table:0",0,1);
+    var unit=new SourceUnitProfiles.Reference(profile,1,"table:0",(String)unitPage.get("schemaHash"));
+    var changed=new SourceUnitProfiles.Reference(profile,1,"table:0","sha256:"+"0".repeat(64));
+    assertThatThrownBy(()->files.onboardIdempotent(asset,profile,source,"Edicole","Mapper",semanticId,refs,List.of("name"),
+        fields,null,human,"create","create:edicole",tenant,null,changed)).hasMessage("ONB_UNIT_SCHEMA_CHANGED");
     var draft=files.onboardIdempotent(asset,profile,source,"Edicole","Mapper",semanticId,refs,List.of("name"),
-        fields,null,human,"create","create:edicole",tenant);
+        fields,null,human,"create","create:edicole",tenant,null,unit);
     UUID version=(UUID)draft.get("onboardingVersionId");
     var signal=Map.of("id",property,"semanticRef",property+"@"+adopted.publicationSetId(),"comparator","TEXT_V1",
         "excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","urn:fixture:signal");
@@ -56,7 +61,9 @@ class ManagedOnboardingReviewRuntimeTest {
     var proposal=new ManagedFileExecutionProposal.Proposal(List.of(adopted),adopted.publicationSetId(),udp,
         new ManagedFileExecutionProposal.Limits(100,2,1000));
     var mapper=principal(tenant,human.subject());
-    var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"review:edicole",proposal);
+    assertThatThrownBy(()->reviews.prepare(mapper,new ManagedOnboardingReviewService.Prepare(
+        source,version,0,"review:edicole",proposal,changed),"drift")).hasMessage("ONB_UNIT_SCHEMA_CHANGED");
+    var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"review:edicole",proposal,unit);
     var review=reviews.prepare(mapper,command,"prepare");
 
     registry.publish(semanticId,"1.1.0","Seconda");

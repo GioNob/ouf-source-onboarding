@@ -10,6 +10,65 @@ class ManagedFileExecutionProposalTest {
   private static final String REVISION="00000000-0000-4000-8000-000000000001",PUBLICATION="00000000-0000-4000-8000-000000000002";
   private static final String SOURCE="fixture-source",CLASS="https://schema.org/PerformingArtsTheater",NAME="https://schema.org/name",CAP="urn:fixture:sourcePostalCode",ONTOLOGY="urn:fixture:imported-ontology";
   private final ObjectMapper json=new ObjectMapper();
+  @Test void selectedSheetAndLayerCompileForTheVerifiedIngestionAdapters() {
+    for(boolean layer:List.of(false,true)) {
+      var c=config();var a=asset();var p=proposal();
+      var runtime=object(object(c,"extractionProfile"),"runtime");
+      runtime.remove("csvDelimiter");
+      var parameters=layer?Map.of("geopackage",Map.of("layer","buildings")):Map.of("xlsx",Map.of("sheet","south","headerRow",2));
+      runtime.put("readParameters",parameters);
+      if(layer) {
+        a.put("media_type","application/geopackage+sqlite3");runtime.put("recordModel","ONE_FEATURE_ONE_SOURCE_OBJECT");
+        runtime.put("layer","buildings");runtime.put("geometryColumn","cap");runtime.put("sourceCrs","EPSG:4326");
+        p.udp().put("spatial",Map.of("policyRef","policy://geometry","relationships",List.of(),"geometry",
+            Map.of("sourceField",CAP,"expectedSourceCrs","EPSG:4326","canonicalSrid",4326,"accessLabel","RESTRICTED",
+                "normalizationVersion","1","crsPolicy",Map.of("sourceAxisOrder","XY","mismatchAction","REJECT"))));
+      } else {
+        a.put("media_type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");runtime.put("format","XLSX");
+      }
+      var compiled=ManagedFileExecutionProposal.compile(c,a,"fixture-tenant",p);
+      var execution=object(object(object(compiled,"extractionProfile"),"runtime"),"execution");
+      assertThat(execution).containsEntry("adapterId",layer?"managed-geopackage-v1":"managed-tabular-v1")
+          .containsEntry("acquisitionMode",layer?"INTERNAL_MANAGED_GEOPACKAGE":"INTERNAL_MANAGED_XLSX")
+          .containsEntry("readParameters",parameters).doesNotContainKey("csvDelimiter");
+      if(layer)assertThat(execution).containsEntry("geometryColumn","cap").containsEntry("layer","buildings").containsEntry("sourceCrs","EPSG:4326");
+      else assertThat(execution).containsEntry("sheet","south").containsEntry("headerRow",2);
+      var evidence=layer?Map.<String,Object>of("layer","buildings","featureCount",1,"geometryColumn","cap","sourceCrs","EPSG:4326")
+          :Map.<String,Object>of("sheet","south","rows",1,"headerRow",2);
+      var unit=new SourceUnitProfiles.Unit(layer?"layer:0":"sheet:1",layer?"LAYER":"SHEET",layer?"buildings":"south",
+          evidence,List.of(),List.of("nome_teatro"),List.of());
+      String hash="sha256:"+"1".repeat(64);
+      var previous=new SourceUnitProfiles.Reference(UUID.fromString(PROFILE),1,unit.ref(),hash);
+      var replacement=new SourceUnitProfiles.Reference(UUID.randomUUID(),1,unit.ref(),hash);
+      var bytes=new LinkedHashMap<>(a);bytes.put("asset_id",UUID.randomUUID());bytes.put("content_hash","sha256:new-bytes");
+      var changed=new SourceUnitProfiles.Reference(replacement.profileId(),1,unit.ref(),"sha256:"+"2".repeat(64));
+      assertThatThrownBy(()->ManagedUnitRevision.replace(compiled,a,bytes,previous,changed,unit,unit,false,2)).hasMessage("ONB_UNIT_SCHEMA_CHANGED");
+      ManagedUnitRevision.replace(compiled,a,bytes,previous,replacement,unit,unit,false,2);
+      assertThat(execution).containsEntry("sourceSchemaVersion","2").containsEntry("readParameters",parameters)
+          .containsEntry("sourceSchemaRef","profile://managed-files/"+bytes.get("asset_id")+"/profiles/"+replacement.profileId());
+    }
+  }
+
+  @Test void historicalCsvProposalIsExact() {
+    var expected=config();
+    var runtime=object(object(expected,"extractionProfile"),"runtime");
+    var p=proposal();
+    runtime.put("udp",p.udp());
+    runtime.put("execution",Map.ofEntries(
+        Map.entry("acquisitionMode","INTERNAL_MANAGED_CSV"),Map.entry("adapterId","managed-tabular-v1"),
+        Map.entry("adapterRuntimeVersion","1.0.0"),Map.entry("sourceSchemaRef","profile://managed-files/"+ASSET+"/profiles/"+PROFILE),
+        Map.entry("sourceSchemaId",SOURCE),Map.entry("sourceSchemaVersion","1"),Map.entry("semanticPublicationSetRef",PUBLICATION),
+        Map.entry("adapterProfileRef","adapter://managed-tabular/1"),Map.entry("observationPolicy","ACQUISITION_TIME"),
+        Map.entry("expectedSize",321L),Map.entry("maxRows",100),Map.entry("maxColumns",20),Map.entry("maxCellChars",1000),
+        Map.entry("mappingRefs",List.of("sm-"+SOURCE)),Map.entry("authorityPolicyRef","urn:fixture:authority-policy")));
+    expected.put("semanticReferenceBindings",List.of(Map.of("semanticId",ONTOLOGY,"semanticVersion","1",
+        "revisionId",REVISION,"publicationSetId",PUBLICATION)));
+    var compiled=compile(config(),p);
+    assertThat(compiled).isEqualTo(expected);
+    assertThat(new it.comune.trieste.ouf.onboarding.domain.CanonicalHash(json).of(compiled))
+        .isEqualTo("sha256:32ea369b8a8bb514432abaee595285475dedcef063469e67cb957fb4587df83b");
+  }
+
   @Test void importedOntologyCanContainExternalStandardTermsWithoutChangingOwnerIdentityOrProjection(){
     var existing=config();var before=clone(existing);var compiled=compile(existing,proposal());
     assertThat(existing).isEqualTo(before);

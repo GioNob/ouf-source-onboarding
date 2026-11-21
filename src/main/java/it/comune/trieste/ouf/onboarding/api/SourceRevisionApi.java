@@ -36,9 +36,9 @@ public class SourceRevisionApi {
       }
       if(type==SourceRevisionService.Prepare.class&&(!args.path("parentVersionId").isTextual()
           ||!args.path("commandKey").isTextual()||!args.path("configurationHash").isTextual()
-          ||!args.path("publicationEffect").isTextual()||args.has("changes")==args.has("assetRef")
+          ||!args.path("publicationEffect").isTextual()||(args.has("changes") && args.has("assetRef") || !args.has("changes") && !args.has("assetRef") && !args.has("unitProfileRef"))
           ||(args.has("changes")&&!args.path("changes").isArray())
-          ||(args.has("newColumns")&&(!args.has("assetRef")||!args.path("newColumns").isArray()))
+          ||(args.has("newColumns")&&(args.has("changes")||!args.path("newColumns").isArray()))
           ||(args.has("assetRef")&&(!args.path("assetRef").path("assetId").isTextual()
               ||!args.path("assetRef").path("profileId").isTextual()))
           ||!args.path("expectedVersion").isIntegralNumber()||!args.path("expectedVersion").canConvertToLong()))throw new IllegalArgumentException();
@@ -48,7 +48,7 @@ public class SourceRevisionApi {
   @PostMapping("/prepare") public ResponseEntity<?> prepare(@RequestBody byte[] raw,HttpServletRequest request){
     var caller=receipts.verifySourceRevision(request.getHeader("X-OUF-Source-Revision-Receipt"),request.getRequestURI(),SourceRevisionService.PREPARE,raw);
     var command=arguments(raw,SourceRevisionService.Prepare.class);
-    if(command.assetRef()!=null){
+    if(command.assetRef()!=null || command.changes()==null && command.unitProfileRef()!=null){
       String match=request.getHeader("If-Match");
       if(match==null)throw new DomainFailure(HttpStatus.PRECONDITION_REQUIRED,"ONB_REVISION_ETAG_REQUIRED","Parent ETag required");
       if(!etag(command.expectedVersion()).equals(match))

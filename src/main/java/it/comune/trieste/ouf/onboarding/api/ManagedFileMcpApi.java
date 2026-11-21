@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/internal/v1/onboarding/managed-file-mcp")
 public class ManagedFileMcpApi {
   public record CreateDraft(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,
-      List<String> semanticRefs,List<String> sourceObjectKeyFields,List<ManagedFileApi.FieldDecision> fields,String layer,JsonNode category){}
+      List<String> semanticRefs,List<String> sourceObjectKeyFields,List<ManagedFileApi.FieldDecision> fields,String layer,JsonNode category,it.comune.trieste.ouf.onboarding.application.SourceUnitProfiles.Reference unitProfileRef){}
   private final PermissionDelegationVerifier receipts;
   private final ManagedFileService files;
   private final ManagedFileChatHandoff handoffs;
@@ -62,13 +62,16 @@ public class ManagedFileMcpApi {
     String owner=caller.principal().subjectId();
     try{
       JsonNode selection=json.readTree(raw).required("Arguments");
-      if("COLUMNS".equals(selection.path("view").asText())){
-        Set<String> allowed=Set.of("view","assetId","profileId","offset","limit");
+      String view=selection.path("view").asText();
+      if(Set.of("UNITS","UNIT","COLUMNS").contains(view)){
+        Set<String> allowed="UNIT".equals(view)?Set.of("view","assetId","profileId","offset","limit","unitRef"):Set.of("view","assetId","profileId","offset","limit");
         for(var keys=selection.fieldNames();keys.hasNext();)if(!allowed.contains(keys.next()))throw new IllegalArgumentException("invalid column page query");
         if(!selection.path("assetId").isTextual()||!selection.path("profileId").isTextual())throw new IllegalArgumentException("exact asset and profile required");
         int offset=pageInteger(selection,"offset",0),limit=pageInteger(selection,"limit",ManagedFileLimits.COLUMN_PAGE_SIZE);
         UUID asset=UUID.fromString(selection.get("assetId").asText()),profile=UUID.fromString(selection.get("profileId").asText());
         files.requireTenantOwner(asset,caller.principal().tenantId(),owner);
+        if("UNIT".equals(view) && !selection.path("unitRef").isTextual())throw new IllegalArgumentException("Exact unit required");
+        if(!"COLUMNS".equals(view))return files.unitView(asset,profile,selection.path("unitRef").textValue(),offset,limit);
         return files.previewColumns(asset,profile,offset,limit);
       }
       if(selection.has("view")){
@@ -113,11 +116,11 @@ public class ManagedFileMcpApi {
     var delegated=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),cap,raw);
     try {
       JsonNode envelope=json.readTree(raw),args=envelope.required("Arguments");
-      Set<String> allowed=Set.of("assetId","profileId","sourceId","name","owner","targetClassIri","semanticRefs","sourceObjectKeyFields","fields","layer","category");
+      Set<String> allowed=Set.of("assetId","profileId","sourceId","name","owner","targetClassIri","semanticRefs","sourceObjectKeyFields","fields","layer","category","unitProfileRef");
       if(!args.isObject()||args.size()>allowed.size())throw new IllegalArgumentException("invalid draft arguments");
       for(var names=args.fieldNames();names.hasNext();)if(!allowed.contains(names.next()))throw new IllegalArgumentException("invalid draft arguments");
       CreateDraft draft=json.copy().enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).treeToValue(args,CreateDraft.class);
-      if(draft.assetId()==null||draft.profileId()==null||draft.sourceId()==null||draft.sourceId().isBlank()
+      if((draft.unitProfileRef()==null && (draft.assetId()==null||draft.profileId()==null))||draft.sourceId()==null||draft.sourceId().isBlank()
           ||draft.name()==null||draft.name().isBlank()||draft.owner()==null||draft.owner().isBlank()
           ||draft.targetClassIri()==null||draft.targetClassIri().isBlank()
           ||draft.semanticRefs()==null||draft.semanticRefs().isEmpty()||draft.semanticRefs().size()>32
@@ -126,6 +129,13 @@ public class ManagedFileMcpApi {
       var actor=new OnboardingService.Actor(delegated.principal().subjectId(),"HUMAN_USER",Set.of(cap));
       List<ManagedFileService.FieldDecision> fields=draft.fields().stream()
           .map(f->new ManagedFileService.FieldDecision(f.fieldName(),f.extractionDecision(),f.dataAccessLabel(),f.targetPropertyIri(),f.transform(),f.vocabularyId(),f.vocabularyVersion(),f.valueMapRef())).toList();
+      if(draft.unitProfileRef()!=null){
+        var ref=draft.unitProfileRef();
+        UUID asset=draft.assetId()!=null?draft.assetId():files.ownedProfileAsset(ref,delegated.principal().tenantId(),actor.subject());
+        return files.onboardIdempotent(asset,draft.profileId()!=null?draft.profileId():ref.profileId(),draft.sourceId(),draft.name(),draft.owner(),draft.targetClassIri(),
+            draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey(),
+            delegated.principal().tenantId(),MappingCategory.fromRequest(draft.category()),ref);
+      }
       return files.onboardIdempotent(draft.assetId(),draft.profileId(),draft.sourceId(),draft.name(),draft.owner(),draft.targetClassIri(),
           draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey(),delegated.principal().tenantId(),MappingCategory.fromRequest(draft.category()));
     }catch(IOException e){throw new IllegalArgumentException("invalid draft arguments",e);}
