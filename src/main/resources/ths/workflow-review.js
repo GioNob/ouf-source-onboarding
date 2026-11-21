@@ -75,7 +75,13 @@
     if (transform?.startsWith('DATE_')) return 'data';
     return transform || '—';
   }
-  function shortIri(iri) { return iri?.split(/[/#:]/).filter(Boolean).pop() || iri; }
+  const unverified = 'etichetta non verificata dal registro';
+  function termFor(card, iri) {
+    return card.verifiedTerms && Object.hasOwn(card.verifiedTerms,iri) ? card.verifiedTerms[iri] : null;
+  }
+  function termLabel(card, iri) {
+    return termFor(card,iri)?.labelIt || unverified;
+  }
   function identityText(target, value, label) {
     if (target === 'sourceKey') return 'Chiave della fonte · ' + (value || []).map(field => field === '$managedRowOrdinal' ? 'posizione della riga nel file' : field).join(', ');
     if (target === 'maxCandidates') return 'Numero massimo di candidati da confrontare · ' + (value ?? unavailable);
@@ -95,16 +101,34 @@
   function fieldDescription(row) {
     return [row.included ? 'inclusa' : 'esclusa', row.property, row.transform, row.access, row.sourceKey && 'chiave della fonte', row.signal && 'segnale d’identità',row.authorityOrder?.length && 'ordine delle autorità ' + row.authorityOrder.join(', '), row.reconciliation && 'regole ' + JSON.stringify(row.reconciliation)].filter(Boolean).join(' · ');
   }
-  function referenceDescription(ref) {
-    return [ref.kind === 'CLASS' ? 'Classe' : 'Proprietà', ref.labelIt || 'Etichetta italiana non disponibile',
-      'versione ' + (ref.semanticVersion || unavailable), ref.revisionId && 'revisione ' + ref.revisionId,
-      ref.publicationSetId ? 'riferimento pubblicato nel set ' + ref.publicationSetId : 'pubblicazione non documentata',
-      ref.descriptionIt || 'descrizione assente nello snapshot', ref.license || 'licenza non indicata nello snapshot'].filter(Boolean).join(' · ');
+  function semanticReference(card, iri, parent, warnings) {
+    sourceLink(parent,iri,iri);
+    const term = termFor(card,iri);
+    if (!term) {
+      warnings.push(iri + ' · ' + unverified);
+      return;
+    }
+    element('p',[term.labelIt, 'verificato dal registro semantico', term.artifactType === 'CLASS' ? 'Classe' : 'Proprietà',
+      term.descriptionIt || 'descrizione italiana assente', 'Editore: ' + (term.publisher || unavailable),
+      'Licenza: ' + (term.license || unavailable), 'versione ' + term.semanticVersion, 'revisione ' + term.revisionId,
+      'set ' + term.publicationSetId].join(' · '),parent);
+    if (!term.license || term.licenseWarning) warnings.push(term.labelIt + ' · ' + (term.licenseWarning || 'licenza non indicata nel registro.'));
+    if (!term.descriptionIt) warnings.push(term.labelIt + ' · descrizione italiana assente nel registro.');
+  }
+  function showWarnings(warnings, article) {
+    if (!warnings.length) return;
+    const section = element('section','',article); section.className = 'warnings'; element('h3','Avvisi da esaminare',section);
+    const list = element('ul','',section); for (const warning of warnings) element('li',warning,list);
+  }
+  function pinnedReference(ref) {
+    if (!ref) return ref;
+    const {kind,semanticId,semanticVersion,revisionId,publicationSetId} = ref;
+    return {kind,semanticId,semanticVersion,revisionId,publicationSetId};
   }
   function reviewCard(card, article, flags) {
     const snap = card.reviewSnapshot, file = snap.file, warnings = [];
     const editable = canApprove({card});
-    const label = iri => snap.SEMANTIC[iri]?.labelIt || shortIri(iri);
+    const label = iri => termFor(card,iri)?.labelIt || iri;
     function flag(section, target, parent) {
       if (!editable) return;
       const box = document.createElement('input'); box.type = 'checkbox';
@@ -117,15 +141,14 @@
       box.onchange = () => { comment.hidden = !box.checked; controls(); };
       flags.push({section,target,box,comment});
     }
-    const heading = editable ? 'Stai approvando l’attivazione della fonte' : 'Richiesta di attivazione della fonte';
+    const heading = editable && card.termVerification === 'COMPLETE' ? 'Stai approvando l’attivazione della fonte' : 'Richiesta di attivazione della fonte';
     element('h2', heading + ' «' + snap.sourceName + '» (' + card.source_id + ') del proprietario ' + snap.owner,article);
     const facts = element('dl','',article);
     const fact = (name,value) => { element('dt',name,facts); return element('dd',value,facts); };
     fact('File',file.name || 'Nome originale non disponibile · ' + file.assetId);
     fact('Dimensione',file.size + ' byte'); fact('Profilo del file',(file.rows ?? unavailable) + ' righe · ' + file.columns + ' colonne · ' + file.format);
     for (const target of card.configuration.semanticMapping.targetClasses) {
-      const ref = snap.SEMANTIC[target.classIri];
-      const dd = fact('Classe di destinazione',(ref?.labelIt || 'Etichetta italiana non disponibile') + ' · ');
+      const dd = fact('Classe di destinazione',termLabel(card,target.classIri) + ' · ');
       sourceLink(dd,target.classIri,target.classIri);
       if (target.category) fact('Categoria',target.category.conceptIri + ' · vocabolario ' + target.category.schemeIri);
     }
@@ -135,15 +158,18 @@
       const previous = card.previousReview, diff = element('section','',article); diff.className = 'warnings';
       element('h3','Differenze rispetto alla versione ' + previous.version,diff);
       const describe = (section,target,value) => value == null ? 'assente' : section === 'FIELD' ? fieldDescription(value) :
-        section === 'IDENTITY' ? identityText(target,value,label) : section === 'SEMANTIC' ? referenceDescription(value) : String(value);
-      for (const change of previous.changes) {
+        section === 'IDENTITY' ? identityText(target,value,label) : section === 'SEMANTIC' ? JSON.stringify(value) : String(value);
+      const changes = previous.changes.map(change => change.section === 'SEMANTIC'
+        ? {...change,before:pinnedReference(change.before),after:pinnedReference(change.after)} : change)
+        .filter(change => change.section !== 'SEMANTIC' || JSON.stringify(change.before) !== JSON.stringify(change.after));
+      for (const change of changes) {
         const {section,target,before,after} = change;
         element('p',sectionNames[section] + ' ' + (limitNames[target] || target) + ' · ' + describe(section,target,before) + ' → ' + describe(section,target,after),diff);
       }
-      if (previous.changes.length) detail('Valori precedenti e proposti per ogni differenza',previous.changes,diff);
-      if (!previous.changes.length) element('p','Nessuna differenza nelle voci esaminate.',diff);
+      if (changes.length) detail('Valori precedenti e proposti per ogni differenza',changes,diff);
+      if (!changes.length) element('p','Nessuna differenza nelle voci esaminate.',diff);
       for (const note of previous.feedback) {
-        const changed = previous.changes.some(change => change.section === note.section && change.target === note.target);
+        const changed = changes.some(change => change.section === note.section && change.target === note.target);
         element('p','Riscontro precedente · ' + sectionNames[note.section] + ' ' + (limitNames[note.target] || note.target) + ' · ' +
           (note.comment || 'segnalato senza commento') + (changed ? ' (voce modificata)' : ' (voce invariata)'),diff);
       }
@@ -160,8 +186,8 @@
       if (!row.included) tr.className = 'excluded';
       element('th',name,tr).scope = 'row';
       element('td',row.included ? 'Inclusa' : 'Esclusa · non verrà acquisita',tr);
-      const property = element('td',row.property ? (snap.SEMANTIC[row.property]?.labelIt || 'Etichetta italiana non disponibile') + ' · ' : '—',tr);
-      if (row.property) sourceLink(property,shortIri(row.property),row.property);
+      const property = element('td',row.property ? termLabel(card,row.property) + ' · ' : '—',tr);
+      if (row.property) sourceLink(property,row.property,row.property);
       if (row.reconciliation) detail('Regole di riconciliazione della proprietà',row.reconciliation,property);
       if (row.authorityOrder?.length) element('p','Ordine delle autorità · ' + row.authorityOrder.join(', '),property);
       element('td',datatype(row.transform),tr);
@@ -175,7 +201,7 @@
     for (const [section,title] of [['IDENTITY','Identità degli oggetti'],['SEMANTIC','Riferimenti semantici'],['LIMITS','Limiti dell’acquisizione']]) {
       element('h3',title,article);
       if (section === 'SEMANTIC' && snap.bindings?.length) {
-        detail('Versioni e insiemi di pubblicazione vincolati alla configurazione',snap.bindings,article);
+        detail('Versioni e insiemi di pubblicazione vincolati alla configurazione',snap.bindings.map(pinnedReference),article);
       }
       const list = element('ul','',article); list.className = 'review-items';
       for (const [target,value] of Object.entries(snap[section])) {
@@ -183,17 +209,12 @@
         if (section === 'IDENTITY') element('span',identityText(target,value,label),item);
         if (section === 'LIMITS') element('span',limitNames[target] + ' · ' + (value ?? unavailable),item);
         if (section === 'SEMANTIC') {
-          sourceLink(item,target,target); element('p',referenceDescription(value),item);
-          if (!value.license) warnings.push(label(target) + ' · licenza non indicata nello snapshot.');
-          if (!value.descriptionIt) warnings.push(label(target) + ' · descrizione assente nello snapshot.');
+          semanticReference(card,target,item,warnings);
         }
         flag(section,target,item);
       }
     }
-    if (warnings.length) {
-      const section = element('section','',article); section.className = 'warnings'; element('h3','Avvisi da esaminare',section);
-      const list = element('ul','',section); for (const warning of warnings) element('li',warning,list);
-    }
+    showWarnings(warnings,article);
     element('h3','Cosa comporta l’approvazione',article);
     element('p','Approvi questa configurazione. Con il successivo comando «Verifica e attiva», superate le verifiche, la fonte diventa attiva. Ingestion acquisisce il file e UDP materializza gli oggetti con le sole proprietà incluse e le regole d’identità mostrate. Le colonne escluse non vengono acquisite. Puoi rivedere la configurazione o disattivare la fonte per fermare le acquisizioni future.',article);
   }
@@ -201,6 +222,7 @@
   const expired = card => Date.parse(card.expires_at) <= Date.now();
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
   const missingFileSnapshot = card => !card.reviewSnapshot && (card.configuration?.extractionProfile?.selection?.assetId || card.configuration?.semanticMapping?.sourceType?.typeCode === 'FILE');
+  const approvalBlocked = card => !semantic && (missingFileSnapshot(card) || card.termVerification !== 'COMPLETE');
   const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : item.card.onboardingState === 'APPROVED' && !item.card.progress?.activationProgress?.budgetExhausted && item.card.progress?.activationProgress?.counterLineageVerified !== false && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
   const canBudget = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED' && item.card.progress?.activationProgress?.humanBudgetGrantAvailable === true && (item.reason?.value.trim().length || 0) >= 10;
   const canResume = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED'
@@ -214,7 +236,7 @@
   function controls() {
     const items = selected(); $('actions').disabled = busy || items.length === 0;
     const flagged = items.some(item => item.flags.some(flag => flag.box.checked));
-    $('approve').disabled = flagged || !items.length || !items.every(canApprove) || items.some(item => missingFileSnapshot(item.card));
+    $('approve').disabled = flagged || !items.length || !items.every(canApprove) || items.some(item => approvalBlocked(item.card));
     $('changes').disabled = !flagged || !items.every(canApprove);
     $('reject').disabled = flagged || !items.length || !items.every(canApprove);
     $('complete').disabled = !items.length || !items.every(canComplete);
@@ -248,10 +270,15 @@
       if (card.interchangeSnapshot) detail('Contenuto semantico esatto', card.interchangeSnapshot, article);
     } else {
       const config = card.configuration || {}, mapping = config.semanticMapping || {};
+      if (card.termVerification !== 'COMPLETE') {
+        const reason = card.termVerification === 'UNAVAILABLE' ? 'Registro semantico non disponibile.' : 'La verifica dei termini è incompleta.';
+        const guidance = canApprove({card}) ? ' Per approvare, aggiorna la scheda quando le etichette sono verificabili.' : '';
+        element('p',reason + guidance,article).className = 'warnings';
+      }
       if (!card.reviewSnapshot) {
       element('h3', 'Classi di destinazione', article);
       for (const target of mapping.targetClasses || []) {
-        element('h3', target.classIri, article);
+        element('h3', termLabel(card,target.classIri) + ' · ' + target.classIri, article);
         if (target.category) {
           element('p', `Vocabolario: ${target.category.schemeIri}`, article);
           element('p', `Categoria: ${target.category.conceptIri}`, article);
@@ -265,7 +292,7 @@
       table.append(head);
       const appendField = (field, property, transform) => {
         const tr = document.createElement('tr');
-        for (const value of [field, property, transform, labels.get(property) || labels.get(field)]) element('td', value, tr);
+        for (const value of [field, property && termLabel(card,property) + ' · ' + property, transform, labels.get(property) || labels.get(field)]) element('td', value, tr);
         table.append(tr);
       };
       for (const row of rows) appendField(row.sourceField, row.targetPropertyIri, row.transform);
@@ -273,6 +300,14 @@
       const projection = config.extractionProfile?.projection?.[mapping.sourceType?.typeCode || 'FILE'] || [];
       for (const field of projection) if (!mapped.has(field)) appendField(field, null, null);
       article.append(table);
+      const iris = new Set([...(mapping.targetClasses || []).map(row => row.classIri), ...rows.map(row => row.targetPropertyIri)]);
+      if (iris.size) {
+        element('h3','Riferimenti semantici',article);
+        const list = element('ul','',article), warnings = [];
+        list.className = 'review-items';
+        for (const iri of iris) semanticReference(card,iri,element('li','',list),warnings);
+        showWarnings(warnings,article);
+      }
       element('h3', 'Campi esclusi', article);
       const excluded = (card.newColumns || []).filter(item => item.decision === 'EXCLUDE');
       if (!excluded.length) element('p', 'La scheda della fonte non elenca campi esclusi.', article);
@@ -287,7 +322,8 @@
           const row = document.createElement('tr');
           element('td', item.column, row);
           element('td', item.decision, row);
-          const effect = element('td', item.decision === 'EXCLUDE' ? 'Conservata solo nel file' : item.mapping.propertyIri, row);
+          const effect = element('td', item.decision === 'EXCLUDE' ? 'Conservata solo nel file' :
+            termLabel(card,item.mapping.propertyIri) + ' · ' + item.mapping.propertyIri, row);
           if (item.decision === 'MAP') detail('Trasformazione e regole', item.mapping, effect);
           decisions.append(row);
         }
@@ -301,7 +337,10 @@
         detail('Versione di partenza della revisione', card.revisionBase, article);
         if (card.assetRef) detail('Nuovo file e profilo da approvare', card.assetRef, article);
       }
-      detail('Configurazione completa da approvare', config, article);
+      const {semanticReviewTerms, ...configuration} = config;
+      if (Array.isArray(configuration.semanticReferenceBindings))
+        configuration.semanticReferenceBindings = configuration.semanticReferenceBindings.map(pinnedReference);
+      detail('Configurazione da approvare', configuration, article);
       if(card.progress?.activationProgress) detail('Avanzamento delle verifiche e tentativi disponibili', card.progress.activationProgress, article);
       if(card.progress?.activationProgress?.budgetExhausted && card.onboardingState === 'APPROVED') {
         element('p', 'Il tempo o i tentativi disponibili per le verifiche sono terminati. La configurazione resta approvata.', article);
@@ -355,7 +394,7 @@
     const feedback = items.flatMap(item => item.flags.filter(flag => flag.box.checked)
       .map(flag => ({section:flag.section,target:flag.target,comment:flag.comment.value.trim()})));
     if (['approve','reject'].includes(action) && feedback.length) return;
-    if (action === 'approve' && items.some(item => missingFileSnapshot(item.card))) return;
+    if (action === 'approve' && items.some(item => approvalBlocked(item.card))) return;
     if (action === 'changes' && (!feedback.length || feedback.length > 128 || new Blob([JSON.stringify(feedback)]).size > 48*1024)) {
       status('Seleziona da 1 a 128 voci e mantieni il riscontro entro 48 KiB.',true); return;
     }
