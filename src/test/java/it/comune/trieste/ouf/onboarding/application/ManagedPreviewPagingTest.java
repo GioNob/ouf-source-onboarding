@@ -78,7 +78,7 @@ class ManagedPreviewPagingTest {
     var byName = new LinkedHashMap<String,List<String>>();
     var retained = LARGE_VALUES.stream().map(value -> "p".repeat(124) + value.substring(value.length()-4)).toList();
     names.forEach(name -> byName.put(name, retained));
-    var values = Map.of("", byName);
+    Map<String,Map<String,List<String>>> values = Map.of("", byName);
     var paging = paging(DEFAULT_BUDGET, NOW);
     var received = new ArrayList<String>();
     for (int offset = 0; offset < names.size();) {
