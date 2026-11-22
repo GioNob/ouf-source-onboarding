@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {app, policy, sha256, startFixture} from './predecessor-fixture.mjs';
-import {verifyReturn, writeV42, writeCandidate} from './predecessor-scenario.mjs';
+import {verifyReturn, writePredecessor, writeCandidate} from './predecessor-scenario.mjs';
 
 const [previous, candidate] = process.argv.slice(2);
 for (const id of [previous, candidate]) assert.match(id, /^sha256:[0-9a-f]{64}$/);
@@ -50,7 +50,7 @@ async function ready(container, phase) {
   const logs = execFileSync('docker', ['logs', '--tail', '300', container],
     {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
   const flyway = /FlywayValidateException|Validate failed|Migration of schema .* failed|applied migration not resolved locally/i.test(logs);
-  if (phase === 'predecessor return on V44' && process.env.GITHUB_STEP_SUMMARY) {
+  if (phase === 'predecessor return on candidate data' && process.env.GITHUB_STEP_SUMMARY) {
     const reason = flyway ? 'I log indicano un errore di migrazione o validazione Flyway.' : 'La readiness non ha raggiunto UP.';
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Domande aperte\n\nIl predecessore si è fermato su V44. ${reason} La qualificazione D-080 resta aperta.\n`);
   }
@@ -71,6 +71,7 @@ try {
     'ouf.iam.enabled': true, 'ouf.iam.issuer': fixture.issuer, 'ouf.iam.audience': fixture.audience,
     'ouf.authorization.ths.enabled': true, 'ouf.authorization.ths.public-origin': 'https://ths.example.invalid',
     'ouf.workflow.ths.gateway-base-url': app, 'ouf.authorization.delegation.key-file': '/ci/delegation',
+    'ouf.onboarding.udp-identity.gateway-url': fixture.issuer,
     'ouf.onboarding.object-store.gateway-base-url': fixture.issuer, 'ouf.onboarding.object-store.token-file': '/ci/object-token',
     'spring.security.oauth2.client.registration.ouf-ths.provider': 'ci',
     'spring.security.oauth2.client.registration.ouf-ths.client-id': fixture.client,
@@ -96,9 +97,7 @@ try {
   assert.equal(sql("select to_regclass('ouf_onboarding.flyway_schema_history') is null"), 't');
   const old = run(previous);
   await ready(old, 'predecessor on empty database');
-  const baseline = history();
-  const baselineVersion = baseline.at(-1).version;
-  assert.ok(['42','43'].includes(baselineVersion));
+  const baseline = history('43');
   // Seed only the isolated IAM policy; the runtime writes every onboarding row through HTTP.
   const bundle = policy(), payload = JSON.stringify(bundle);
   assert.ok(!payload.includes("'"));
@@ -109,13 +108,13 @@ try {
     commit`);
   docker('restart', old);
   await ready(old, 'predecessor with CI policy');
-  const seed = await writeV42(fixture);
+  const seed = await writePredecessor(fixture);
   docker('stop', old);
 
   const next = run(candidate);
   await ready(next, 'candidate on populated database');
   const v44 = history('44');
-  assert.deepEqual(v44.slice(0, baseline.length), baseline);
+  assert.deepEqual(v44.slice(0, -1), baseline, 'candidate must retain the exact deployed migration history');
   assert.equal(v44.at(-2).script, 'V43__managed_review_feedback.sql');
   assert.equal(v44.at(-1).script, 'V44__managed_profile_distinct_values.sql');
   const result = await writeCandidate(fixture, seed);
@@ -143,8 +142,8 @@ try {
   docker('stop', next);
   docker('start', old);
   assert.equal(docker('inspect', '-f', '{{.Image}}', old), previous);
-  await ready(old, 'predecessor return on V44');
-  const returnedProfile = await verifyReturn(fixture, seed, result, baselineVersion);
+  await ready(old, 'predecessor return on candidate data');
+  const returnedProfile = await verifyReturn(fixture, seed, result);
   assert.equal(distinctProfile(result.typed.profileId), valueEvidence);
   assert.equal(distinctProfile(returnedProfile.profileId), 'NULL');
   assert.equal(sql(`select parent_version_id from ouf_onboarding.onboarding_version where onboarding_version_id='${result.child.onboardingVersionId}'`),

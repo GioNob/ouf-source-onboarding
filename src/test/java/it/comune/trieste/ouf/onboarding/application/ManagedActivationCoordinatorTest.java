@@ -44,7 +44,10 @@ class ManagedActivationCoordinatorTest {
   }
   @AfterEach void stop(){server.stop(0);}
   private ManagedOnboardingReviewService.ActivationClaim claim(boolean compatible,boolean reconciled){
-    var claim=new ManagedOnboardingReviewService.ActivationClaim(challenge,version,"test-source",hash,3,1,Map.of("frozen","configuration"),reconciled?Map.of("state","ACTIVE"):Map.of("ingestionCompatibilityObserved",compatible),reconciled);
+    return claim(compatible,reconciled,false);
+  }
+  private ManagedOnboardingReviewService.ActivationClaim claim(boolean compatible,boolean reconciled,boolean recheck){
+    var claim=new ManagedOnboardingReviewService.ActivationClaim(challenge,version,"test-source",hash,3,1,Map.of("frozen","configuration"),reconciled?Map.of("state","ACTIVE"):Map.of("ingestionCompatibilityObserved",compatible),reconciled,recheck);
     when(reviews.claimActivation(principal,challenge,decision)).thenReturn(claim);return claim;
   }
   private Map<String,Object> activate(){return coordinator.activate(principal,challenge,decision,"test-auth","Bearer fixture-human");}
@@ -56,13 +59,38 @@ class ManagedActivationCoordinatorTest {
   @Test void retainedCompatibilityAvoidsAnotherProbe(){
     claim(true,false);activate();assertThat(requests).containsExactly("/api/udp/v1/governance/identity/preflight");
   }
+  @Test void humanRecheckProbesIngestionAndUdpEvenWithRetainedCompatibility(){
+    var claim=claim(true,false,true);
+    assertThat(activate()).containsEntry("state","ACTIVE");
+    assertThat(requests).containsExactly("/api/trusted-human/v1/ingestion/onboarding-readiness","/api/udp/v1/governance/identity/preflight");
+    verify(reviews).finishActivation(principal,claim,"test-auth");
+  }
   @Test void alreadyActiveReconcilesWithoutReplayingDependenciesOrActivation(){
     claim(false,true);assertThat(activate()).containsEntry("state","ACTIVE");assertThat(requests).isEmpty();verify(reviews,never()).finishActivation(any(),any(),anyString());
   }
-  @Test void transientDependencyPausesOneAttemptAndHonorsRetryAfter(){
-    var claim=claim(false,false);readinessStatus=503;
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(ints={408,429,503})
+  void transientDependencyPausesOneAttemptAndHonorsRetryAfter(int status){
+    var claim=claim(false,false);readinessStatus=status;
     assertThatThrownBy(this::activate).isInstanceOf(DomainFailure.class);
-    assertThat(requests).hasSize(1);verify(reviews).activationFailure(claim,"ONB_READINESS_DEPENDENCY_503",true,93);verify(reviews,never()).finishActivation(any(),any(),anyString());
+    assertThat(requests).hasSize(1);verify(reviews).activationFailure(claim,"ONB_READINESS_DEPENDENCY_"+status,true,93);verify(reviews,never()).finishActivation(any(),any(),anyString());
+  }
+  @Test void dependency422BlocksWithoutReachingIdentityOrActivation(){
+    var claim=claim(false,false);readinessStatus=422;
+    assertThatThrownBy(this::activate).isInstanceOfSatisfying(DomainFailure.class,
+        failure->assertThat(failure.code()).isEqualTo("ONB_READINESS_DEPENDENCY_422"));
+    assertThat(requests).containsExactly("/api/trusted-human/v1/ingestion/onboarding-readiness");
+    verify(reviews).activationFailure(claim,"ONB_READINESS_DEPENDENCY_422",false,0);
+    verify(reviews,never()).finishActivation(any(),any(),anyString());
+  }
+  @Test void humanRecheckAllowsOnlyNonTransientDependency4xxAndTheLegacyUdpCode(){
+    for(int status=400;status<=499;status++)
+      assertThat(ManagedOnboardingReviewService.humanRecheckCode("ONB_READINESS_DEPENDENCY_"+status))
+          .as("HTTP %s",status).isEqualTo(status!=408&&status!=429);
+    assertThat(ManagedOnboardingReviewService.humanRecheckCode("ONB_UDP_IDENTITY_PREFLIGHT_REQUIRED")).isTrue();
+    for(String code:Arrays.asList(null,"ONB_READINESS_DEPENDENCY_399","ONB_READINESS_DEPENDENCY_500",
+        "ONB_READINESS_DEPENDENCY_422_EXTRA","ONB_READINESS_OUTCOME_UNCONFIRMED"))
+      assertThat(ManagedOnboardingReviewService.humanRecheckCode(code)).as("%s",code).isFalse();
   }
   @Test void receivedResponseIsBoundedBeforeBuffering(){
     var claim=claim(false,false);oversized=true;assertThatThrownBy(this::activate).isInstanceOf(DomainFailure.class);verify(reviews).activationFailure(claim,"ONB_READINESS_RESPONSE_TOO_LARGE",false,0);verify(reviews,never()).finishActivation(any(),any(),anyString());

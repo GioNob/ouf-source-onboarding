@@ -103,6 +103,11 @@ export async function startFixture() {
             'object://ci/return-profile.csv'].includes(url.searchParams.get('ref')));
           res.writeHead(200, {'Content-Type': 'text/csv', 'Content-Length': csv.length});
           return res.end(csv);
+        case '/api/trusted-human/v1/ingestion/onboarding-readiness':
+          assert.equal(req.method, 'POST');
+          assert.ok(req.headers.authorization?.startsWith('Bearer '));
+          res.writeHead(422);
+          return res.end();
         default:
           res.writeHead(404);
           res.end();
