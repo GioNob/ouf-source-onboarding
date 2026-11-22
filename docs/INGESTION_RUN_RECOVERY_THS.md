@@ -6,11 +6,20 @@ Il percorso è `/trusted-human/ingestion-run-recovery/?runId={runId}&expectedVer
 
 Ingestion espone `decisionDeadline` in `status` e `history` per ogni run la cui `recoveryAction` richiede un umano. È la fine della finestra di decisione in formato ISO-8601 UTC e alimenta il `deadline` del `WAIT_FOR_HUMAN` del MCP. Per `HUMAN_RESUME_REQUIRED`, il MCP chiede a Onboarding il link da usare in `next.human.reviewUrl` con `decisionKind: RESUME_OR_ABORT`. La durata di presentazione del link e il budget del worker hanno scadenze distinte.
 
+## Link THS per la revisione semantica
+
+Dopo `semantic.review.prepare` o `semantic.approval.request`, il MCP invia via Gateway `{challengeId}` a `POST /api/internal/v1/onboarding/ths-links/semantic-review` per ottenere `reviewUrl` ed `expiresAt` per `WAIT_FOR_HUMAN`. Il Gateway usa la stessa ricevuta HUMAN managed-file, con tenant e soggetto firmati e capability `ouf.onboarding.ths-links.semantic-review` vincolata a metodo, percorso e corpo effettivo. Il corpo richiede un solo UUID in forma canonica minuscola.
+
+Onboarding costruisce `/trusted-human/semantic/?challenge={challengeId}` sull’origine HTTPS `ouf.authorization.ths.public-origin`. L’origine mancante o non valida produce `503 ONB_THS_LINK_ORIGIN_REQUIRED`. Entrambe le rotte usano `ouf.onboarding.ths-links.ingestion-run-recovery.presentation-ttl` (`PT10M` per default) per calcolare `expiresAt` in UTC. La scadenza di presentazione è distinta dalla scadenza della challenge.
+
+L’emissione del link verifica la delega e restituisce un indirizzo di navigazione. All’apertura, `workflow-review` richiede una sessione OAuth THS e legge la challenge dal Semantic Registry via Gateway con l’identità HUMAN della sessione. Il Registry verifica la proprietà della challenge nel perimetro del tenant e restituisce lo stato corrente usato dalla pagina. Approvazione, rifiuto e pubblicazione richiedono azioni HUMAN esplicite e i controlli dell’owner.
+
 ## Rotte da esporre nel Gateway
 
 | Metodo | Percorso | Destinazione |
 |---|---|---|
 | POST | `/api/internal/v1/onboarding/ths-links/ingestion-run-recovery` | Onboarding, invocazione MCP con ricevuta Gateway HUMAN `ouf.onboarding.ths-links.ingestion-run-recovery` |
+| POST | `/api/internal/v1/onboarding/ths-links/semantic-review` | Onboarding, invocazione MCP con ricevuta Gateway HUMAN `ouf.onboarding.ths-links.semantic-review` |
 | GET | `/trusted-human/ingestion-run-recovery/` | Onboarding, sessione THS |
 | GET | `/trusted-human/ingestion-run-recovery/recovery.js`, `/trusted-human/ingestion-run-recovery/recovery.css` | Onboarding, sessione THS |
 | GET | `/trusted-human/ingestion-run-recovery/api/{runId}/{expectedVersion}` | Onboarding, sessione THS |

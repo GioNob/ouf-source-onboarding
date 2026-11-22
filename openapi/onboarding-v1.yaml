@@ -296,6 +296,64 @@ paths:
               schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
         default:
           $ref: '#/components/responses/Problem'
+  /ths-links/semantic-review:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: createSemanticReviewThsLink
+      summary: Present a link to the semantic review page hosted by Onboarding
+      x-ouf-internal-capability: ouf.onboarding.ths-links.semantic-review
+      security: [{managedFileOwnerReceipt: []}]
+      description: |
+        This internal MCP-to-Gateway operation requires a managed-file owner receipt with a HUMAN
+        tenant and subject, bound to the route and exact JSON body. The link opens the semantic
+        workflow-review page. On opening it, the THS uses the HUMAN session to fetch the current
+        challenge from Semantic Registry, which checks challenge ownership and state. Link issuance
+        carries no decision authority.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challengeId]
+              additionalProperties: false
+              properties:
+                challengeId: {type: string, format: uuid, pattern: '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'}
+      responses:
+        '200':
+          description: Link on the configured THS origin and its UTC presentation expiry, independent of the challenge expiry.
+          headers:
+            Cache-Control: {schema: {const: no-store}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reviewUrl, expiresAt]
+                additionalProperties: false
+                properties:
+                  reviewUrl: {type: string, format: uri}
+                  expiresAt: {type: string, format: date-time}
+        '400':
+          description: Invalid body (ONB_THS_LINK_ARGUMENTS_INVALID).
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        '403':
+          description: Missing or invalid HUMAN delegation (ONB_MANAGED_FILE_RECEIPT_INVALID).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code]
+                properties:
+                  code: {const: ONB_MANAGED_FILE_RECEIPT_INVALID}
+        '503':
+          description: Missing or invalid ouf.authorization.ths.public-origin (ONB_THS_LINK_ORIGIN_REQUIRED).
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        default:
+          $ref: '#/components/responses/Problem'
   /managed-files/{assetId}/create-onboarding:
     post:
       operationId: createManagedFileOnboarding
@@ -488,6 +546,11 @@ paths:
       responses: {'200': {description: Relationship mapping and runtime resolution policies}, default: {$ref: '#/components/responses/Problem'}}
 components:
   securitySchemes:
+    managedFileOwnerReceipt:
+      type: apiKey
+      in: header
+      name: X-OUF-Managed-File-Receipt
+      description: Short-lived signed HUMAN delegation from Gateway, bound to method, path, capability and body.
     bearerAuth:
       type: http
       scheme: bearer
