@@ -57,9 +57,18 @@ class ManagedWideProfileRuntimeTest {
     assertThatThrownBy(()->files.requireTenantOwner(asset,"tenant-b",subject)).hasMessageContaining("scope");
     assertThatThrownBy(()->files.requireOwner(asset,"human:other")).hasMessageContaining("owned");
 
-    // Rows written by the predecessor omit the new column, while keeping their exact count.
-    db.sql("update ouf_onboarding.file_profile set distinct_cell_values=null where profile_id=:p").param("p",profile).update();
-    var retained=json.valueToTree(api.preview(selector,request)).path("columns").get(0);
+    // A writer using the predecessor's column set can still append a profile after V44.
+    UUID legacyProfile=UUID.randomUUID();
+    assertThat(db.sql("""
+        insert into ouf_onboarding.file_profile
+          (profile_id,asset_id,version,format,metadata,inferred_schema,candidate_keys,sample_ref,redacted_sample)
+        select :legacy,asset_id,version+1,format,metadata,inferred_schema,candidate_keys,sample_ref,redacted_sample
+        from ouf_onboarding.file_profile where profile_id=:current
+        """).param("legacy",legacyProfile).param("current",profile).update()).isEqualTo(1);
+    byte[] legacySelector=json.writeValueAsBytes(Map.of("Arguments",Map.of("assetId",asset,"profileId",legacyProfile)));
+    org.mockito.Mockito.when(receipts.verifyManagedFile(null,path,"ouf.managed-source.preview",legacySelector))
+        .thenReturn(new it.comune.trieste.ouf.onboarding.api.PermissionDelegationVerifier.Delegated(principal,"preview"));
+    var retained=json.valueToTree(api.preview(legacySelector,request)).path("columns").get(0);
     assertThat(retained.has("distinctValues")).isFalse();
     assertThat(retained.path("distinctCount").asInt()).isEqualTo(2);
   }

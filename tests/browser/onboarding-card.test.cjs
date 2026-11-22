@@ -110,6 +110,8 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
     card.termVerification='COMPLETE';card.verifiedTerms=semantic;
     await page.reload();await table.waitFor();assert.ok(await page.locator('#approve').isEnabled());
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+    const columnScroll=page.getByRole('region',{name:'Campi del file, tabella scorrevole'});
+    assert.ok(await columnScroll.evaluate(region=>region.scrollWidth>region.clientWidth));
     assert.equal(await page.locator('#changes').isDisabled(),true);
     const flag=table.getByRole('checkbox',{name:'Da modificare · Campo referente',exact:true});
     await flag.check();
