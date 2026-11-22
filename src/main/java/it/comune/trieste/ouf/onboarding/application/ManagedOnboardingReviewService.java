@@ -7,10 +7,13 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** Prepares one immutable source review. A delegated request cannot approve or activate it. */
 @Service
@@ -23,6 +26,8 @@ public class ManagedOnboardingReviewService {
   private final CanonicalHash hashes;
   private final AuthorizationPolicyRegistry policy;
   private final String publicOrigin;
+  private final TransactionTemplate tx;
+  private final ManagedValueMapPreparation valueMaps;
   public record Prepare(String sourceId,UUID onboardingVersionId,long expectedVersion,
       String commandKey,ManagedFileExecutionProposal.Proposal executionProposal,
       @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
@@ -32,10 +37,11 @@ public class ManagedOnboardingReviewService {
     }
   }
   public ManagedOnboardingReviewService(JdbcClient db,OnboardingService onboarding,
-      ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy,
+      ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy,TransactionTemplate tx,
+      ManagedValueMapPreparation valueMaps,
       @Value("${ouf.authorization.ths.public-origin:}") String publicOrigin){
     this.db=db;this.onboarding=onboarding;this.files=files;this.hashes=hashes;
-    this.policy=policy;this.publicOrigin=publicOrigin;
+    this.policy=policy;this.publicOrigin=publicOrigin;this.tx=tx;this.valueMaps=valueMaps;
   }
   private static DomainFailure fail(HttpStatus status,String code){return new DomainFailure(status,code,code);}
   private static void identity(String source,UUID version){
@@ -70,7 +76,12 @@ public class ManagedOnboardingReviewService {
       throw fail(HttpStatus.SERVICE_UNAVAILABLE,"ONB_REVIEW_THS_ORIGIN_REQUIRED");
     return publicOrigin.replaceAll("/+$","")+"/trusted-human/onboarding/?challenge="+challenge;
   }
-  @Transactional public Map<String,Object> prepare(PrincipalContext p,Prepare request,String correlation){
+  private record Preparation(Map<String,Object> receipt,Map<String,Object> draft,ManagedValueMapPreparation.Admission admission){
+    static Preparation done(Map<String,Object> receipt){return new Preparation(receipt,null,null);}
+  }
+
+  @Transactional(propagation=Propagation.NOT_SUPPORTED)
+  public Map<String,Object> prepare(PrincipalContext p,Prepare request,String correlation){
     if(request==null)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_REQUEST_INVALID");
     authorize(p,PREPARE,"COMMAND",request.sourceId(),request.onboardingVersionId());
     if(request.commandKey()==null||!request.commandKey().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
@@ -80,12 +91,55 @@ public class ManagedOnboardingReviewService {
     String fingerprint=hashes.of(request);
     if(request.candidateAction()!=null && (!Set.of("WITHDRAW","RESTART_DRAFT").contains(request.candidateAction())
         ||request.executionProposal()!=null))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_REQUEST_INVALID");
-    // Both command journals share one key namespace, including across source versions.
+    var preparation=tx.execute(status->beginPreparation(p,request,fingerprint,correlation));
+    if(preparation.admission()==null)return preparation.receipt();
+    if(preparation.admission().failure()!=null)throw preparation.admission().failure();
+    var claim=preparation.admission().claim();
+    Map<String,Object> verified;
+    try{
+      // Every attempt resolves live. The journal holds only digests and the attempt fence.
+      verified=onboarding.verifyValueMapDraft(request.sourceId(),preparation.draft(),
+          (ref,digest)->valueMaps.observe(claim,ref,digest));
+    }catch(DomainFailure failure){
+      throw valueMaps.failed(claim,failure);
+    }catch(DataAccessException failure){
+      throw failure;
+    }catch(RuntimeException failure){
+      throw valueMaps.failed(claim,new DomainFailure(HttpStatus.CONFLICT,
+          "ONB_VALUE_MAP_PREPARATION_BLOCKED","Semantic verification requires reconciliation"));
+    }
+    try{
+      return tx.execute(status->{
+        lockPreparation(p,request);
+        db.sql("select onboarding_version_id from ouf_onboarding.onboarding_version where onboarding_version_id=:v for update")
+            .param("v",request.onboardingVersionId()).query(UUID.class).optional();
+        authorize(p,PREPARE,"COMMAND",request.sourceId(),request.onboardingVersionId());
+        var current=ownedVersion(p,request.sourceId(),request.onboardingVersionId());
+        requireCurrentDraft(current,request);
+        @SuppressWarnings("unchecked") var configuration=(Map<String,Object>)current.get("configuration");
+        var draft=request.executionProposal()==null?configuration:compileProposal(p,request,current,configuration);
+        if(!draft.equals(preparation.draft()))throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_VERSION");
+        valueMaps.complete(claim);
+        return finishPreparation(p,request,fingerprint,correlation,current,draft,verified);
+      });
+    }catch(DomainFailure failure){
+      throw valueMaps.failed(claim,failure);
+    }
+  }
+
+  private void lockPreparation(PrincipalContext p,Prepare request){
+    // All command journals share one key namespace, including across source versions.
     db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:k,0))) locked")
         .param("k","review-command:"+hashes.of(List.of(p.tenantId(),p.subjectId(),request.commandKey()))).query(Integer.class).single();
     db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:v,0))) locked")
         .param("v",request.onboardingVersionId().toString()).query(Integer.class).single();
+  }
+
+  private Preparation beginPreparation(PrincipalContext p,Prepare request,String fingerprint,String correlation){
+    lockPreparation(p,request);
     var current=ownedVersion(p,request.sourceId(),request.onboardingVersionId());
+    var key=new ManagedValueMapPreparation.Key(p.tenantId(),p.subjectId(),request.commandKey());
+    valueMaps.checkKey(key,fingerprint);
     var past=db.sql("select request_hash,result_id from ouf_onboarding.managed_candidate_recovery where tenant_id=:t and subject_id=:s and command_key=:k")
         .param("t",p.tenantId()).param("s",p.subjectId()).param("k",request.commandKey()).query().listOfRows();
     if(!past.isEmpty()){
@@ -97,7 +151,7 @@ public class ManagedOnboardingReviewService {
           .param("v",result).query().listOfRows();
       if(!resultReview.isEmpty()&&(!p.tenantId().equals(resultReview.getFirst().get("tenant_id"))
           ||!p.subjectId().equals(resultReview.getFirst().get("subject_id"))))throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
-      return receipt(ownedVersion(p,request.sourceId(),result),resultReview.isEmpty()?null:resultReview.getFirst());
+      return Preparation.done(receipt(ownedVersion(p,request.sourceId(),result),resultReview.isEmpty()?null:resultReview.getFirst()));
     }
     var retained=db.sql("select * from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:v or (tenant_id=:t and subject_id=:s and command_key=:k) for update")
         .param("v",request.onboardingVersionId()).param("t",p.tenantId()).param("s",p.subjectId())
@@ -110,18 +164,28 @@ public class ManagedOnboardingReviewService {
       var review=retained.getFirst();
       if(review.get("command_key").equals(request.commandKey())){
         if(!review.get("request_hash").equals(fingerprint))throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_COMMAND_CONFLICT");
-        return receipt(ownedVersion(p,request.sourceId(),request.onboardingVersionId()),review);
+        return Preparation.done(receipt(ownedVersion(p,request.sourceId(),request.onboardingVersionId()),review));
       }
     }
     if(request.candidateAction()!=null||!retained.isEmpty())
-      return recoverCandidate(p,request,fingerprint,retained.isEmpty()?null:retained.getFirst(),correlation);
+      return Preparation.done(recoverCandidate(p,request,fingerprint,retained.isEmpty()?null:retained.getFirst(),correlation));
+    requireCurrentDraft(current,request);
+    @SuppressWarnings("unchecked") var configuration=(Map<String,Object>)current.get("configuration");
+    var draft=request.executionProposal()==null?configuration:compileProposal(p,request,current,configuration);
+    var selection=PublishedDatatypes.valueMapSelection(draft);
+    if(selection.isEmpty())return Preparation.done(finishPreparation(p,request,fingerprint,correlation,current,draft,null));
+    String selectionHash=hashes.of(List.of(request.expectedVersion(),selection));
+    return new Preparation(null,draft,valueMaps.claim(key,request.onboardingVersionId(),fingerprint,selectionHash));
+  }
+
+  private static void requireCurrentDraft(Map<String,Object> current,Prepare request){
     if(!"DRAFT".equals(current.get("state"))
         ||((Number)current.get("lock_version")).longValue()!=request.expectedVersion())
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_VERSION");
-    var actor=new OnboardingService.Actor(p.subjectId(),"HUMAN_USER",Set.of(PREPARE));
-    long version=request.expectedVersion();
-    if(request.executionProposal()!=null){
-      @SuppressWarnings("unchecked") var configuration=(Map<String,Object>)current.get("configuration");
+  }
+
+  private Map<String,Object> compileProposal(PrincipalContext p,Prepare request,Map<String,Object> current,
+      Map<String,Object> configuration){
       @SuppressWarnings("unchecked") var metadata=(Map<String,Object>)onboarding.source(request.sourceId()).get("metadata");
       var selection=ManagedReviewSnapshot.child(ManagedReviewSnapshot.child(configuration,"extractionProfile"),"selection");
       UUID selected=UUID.fromString((String)selection.get("assetId"));
@@ -142,12 +206,25 @@ public class ManagedOnboardingReviewService {
             .param("profile",UUID.fromString((String)selection.get("fileProfileId"))).query(Boolean.class).single();
         if(!sameRefusedInput)throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT");
       }
-      var asset=files.asset(selected);
-      var complete=ManagedFileExecutionProposal.compile(configuration,asset,p.tenantId(),request.executionProposal());
-      current=onboarding.patchVersion(request.sourceId(),request.onboardingVersionId(),version,complete,actor,correlation);
+      return ManagedFileExecutionProposal.compile(configuration,files.asset(selected),p.tenantId(),request.executionProposal());
+  }
+
+  private Map<String,Object> finishPreparation(PrincipalContext p,Prepare request,String fingerprint,String correlation,
+      Map<String,Object> current,Map<String,Object> draft,Map<String,Object> verified){
+    var actor=new OnboardingService.Actor(p.subjectId(),"HUMAN_USER",Set.of(PREPARE));
+    long version=request.expectedVersion();
+    if(request.executionProposal()!=null){
+      current=onboarding.patchVersion(request.sourceId(),request.onboardingVersionId(),version,draft,actor,correlation);
       version=((Number)current.get("lock_version")).longValue();
     }
-    current=onboarding.submit(request.sourceId(),request.onboardingVersionId(),version,actor,correlation);
+    if(verified==null)current=onboarding.submit(request.sourceId(),request.onboardingVersionId(),version,actor,correlation);
+    else{
+      if(!verified.equals(draft)){
+        current=onboarding.patchVersion(request.sourceId(),request.onboardingVersionId(),version,verified,actor,correlation);
+        version=((Number)current.get("lock_version")).longValue();
+      }
+      current=onboarding.freezeVerifiedDraft(request.sourceId(),request.onboardingVersionId(),version,current,actor,correlation);
+    }
     var challenge=onboarding.createChallenge(request.sourceId(),request.onboardingVersionId(),actor,correlation);
     db.sql("insert into ouf_onboarding.managed_onboarding_review(tenant_id,subject_id,command_key,request_hash,source_id,onboarding_version_id,challenge_id,configuration_hash) values(:t,:s,:k,:r,:source,:v,:c,:h)")
         .param("t",p.tenantId()).param("s",p.subjectId()).param("k",request.commandKey()).param("r",fingerprint)
@@ -240,6 +317,7 @@ public class ManagedOnboardingReviewService {
           throw fail(HttpStatus.CONFLICT,"ONB_CANDIDATE_WITHDRAW_NOT_ALLOWED");
         db.sql("update ouf_onboarding.onboarding_version set state='REJECTED',configuration_hash=:h,frozen_at=coalesce(frozen_at,clock_timestamp()),lock_version=lock_version+1,updated_at=clock_timestamp() where onboarding_version_id=:v")
             .param("v",version).param("h",hash).update();
+        valueMaps.cancel(version);
         db.sql("update ouf_onboarding.approval_challenge set status='INVALIDATED' where onboarding_version_id=:v and status='CREATED'")
             .param("v",version).update();
         db.sql("update ouf_onboarding.managed_onboarding_review set readiness_generation=readiness_generation+1,readiness_lease_until=null where onboarding_version_id=:v")

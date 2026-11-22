@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.domain.*;
 import java.time.*;
 import java.util.*;
+import java.util.function.BiConsumer;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -79,6 +80,18 @@ public class OnboardingService {
     }else if(ManagedReviewSnapshot.list(prior).stream().map(ManagedReviewSnapshot::object).anyMatch(PublishedDatatypes::hasPinnedEvidence)){
       throw DatatypeResolver.unresolved();
     }
+    return freezeVerifiedDraft(sourceId,id,expected,current,actor,correlation);
+  }
+
+  Map<String,Object> verifyValueMapDraft(String sourceId,Map<String,Object> draft,BiConsumer<String,String> observed){
+    var verified=new LinkedHashMap<>(draft);
+    var profiles=managedFiles.getObject().projectedTypes(sourceId,ManagedReviewSnapshot.child(draft,"extractionProfile"));
+    PublishedDatatypes.prepare(verified,profiles,datatypeResolver,hashes,observed);
+    return verified;
+  }
+
+  /** Caller has verified the bindings and persists the matching draft in the same transaction. */
+  Map<String,Object> freezeVerifiedDraft(String sourceId,UUID id,long expected,Map<String,Object> current,Actor actor,String correlation){
     Map<String,Object> validation=validate(sourceId,id,actor,correlation);if(!"PASS".equals(validation.get("result")))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALIDATION_FAILED","Configuration contains blocking validation errors");String hash=hashes.of(current.get("configuration"));
     if(db.sql("""
         select exists(select 1 from ouf_onboarding.managed_candidate_recovery w

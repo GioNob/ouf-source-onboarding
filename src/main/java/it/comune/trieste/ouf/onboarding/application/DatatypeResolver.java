@@ -12,7 +12,7 @@ public interface DatatypeResolver {
   }
   static DomainFailure unresolvedValueMap(){
     return new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,
-        "ONB_VALUE_MAP_UNRESOLVED","Published value map and target vocabulary required");
+        "ONB_VALUE_MAP_UNRESOLVED","Select a published ACTIVE value map revision and prepare the request with a new commandKey.");
   }
   Map<String,Object> resolve(String semanticId,String revisionId,String publicationSetId);
 }
