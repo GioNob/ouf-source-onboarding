@@ -65,8 +65,14 @@ public final class ManagedMcpObservation {
 
   public static Map<String,Object> created(Map<String,Object> body) {
     if (draftState(body)) return version(body, false);
-    // An idempotent create replay returns only the identity, even after the review advances.
-    return with(body, State.valueOf((String) body.get("state")), Reason.CURRENT_REVIEW_REQUIRED, Action.READ_AGAIN);
+    // An idempotent create replay returns only the identity, even after the review advances:
+    // the current state is not known here, so the only allowed action is to read the version again.
+    if (!(body.get("state") instanceof String observed)) {
+      var result = with(body, null, Reason.CURRENT_REVIEW_REQUIRED, Action.READ_AGAIN);
+      result.remove("workflowState");
+      return result;
+    }
+    return with(body, State.valueOf(observed), Reason.CURRENT_REVIEW_REQUIRED, Action.READ_AGAIN);
   }
 
   public static Map<String,Object> version(Map<String,Object> body, boolean revisionAllowed) {
