@@ -69,7 +69,11 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     semantic={...semantic,target_content_hash:'d'.repeat(64)};
     await page.getByRole('button',{name:'Accedi di nuovo'}).click();await page.locator('article.card').waitFor();
     assert.equal(await page.locator('article input').isChecked(),false);assert.equal(posts.length,2);
-    let sourcePosts=0,budgetPosts=0,budgetCommand;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{targetClasses:[{classIri:"urn:example:class",category:{schemeIri:"urn:example:scheme",conceptIri:"urn:example:concept"}},{classIri:"urn:example:other"}],propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
+    let sourcePosts=0,budgetPosts=0,budgetCommand,dependencyCorrected=false;
+    const blocked={readiness_phase:'BLOCKED',readiness_generation:1,readiness_last_code:'ONB_READINESS_DEPENDENCY_422',
+      sessionAttempts:1,cumulativeAttempts:1,maximumAttempts:128,budgetExpiresAt:'2999-01-01T00:00:00Z',
+      budgetExhausted:false,humanRecheckAllowed:true,humanBudgetGrantAvailable:false,counterLineageVerified:true};
+    const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{targetClasses:[{classIri:"urn:example:class",category:{schemeIri:"urn:example:scheme",conceptIri:"urn:example:concept"}},{classIri:"urn:example:other"}],propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
     source.configuration.dataAccessPolicies=[{scope:'PROPERTY',target:'urn:name',label:'RESTRICTED'}];
     source.termVerification='COMPLETE';
     source.verifiedTerms=Object.fromEntries(['urn:example:class','urn:example:other','urn:name'].map(iri=>[iri,{
@@ -78,8 +82,9 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     source.newColumns=[{column:'note',decision:'EXCLUDE'},{column:'nome',decision:'MAP',mapping:{propertyIri:'urn:name',transform:'IDENTITY',reconciliation:{cardinality:'SINGLE'}}}];
     await page.route('**/trusted-human/onboarding/api/**',async route=>{
       if(route.request().method()==='POST' && route.request().url().endsWith('/resume')){
-        sourcePosts++;assert.deepEqual(route.request().postDataJSON(),{configurationHash:'sha256:'+hash,expectedVersion:3,expectedGeneration:1,blockedCode:'ONB_READINESS_DEPENDENCY_403'});
-        source.progress.activationProgress={...source.progress.activationProgress,readiness_phase:'PAUSED',readiness_generation:2};
+        sourcePosts++;assert.deepEqual(route.request().postDataJSON(),{configurationHash:'sha256:'+hash,expectedVersion:3,expectedGeneration:1,blockedCode:'ONB_READINESS_DEPENDENCY_422'});
+        assert.equal(route.request().headers()['x-csrf-token'],'test-csrf');
+        source.progress.activationProgress={...blocked,readiness_phase:'PAUSED',readiness_generation:2,humanRecheckAllowed:false};
         await route.fulfill({json:{state:'APPROVED'}});return;
       }
       if(route.request().method()==='POST'){
@@ -94,7 +99,16 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
           await route.abort('failed');
         } else {
           assert.deepEqual(route.request().postDataJSON(),{configurationHash:'sha256:'+hash,expectedVersion:source.lockVersion});
-          await route.fulfill(route.request().url().endsWith('/activate')?{json:{state:'ACTIVE'}}:{status:412,json:{code:'ONB_REVIEW_STALE_CARD'}});
+          if (!route.request().url().endsWith('/activate')) {
+            await route.fulfill({status:412,json:{code:'ONB_REVIEW_STALE_CARD'}});
+          } else if (!dependencyCorrected) {
+            source.progress.activationProgress=blocked;
+            await route.fulfill({status:409,json:{code:blocked.readiness_last_code,detail:'fixture value omitted from the card'}});
+          } else {
+            source.onboardingState='ACTIVE';
+            source.progress.activationProgress={readiness_phase:'ACTIVE',readiness_generation:3};
+            await route.fulfill({json:{state:'ACTIVE'}});
+          }
         }
       }
       else await route.fulfill({json:{card:source,csrfHeader:'X-CSRF-TOKEN',csrfToken:'test-csrf'}});
@@ -115,22 +129,39 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     await page.locator('#refresh').click();await page.getByRole('status').filter({hasText:'Esamina le proposte'}).waitFor();assert.equal(sourcePosts,1);assert.deepEqual(errors,[]);
     // An approved source can now request real readiness before activation; no hidden approval or automatic POST.
     source.status='CONFIRMED';source.onboardingState='APPROVED';source.lockVersion=3;
-    source.progress={ingestionCompatibilityObserved:false,activationProgress:{readiness_phase:'NOT_STARTED'}};
+    source.progress={ingestionCompatibilityObserved:false,activationProgress:{readiness_phase:'PAUSED',readiness_next_at:'2999-01-01T00:00:00Z'}};
+    await page.reload();await page.locator('article.card').waitFor();
+    assert.equal(await page.locator('#complete').isDisabled(),true);
+    source.progress.activationProgress={readiness_phase:'NOT_STARTED'};
     await page.reload();await page.locator('article.card').waitFor();
 
     assert.equal(await page.locator('#complete').isEnabled(),true);
     assert.equal(await page.locator('#approve').isDisabled(),true);
     const priorSourcePosts=sourcePosts;
     await page.locator('#complete').click();
-    await page.getByRole('status').filter({hasText:'1 decisioni registrate'}).waitFor();
+    await page.getByRole('status').filter({hasText:'ONB_READINESS_DEPENDENCY_422'}).waitFor();
     assert.equal(sourcePosts,priorSourcePosts+1);
-    source.progress.activationProgress={readiness_phase:'PAUSED',readiness_next_at:'2999-01-01T00:00:00Z'};
-    await page.reload();await page.locator('article.card').waitFor();
-    assert.equal(await page.locator('#complete').isDisabled(),true);
-    assert.equal(sourcePosts,priorSourcePosts+1);
-    source.progress.activationProgress={readiness_phase:'BLOCKED',readiness_generation:1,readiness_attempts:1,readiness_started_at:new Date().toISOString(),readiness_last_code:'ONB_READINESS_DEPENDENCY_403'};
-    await page.reload();await page.locator('article.card').waitFor();
+    await page.getByText(/compatibilità con Ingestion.*HTTP 422/).waitFor();
+    assert.equal(await page.getByText('fixture value omitted from the card').count(),0);
     assert.equal(await page.locator('#complete').isDisabled(),true);assert.equal(await page.locator('#resume').isEnabled(),true);
+    await page.setViewportSize({width:375,height:812});
+    await page.getByText(/Riprendi.*nuovo controllo completo.*127 tentativi/).waitFor();
+    await page.getByText(/Dopo la ripresa scegli “Verifica e attiva”/).waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+    fs.mkdirSync('target/browser-evidence',{recursive:true});
+    await page.screenshot({path:'target/browser-evidence/workflow-dependency-recheck-375.png',fullPage:true});
+
+    source.progress.activationProgress={...blocked,humanRecheckAllowed:false};
+    await page.reload();await page.getByText(/chiedi all’agente di preparare una nuova versione/).waitFor();
+    assert.equal(await page.locator('#resume').isDisabled(),true);assert.equal(await page.locator('#complete').isDisabled(),true);
+    source.progress.activationProgress={...blocked,budgetExhausted:true,humanRecheckAllowed:false,humanBudgetGrantAvailable:true,
+      cumulativeAttempts:128,sessionAttempts:128,reconciledBudgetReason:blocked.readiness_last_code};
+    await page.reload();await page.getByText(/Il ricontrollo richiede un nuovo budget/).waitFor();
+    assert.equal(await page.locator('#resume').isDisabled(),true);assert.equal(await page.locator('#complete').isDisabled(),true);
+    assert.equal(await page.locator('#budget').isEnabled(),true);
+
+    source.progress.activationProgress=blocked;
+    await page.reload();await page.getByText(/Dopo la ripresa scegli/).waitFor();
     const beforeResume=sourcePosts;await page.locator('#resume').click();
     await page.getByRole('status').filter({hasText:'Ripresa registrata'}).waitFor();
     assert.equal(sourcePosts,beforeResume+1);assert.equal(source.onboardingState,'APPROVED');
@@ -138,6 +169,12 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     await page.reload();await page.locator('article.card').waitFor();
     assert.equal(await page.locator('#complete').isEnabled(),true);assert.equal(await page.locator('#resume').isDisabled(),true);
     assert.equal(sourcePosts,beforeResume+1);
+    dependencyCorrected=true;
+    await page.locator('#complete').click();await page.getByText('Stato: ACTIVE',{exact:true}).waitFor();
+    assert.equal(sourcePosts,beforeResume+2);assert.equal(await page.locator('#complete').isDisabled(),true);
+
+    await page.setViewportSize({width:1280,height:720});
+    source.onboardingState='APPROVED';
     source.progress.activationProgress={readiness_phase:'ACTIVATING',readiness_generation:4,cumulativeAttempts:3,budgetExhausted:true,
       humanBudgetGrantAvailable:true,reconciledBudgetReason:'ONB_READINESS_INTERRUPTED'};
     source.expires_at='2020-01-01T00:00:00Z'; // Already CONFIRMED approval is retained.

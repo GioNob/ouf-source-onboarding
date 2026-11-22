@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ref=${PREDECESSOR:-79672b55}
+ref=${PREDECESSOR:-b3f33586}
 [[ "$ref" =~ ^[0-9a-fA-F]{7,40}$ ]] || { echo 'Expected a predecessor commit SHA' >&2; exit 1; }
 previous=$(git rev-parse --verify "${ref}^{commit}")
 candidate=$(git rev-parse --verify 'HEAD^{commit}')

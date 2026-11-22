@@ -337,6 +337,79 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_onboarding.approval_decision").query(Long.class).single()).isOne();
     assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
   }
+  @Test void dependency422CanBeRecheckedThroughIngestionAndBothUdpGates() throws Exception{
+    var fixture=governed(new PublishedSnapshots().publish("https://example.org/onto/Place","1.0.0","Prima"));
+    var p=fixture.mapper();var prepared=fixture.review();
+    String source=fixture.command().sourceId(),hash=(String)prepared.get("configurationHash");
+    UUID version=fixture.command().onboardingVersionId(),challenge=(UUID)prepared.get("challengeId");
+    var approved=reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,
+        ((Number)prepared.get("lockVersion")).longValue()),"test-auth");
+    long lock=((Number)approved.get("lockVersion")).longValue();
+    var activation=new ManagedOnboardingReviewService.Decision(hash,lock);
+    String code="ONB_READINESS_DEPENDENCY_422";
+    var corrected=new java.util.concurrent.atomic.AtomicBoolean();
+    List<String> checks=Collections.synchronizedList(new ArrayList<>());
+    var json=new com.fasterxml.jackson.databind.ObjectMapper();
+    var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
+    server.createContext("/api/trusted-human/v1/ingestion/onboarding-readiness",exchange->{
+      checks.add("Ingestion");
+      try(exchange){
+        if(!corrected.get()){
+          exchange.sendResponseHeaders(422,-1);
+          return;
+        }
+        onboarding.attestIngestionCompatibilityBound(source,version,hash,true,"Exact fixture compatibility",
+            new OnboardingService.Actor("test-ingestion","SERVICE",Set.of("ouf.ingestion.configuration.attest")),"recheck");
+        var bytes=json.writeValueAsBytes(Map.of("status","PASS","attestationSubmitted",true,"sourceId",source,
+            "onboardingVersionId",version,"configurationHash",hash));
+        exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+      }
+    });
+    server.createContext("/api/udp/v1/governance/identity/preflight",exchange->{
+      checks.add("UDP preflight");
+      try(exchange){
+        var bytes=json.writeValueAsBytes(Map.of("valid",true,"sourceId",source,"configurationHash",hash));
+        exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
+      }
+    });
+    doAnswer(call->{checks.add("UDP final");return null;}).when(finalUdp).requireCurrent(anyString(),anyString(),anyMap());
+    server.start();
+    try{
+      var coordinator=new ManagedActivationCoordinator(reviews,json,"http://127.0.0.1:"+server.getAddress().getPort());
+      assertThatThrownBy(()->coordinator.activate(p,challenge,activation,"test-auth","Bearer fixture"))
+          .isInstanceOfSatisfying(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,
+              failure->assertThat(failure.code()).isEqualTo(code));
+      var blocked=progress(cardProgress(p,challenge));
+      assertThat(blocked).containsEntry("readiness_phase","BLOCKED").containsEntry("readiness_last_code",code)
+          .containsEntry("humanRecheckAllowed",true).containsEntry("cumulativeAttempts",1);
+      assertThatThrownBy(()->reviews.claimActivation(p,challenge,activation)).hasMessage("ONB_READINESS_BLOCKED");
+      long generation=((Number)blocked.get("readiness_generation")).longValue();
+      var request=new ManagedOnboardingReviewService.Resume(hash,lock,generation,code);
+      assertThatThrownBy(()->reviews.resumeActivation(p,challenge,
+          new ManagedOnboardingReviewService.Resume(hash,lock,generation-1,code),"test-auth")).hasMessage("ONB_REVIEW_STALE_CARD");
+      assertThatThrownBy(()->reviews.resumeActivation(p,challenge,request," ")).hasMessage("ONB_REVIEW_AUTHENTICATION_REQUIRED");
+      corrected.set(true);
+      var resumed=reviews.resumeActivation(p,challenge,request,"test-auth");
+      assertThat(resumed).containsEntry("state","APPROVED").containsEntry("challengeStatus","CONFIRMED");
+      assertThat(progress(resumed)).containsEntry("readiness_phase","PAUSED").containsEntry("readiness_generation",generation+1)
+          .containsEntry("humanRecheckAllowed",false).containsEntry("budgetExpiresAt",blocked.get("budgetExpiresAt"))
+          .containsEntry("counterLineageVerified",true).containsEntry("sessionId",blocked.get("sessionId"))
+          .containsEntry("cumulativeAttempts",blocked.get("cumulativeAttempts"));
+      assertThat(checks).containsExactly("Ingestion");
+      assertThat(onboarding.bundleHistory(source)).isEmpty();
+      assertThatThrownBy(()->reviews.resumeActivation(p,challenge,request,"test-auth")).hasMessage("ONB_REVIEW_STALE_CARD");
+      assertThat(db.sql("""
+          select count(*) from ouf_onboarding.audit_event
+          where onboarding_version_id=:v and event_type='READINESS_RESUME_REQUESTED'
+            and actor_type='HUMAN_USER' and payload_summary->>'previousCode'=:code
+          """).param("v",version).param("code",code).query(Long.class).single()).isOne();
+      var active=coordinator.activate(p,challenge,activation,"test-auth","Bearer fixture");
+      assertThat(active).containsEntry("state","ACTIVE").containsEntry("ingestionCompatibilityObserved",true);
+      assertThat(progress(active)).containsEntry("cumulativeAttempts",2);
+      assertThat(checks).containsExactly("Ingestion","Ingestion","UDP preflight","UDP final");
+      assertThat(onboarding.bundleHistory(source)).hasSize(1);
+    }finally{server.stop(0);}
+  }
   @Test void humanResumeCannotResetExhaustionOrUnknownAmbiguousFailures(){
     UUID version=draft();var p=principal("test-tenant","test-human");
     var prepared=reviews.prepare(p,new ManagedOnboardingReviewService.Prepare("review-test",version,1,"prepare:one",null),"c");
@@ -344,22 +417,25 @@ class ManagedOnboardingReviewRuntimeTest {
     reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,2),"test-auth");
     var claim=reviews.claimActivation(p,challenge,new ManagedOnboardingReviewService.Decision(hash,3));
     reviews.activationFailure(claim,"ONB_READINESS_OUTCOME_UNCONFIRMED",false);
+    assertThat(progress(cardProgress(p,challenge))).containsEntry("humanRecheckAllowed",false);
     assertThatThrownBy(()->reviews.resumeActivation(p,challenge,new ManagedOnboardingReviewService.Resume(hash,3,claim.generation(),"ONB_READINESS_OUTCOME_UNCONFIRMED"),"test-auth")).hasMessage("ONB_READINESS_RESUME_NOT_ALLOWED");
     reviews.activationFailure(claim,"ONB_READINESS_DEPENDENCY_403",false);
     assertThat(progress(reviews.read(p,"review-test",version))).containsEntry("readiness_last_code","ONB_READINESS_OUTCOME_UNCONFIRMED");
   }
-  @Test void humanResumeOf403CannotResetAnExpiredBudget(){
+  @Test void humanResumeOf422CannotResetExhaustedAttemptsOrTime(){
     var e=exhausted();var p=e.principal();UUID challenge=e.challenge();String hash=e.hash();
     db.sql("update ouf_onboarding.managed_onboarding_review set readiness_started_at=clock_timestamp() where challenge_id=:c").param("c",challenge).update();
     var claim=reviews.claimActivation(p,challenge,new ManagedOnboardingReviewService.Decision(hash,3));
-    reviews.activationFailure(claim,"ONB_READINESS_DEPENDENCY_403",false);
-    var resume=new ManagedOnboardingReviewService.Resume(hash,3,claim.generation(),"ONB_READINESS_DEPENDENCY_403");
+    reviews.activationFailure(claim,"ONB_READINESS_DEPENDENCY_422",false);
+    var resume=new ManagedOnboardingReviewService.Resume(hash,3,claim.generation(),"ONB_READINESS_DEPENDENCY_422");
     when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(false);
     assertThatThrownBy(()->reviews.resumeActivation(p,challenge,resume,"test-auth")).hasMessage("ONB_REVIEW_AUTHORIZATION_DENIED");
     when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(true);
     db.sql("update ouf_onboarding.managed_onboarding_review set readiness_attempts=128 where challenge_id=:c").param("c",challenge).update();
+    assertThat(progress(cardProgress(p,challenge))).containsEntry("humanRecheckAllowed",false).containsEntry("humanBudgetGrantAvailable",true);
     assertThatThrownBy(()->reviews.resumeActivation(p,challenge,resume,"test-auth")).hasMessage("ONB_READINESS_BUDGET_EXHAUSTED");
     db.sql("update ouf_onboarding.managed_onboarding_review set readiness_attempts=1,readiness_started_at=clock_timestamp()-interval '25 hours' where challenge_id=:c").param("c",challenge).update();
+    assertThat(progress(cardProgress(p,challenge))).containsEntry("humanRecheckAllowed",false).containsEntry("budgetExhausted",true);
     assertThatThrownBy(()->reviews.resumeActivation(p,challenge,resume,"test-auth")).hasMessage("ONB_READINESS_BUDGET_EXHAUSTED");
     assertThat(db.sql("select readiness_phase from ouf_onboarding.managed_onboarding_review where challenge_id=:c").param("c",challenge).query(String.class).single()).isEqualTo("BLOCKED");
   }
@@ -399,6 +475,9 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_onboarding.published_configuration").query(Long.class).single()).isZero();
   }
   @SuppressWarnings("unchecked") private Map<String,Object> progress(Map<String,Object> result){return (Map<String,Object>)result.get("activationProgress");}
+  @SuppressWarnings("unchecked") private Map<String,Object> cardProgress(PrincipalContext p,UUID challenge){
+    return (Map<String,Object>)reviews.humanCard(p,challenge).get("progress");
+  }
   @Test void freshHumanBudgetRetainsCumulativeHistoryAndDoesNotActivate(){
     var e=exhausted();var old=db.sql("select readiness_started_at from ouf_onboarding.managed_onboarding_review where challenge_id=:c").param("c",e.challenge()).query().singleRow();
     assertThat(progress(reviews.read(e.principal(),"review-test",e.version()))).containsEntry("budgetExhausted",true).containsEntry("humanBudgetGrantAvailable",true);
@@ -443,7 +522,7 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(progress(reviews.read(e.principal(),"review-test",e.version())).get("cumulativeAttempts")).isEqualTo(3);
   }
   @Test void newBudgetFencesOldWorkerAndNeverRefundsAnAttempt(){
-    var e=exhausted();var old=new ManagedOnboardingReviewService.ActivationClaim(e.challenge(),e.version(),"review-test",e.hash(),3,4,Map.of(),Map.of(),false);
+    var e=exhausted();var old=new ManagedOnboardingReviewService.ActivationClaim(e.challenge(),e.version(),"review-test",e.hash(),3,4,Map.of(),Map.of(),false,false);
     var grant=reviews.grantReadinessBudget(e.principal(),e.challenge(),budget(e,"grant:fence",4));
     reviews.activationFailure(old,"LATE_FAILURE",false);
     assertThatThrownBy(()->reviews.activationPhase(old,"ACTIVATING")).hasMessage("ONB_READINESS_LEASE_LOST");
