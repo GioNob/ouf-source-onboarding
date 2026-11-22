@@ -17,6 +17,7 @@ final class ValueCompositions {
   final Map<String,String> datatypes=new LinkedHashMap<>();
   final Map<String,String> labels=new LinkedHashMap<>();
   final Set<String> typeRefs=new HashSet<>();
+  final Set<String> valueMapRefs=new LinkedHashSet<>();
   final Set<String> used=new HashSet<>();
   private final Map<String,String> fields;
   private final Function<String,Map<?,?>> definition;
@@ -45,9 +46,13 @@ final class ValueCompositions {
     require(fields.containsKey(field));
     String profile=fields.get(field);
     require(profile==null||rule.supports(profile));
-    rule.parameters(input.get("transformParams"),null);
+    readerParameters(rule,input.get("transformParams"));
     used.add(field);
     return new Output(rule.output,false);
+  }
+  private void readerParameters(ValueReader reader,Object params){
+    var checked=reader.parameters(params,null);
+    if(reader==ValueReader.VALUE_MAP_V1)valueMapRefs.add((String)checked.get("valueMapRef"));
   }
   private Output constructor(Map<?,?> expression){
     keys(expression,Set.of("constructorId","inputs"),Set.of("params"));
@@ -75,9 +80,10 @@ final class ValueCompositions {
       require(params.size()==1 && roles.size()>=2 && roles.stream().allMatch("part"::equals));
       return new Output("string",false);
     }
-    require(params.size()==2 && roles.equals(List.of("value")));
+    keys(params,Set.of("separator","itemReader"),Set.of("itemReaderParams"));
+    require(roles.equals(List.of("value")));
     var itemReader=ValueReader.named(text(params,"itemReader"));
-    itemReader.parameters(null,null);
+    readerParameters(itemReader,params.containsKey("itemReaderParams")?map(params.get("itemReaderParams")):null);
     return new Output(itemReader.output,true);
   }
   private Output structured(Map<?,?> expression,Set<String> path){
@@ -94,29 +100,43 @@ final class ValueCompositions {
     for(Object raw:list(expression.get("components"),1,32)){
       var component=map(raw);String name=text(component,"component");
       require(name.matches("[a-z][A-Za-z0-9]{0,63}") && names.add(name));
-      Output value;
-      if(component.containsKey("structured")){
-        keys(component,Set.of("component","structured"),Set.of());
-        value=structured(map(component.get("structured")),path);
-      }else{
-        require(++leaves<=256);
-        if(component.containsKey("constructor")){
-          keys(component,Set.of("component","constructor"),Set.of());
-          value=constructor(map(component.get("constructor")));
-        }else{
-          keys(component,Set.of("component","fieldName","reader"),Set.of("transformParams"));
-          value=reader(component);
+      var spec=expected.get(name);
+      require(definition==null || spec!=null);
+      var builder=new LinkedHashMap<>(component);
+      builder.remove("component");
+      if(builder.containsKey("items")){
+        keys(builder,Set.of("items"),Set.of());
+        require(spec==null || "MANY".equals(spec.get("cardinality")));
+        // Count leaves in the type, independently of its number of values.
+        int before=leaves,expanded=before;
+        for(Object item:list(builder.get("items"),0,Integer.MAX_VALUE)){
+          leaves=before;
+          Output value=singleBuilder(map(item),path);
+          require(!value.many() && (spec==null || value.type().equals(spec.get("type"))));
+          expanded=Math.max(expanded,leaves);
         }
-      }
-      if(definition!=null){
-        var spec=expected.get(name);
-        require(spec!=null && value.type().equals(spec.get("type"))
-            && value.many()=="MANY".equals(spec.get("cardinality")));
+        leaves=expanded;
+      }else{
+        Output value=singleBuilder(builder,path);
+        require(spec==null || value.type().equals(spec.get("type")) && value.many()=="MANY".equals(spec.get("cardinality")));
       }
     }
     require(definition==null||expected.keySet().equals(names));
     path.remove(id);
     return new Output(ref,false);
+  }
+  private Output singleBuilder(Map<?,?> builder,Set<String> path){
+    if(builder.containsKey("structured")){
+      keys(builder,Set.of("structured"),Set.of());
+      return structured(map(builder.get("structured")),path);
+    }
+    require(++leaves<=256);
+    if(builder.containsKey("constructor")){
+      keys(builder,Set.of("constructor"),Set.of());
+      return constructor(map(builder.get("constructor")));
+    }
+    keys(builder,Set.of("fieldName","reader"),Set.of("transformParams"));
+    return reader(builder);
   }
   static Map<String,Map<?,?>> componentSpecs(Map<?,?> definition){
     Map<String,Map<?,?>> expected=new HashMap<>();
@@ -131,10 +151,33 @@ final class ValueCompositions {
           case "decimal","integer","date","datetime" -> Set.of("minInclusive","maxInclusive");
           case "string" -> Set.of("maxLength");case "concept" -> Set.of("vocabularyRef");default -> Set.of();
         };
-        require(allowed.containsAll(map(component.get("constraints")).keySet()));
+        var constraints=map(component.get("constraints"));
+        require(allowed.containsAll(constraints.keySet()));
+        for(var entry:constraints.entrySet()){
+          Object bound=entry.getValue();
+          switch(entry.getKey().toString()){
+            case "maxLength" -> require(bound instanceof Number && bound.toString().matches("0|[1-9][0-9]*"));
+            case "vocabularyRef" -> iri(text(constraints,"vocabularyRef"));
+            default -> require(bound instanceof String value && canonicalBound(type,value));
+          }
+        }
       }
     }
     return expected;
+  }
+  private static boolean canonicalBound(String type,String value){
+    try{
+      return switch(type){
+        case "integer" -> value.matches("0|-?[1-9][0-9]*");
+        case "decimal" -> !value.equals("-0") && value.matches("-?(0|[1-9][0-9]*)([.][0-9]*[1-9])?");
+        case "date" -> value.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}") && java.time.LocalDate.parse(value).toString().equals(value);
+        case "datetime" -> {
+          java.time.Instant.parse(value);
+          yield value.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]{1,9})?Z");
+        }
+        default -> false;
+      };
+    }catch(java.time.DateTimeException invalid){return false;}
   }
   static String iri(String text){
     try{require(URI.create(text).isAbsolute());}catch(IllegalArgumentException e){throw invalid();}

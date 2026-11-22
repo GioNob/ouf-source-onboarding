@@ -550,6 +550,25 @@ components:
           properties:
             separator: {type: string, minLength: 1, maxLength: 8}
             itemReader: {$ref: '#/components/schemas/ValueReader'}
+            itemReaderParams: {$ref: '#/components/schemas/TransformParams'}
+          allOf:
+            - if: {required: [itemReader], properties: {itemReader: {const: WKT_V1}}}
+              then:
+                required: [itemReaderParams]
+                properties: {itemReaderParams: {required: [crs], maxProperties: 1}}
+            - if: {required: [itemReader], properties: {itemReader: {const: VALUE_MAP_V1}}}
+              then:
+                required: [itemReaderParams]
+                properties: {itemReaderParams: {required: [valueMapRef], maxProperties: 1}}
+            - if: {properties: {itemReader: {not: {enum: [WKT_V1, VALUE_MAP_V1]}}}}
+              then: {properties: {itemReaderParams: {maxProperties: 0}}}
+      allOf:
+        - if: {properties: {constructorId: {const: LIST_SPLIT_V1}}}
+          then: {required: [params], properties: {params: {required: [separator, itemReader]}}}
+        - if: {properties: {constructorId: {const: TEXT_JOIN_V1}}}
+          then: {required: [params], properties: {params: {required: [separator], maxProperties: 1}}}
+        - if: {properties: {constructorId: {const: POINT_FROM_LAT_LON_V1}}}
+          then: {properties: {params: {maxProperties: 0}}}
     StructuredExpression:
       type: object
       required: [typeRef, components]
@@ -565,22 +584,35 @@ components:
             properties:
               component: {type: string, pattern: '^[a-z][A-Za-z0-9]{0,63}$'}
             oneOf:
-              - required: [fieldName, reader]
+              - {$ref: '#/components/schemas/SingleComponentBuilder'}
+              - required: [items]
                 properties:
-                  fieldName: {type: string, minLength: 1}
-                  reader: {$ref: '#/components/schemas/ValueReader'}
-                  transformParams: {$ref: '#/components/schemas/TransformParams'}
-              - required: [constructor]
-                properties:
-                  constructor:
-                    $ref: '#/components/schemas/ConstructorExpression'
-                    unevaluatedProperties: false
-              - required: [structured]
-                properties:
-                  structured:
-                    $ref: '#/components/schemas/StructuredExpression'
-                    unevaluatedProperties: false
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SingleComponentBuilder'
+                      properties:
+                        constructor: {properties: {constructorId: {not: {const: LIST_SPLIT_V1}}}}
+                      unevaluatedProperties: false
             unevaluatedProperties: false
+    SingleComponentBuilder:
+      type: object
+      oneOf:
+        - required: [fieldName, reader]
+          properties:
+            fieldName: {type: string, minLength: 1}
+            reader: {$ref: '#/components/schemas/ValueReader'}
+            transformParams: {$ref: '#/components/schemas/TransformParams'}
+        - required: [constructor]
+          properties:
+            constructor:
+              $ref: '#/components/schemas/ConstructorExpression'
+              unevaluatedProperties: false
+        - required: [structured]
+          properties:
+            structured:
+              $ref: '#/components/schemas/StructuredExpression'
+              unevaluatedProperties: false
     Compositions:
       type: array
       maxItems: 1024

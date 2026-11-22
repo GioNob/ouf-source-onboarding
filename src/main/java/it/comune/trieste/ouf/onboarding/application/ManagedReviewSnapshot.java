@@ -108,7 +108,7 @@ final class ManagedReviewSnapshot {
     var definitions=new LinkedHashMap<String,Object>();
     for(Object raw:bindings){
       var pin=object(raw);
-      if(pin.containsKey("definition"))definitions.put(pin.get("semanticId")+"@"+pin.get("publicationSetId"),pin);
+      if(pin.containsKey("definitionSha256"))definitions.put(pin.get("semanticId")+"@"+pin.get("publicationSetId"),pin);
     }
     if(!definitions.isEmpty())snapshot.put("DATATYPE",definitions);
     snapshot.put("FIELD",fields);snapshot.put("IDENTITY",identity);snapshot.put("SEMANTIC",semantics);snapshot.put("LIMITS",limits);

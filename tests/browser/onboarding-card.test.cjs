@@ -38,6 +38,11 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
       {role:'part',fieldName:'civico',reader:'IDENTITY'}],params:{separator:' / '}};
     const address={kind:'STRUCTURED',targetPropertyIri:'urn:indirizzo',dataAccessLabel:'OPEN',typeRef,
       components:[{component:'indirizzo',constructor:joined}]};
+    pin.definition.components.push({name:'forme',type:'geometry',cardinality:'MANY',required:false},
+      {name:'punti',type:'geometry',cardinality:'MANY',required:false});
+    address.components.push({component:'forme',items:[{fieldName:'indirizzo',reader:'WKT_V1',transformParams:{crs:'EPSG:6708'}}]},
+      {component:'punti',constructor:{constructorId:'LIST_SPLIT_V1',inputs:[{role:'value',fieldName:'indirizzo',reader:'IDENTITY'}],
+        params:{separator:'|',itemReader:'WKT_V1',itemReaderParams:{crs:'EPSG:32633'}}}});
     card.configuration.semanticReferenceBindings.push(pin);
     card.configuration.semanticMapping.compositions=[address];
     snapshot.DATATYPE={[typeRef]:pin};
@@ -74,6 +79,8 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
     assert.match(await article.innerText(),/Recapito pubblicato/);
     assert.match(await article.innerText(),/Indirizzo postale.*testo.*un valore.*obbligatorio/);
     assert.match(await article.innerText(),/Unisce in ordine.*Uniforma i caratteri Unicode/);
+    assert.match(await article.innerText(),/Elenco in ordine.*EPSG:6708/);
+    assert.match(await article.innerText(),/Divide il testo.*EPSG:32633/);
     const warnings=await page.locator('.warnings').innerText();
     for(const text of ['latitudine · il profilo rileva un numero','latitudine · licenza','latitudine · descrizione italiana assente','referente · dato personale · esclusa'])assert.ok(warnings.includes(text),text);
     for(const text of ['verificato dal registro semantico','Definizione del catalogo','Classe','Proprietà','Comune di Trieste','CC BY 4.0']) assert.ok((await article.innerText()).includes(text),text);

@@ -48,12 +48,15 @@ public final class ManagedFileExecutionProposal {
     var inputs=new HashMap<String,String>();
     fields.forEach(field->inputs.put(string(field),null));
     var combined=new ValueCompositions(semantic.getOrDefault("compositions",List.of()),inputs,null);
+    var valueMapRefs=new HashSet<>(combined.valueMapRefs);
     mapped.addAll(combined.datatypes.keySet());declaredDatatypes.putAll(combined.datatypes);
     for(Object raw:list(semantic.get("propertyMappings"),0,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> mapping=map(raw);String field=text(mapping,"sourceField");
       require(fields.contains(field) && mappedFields.add(field) && Arrays.stream(ValueReader.values()).anyMatch(r->r.name().equals(mapping.get("transform")))
           && mapped.add(iri(text(mapping,"targetPropertyIri"))));
-      ValueReader.named(text(mapping,"transform")).parameters(mapping.get("transformParams"),null);
+      var reader=ValueReader.named(text(mapping,"transform"));
+      var params=reader.mappingParameters(mapping);
+      if(reader==ValueReader.VALUE_MAP_V1)valueMapRefs.add((String)params.get("valueMapRef"));
       declaredDatatypes.put(text(mapping,"targetPropertyIri"),datatype(text(mapping,"transform")));
     }
     mappedFields.addAll(combined.used);
@@ -67,7 +70,9 @@ public final class ManagedFileExecutionProposal {
     for(SemanticBinding binding:proposal.semanticBindings()){
       require(binding!=null);String id=atom(binding.semanticId()),version=atom(binding.semanticVersion());
       String set=uuid(binding.publicationSetId());
-      require(refs.add(id+"@"+version) && (publication.equals(set)||combined.typeRefs.contains(id+"@"+set)));
+      String coordinate=id+"@"+set;
+      require(refs.add(id+"@"+version) && (publication.equals(set) || combined.typeRefs.contains(coordinate)
+          || valueMapRefs.contains(coordinate) || valueMapRefs.contains(id)));
       var pinned=new LinkedHashMap<String,Object>(Map.of("semanticId",id,"semanticVersion",version,
           "revisionId",uuid(binding.revisionId()),"publicationSetId",set));
       if(binding.reviewTerms()!=null){

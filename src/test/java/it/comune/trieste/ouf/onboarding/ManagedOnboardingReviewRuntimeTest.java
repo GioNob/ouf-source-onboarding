@@ -100,6 +100,27 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(snapshot).containsEntry("COMPOSITION",Map.of(property,comp));
     assertThat(((Map<?,?>)((Map<?,?>)snapshot.get("DATATYPE")).get(type+"@"+set)).get("definition")).isEqualTo(definition);
   }
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"ACTIVE","DEPRECATED","RETIRED"})
+  void d084_17_historicalBundleReturnsFrozenDatatypeWithoutLiveStatusGate(String currentStatus)throws Exception{
+    String source="history",id="urn:test:historical",set=UUID.randomUUID().toString(),rev=UUID.randomUUID().toString();
+    onboarding.createSource(source,"Storico","INTERNAL_MANAGED","MANAGED","owner",Map.of(),human,"history");
+    var draft=onboarding.createVersion(source,Map.of(),human,"history");
+    UUID version=(UUID)draft.get("onboarding_version_id");
+    var definition=Map.of("components",List.of(Map.of("name","name","type","string","required",true,"cardinality","ONE")));
+    var pin=Map.of("semanticId",id,"publicationSetId",set,"revisionId",rev,"semanticVersion","1",
+        "definition",definition,"definitionSha256",hashes.ofDefinition(definition).substring(7));
+    var bundle=Map.of("semanticReferenceBindings",List.of(pin));
+    db.sql("""
+        insert into ouf_onboarding.published_configuration(publication_id,source_id,onboarding_version_id,bundle_version,bundle,checksum,active,effective_from)
+        values(:id,:s,:v,1,cast(:b as jsonb),:h,false,transaction_timestamp())
+        """).param("id",UUID.randomUUID()).param("s",source).param("v",version)
+        .param("b",new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(bundle)).param("h",hashes.of(bundle)).update();
+    when(registryReader.resolve(id,rev,set)).thenReturn(Map.of("status",currentStatus));
+    assertThat(onboarding.historicalBundle(source,version)).containsEntry("bundle",bundle).containsEntry("checksum",hashes.of(bundle));
+    verifyNoInteractions(registryReader);
+  }
+
   @Test void preparedMappingReadsAdoptedBytesAfterAnotherSemanticPublicationBecomesActive(){
     String semanticId="https://example.org/onto/Place";
     var registry=new PublishedSnapshots();

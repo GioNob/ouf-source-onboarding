@@ -28,6 +28,11 @@ enum ValueReader {
     try{return valueOf(id);}catch(IllegalArgumentException|NullPointerException e){throw invalid();}
   }
   static IllegalArgumentException invalid(){return new IllegalArgumentException("ONB_VALUE_READER_INVALID");}
+  Map<String,Object> mappingParameters(Map<?,?> property){
+    Object alias=property.get("valueMapRef");
+    if(alias!=null && !(alias instanceof String))throw invalid();
+    return parameters(property.get("transformParams"),(String)alias);
+  }
   Map<String,Object> parameters(Object raw,String legacyMap){
     if(raw!=null && !(raw instanceof Map<?,?>))throw invalid();
     Map<?,?> params=raw==null?Map.of():(Map<?,?>)raw;

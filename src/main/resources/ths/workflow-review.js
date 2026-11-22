@@ -22,7 +22,7 @@
   }
   function semanticSummary(card, article) {
     const types = {CLASS:'della classe', PROPERTY:'della proprietà', RELATIONSHIP:'della relazione',
-      VOCABULARY:'del vocabolario', CONCEPT:'del concetto', ONTOLOGY:'dell’ontologia'};
+      DATATYPE:'del tipo strutturato', VOCABULARY:'del vocabolario', CONCEPT:'del concetto', ONTOLOGY:'dell’ontologia'};
     const source = card.adoptionProvenance || {};
     const label = card.label_json?.it || card.local_name || card.semantic_id;
     const english = card.label_json?.en;
@@ -50,6 +50,7 @@
     const date = new Date(card.expires_at);
     fact('Scadenza della richiesta', Number.isFinite(date.valueOf()) ? date.toLocaleString('it-IT', {timeZoneName:'short'}) : card.expires_at);
     article.append(facts);
+    if (card.artifact_type === 'DATATYPE' && card.datatypeReview) datatypeSummary(card.datatypeReview, article);
     const warnings = [];
     if (source.licenseWarning || !source.license) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
     for (const finding of card.validationFindings || []) {
@@ -64,6 +65,42 @@
     }
     element('h3', 'Cosa comporta l’approvazione', article);
     element('p', 'Approvi questa revisione. Con il successivo comando «Pubblica» la definizione diventa pubblicata e utilizzabile nei mapping delle fonti dell’ente. Non modifica dati esistenti e può essere deprecata in seguito.', article);
+  }
+  function datatypeSummary(review, article) {
+    const table = element('table', '', article);
+    element('caption', 'Componenti del tipo strutturato', table);
+    const header = element('tr', '', element('thead', '', table));
+    for (const title of ['Nome', 'Tipo', 'Cardinalità', 'Obbligatorio', 'Vincoli']) {
+      element('th', title, header).scope = 'col';
+    }
+    const body = element('tbody', '', table);
+    for (const c of review.componenti) {
+      const row = element('tr', '', body);
+      element('th', c.etichetta ? c.nome + ' · ' + c.etichetta : c.nome, row).scope = 'row';
+      for (const value of [c.tipo, c.cardinalità, c.obbligatorio, c.vincoli]) element('td', value, row);
+    }
+    element('h3', 'Differenze rispetto alla versione precedente', article);
+    element('p', review.versionePrecedente, article);
+    if (!review.differenze.length && review.versionePrecedente !== 'Prima pubblicazione') {
+      element('p', 'Nessuna differenza.', article);
+    }
+    for (const change of review.differenze) {
+      element('h4', change.campo + ' · ' + change.modifica, article);
+      for (const [key, title] of [['prima', 'Prima'], ['dopo', 'Dopo']]) {
+        if (Object.prototype.hasOwnProperty.call(change, key)) {
+          element('p', title + ' · ' + datatypeChangeText(change[key]), article);
+        }
+      }
+    }
+  }
+  function datatypeChangeText(value) {
+    if (Array.isArray(value)) return value.join(' → ');
+    if (value === null || typeof value !== 'object') return String(value);
+    if (!value.name) return Object.entries(value).map(([language,label]) => language + ' · ' + label).join(', ');
+    const constraints = {minInclusive:'Minimo incluso',maxInclusive:'Massimo incluso',maxLength:'Lunghezza massima',vocabularyRef:'Vocabolario'};
+    return [value.name, typeNames[value.type] || value.type, value.cardinality === 'MANY' ? 'Più valori' : 'Un valore',
+      value.required ? 'Obbligatorio' : 'Facoltativo', value.labels && datatypeChangeText(value.labels),
+      ...Object.entries(value.constraints || {}).map(([key,bound]) => constraints[key] + ' ' + bound)].filter(Boolean).join(' · ');
   }
   const unavailable = 'non disponibile';
   const accessNames = {OPEN:'pubblico', PERSONAL:'dato personale', SENSITIVE:'dato sensibile', RESTRICTED:'accesso riservato', ANONYMOUS:'dato anonimo'};
@@ -95,18 +132,21 @@
     return [readerRules[reader] || reader, params?.crs, params?.valueMapRef].filter(Boolean).join(' · ');
   }
   function expressionText(node, definitions) {
+    if (node.items) return 'Elenco in ordine · ' + node.items.map(item => expressionText(item,definitions)).join(' · ');
+    if (node.structured) return expressionText(node.structured,definitions);
+    if (Object.hasOwn(node,'constructor')) return expressionText(node.constructor,definitions);
     if (node.fieldName) return node.fieldName + ' · ' + readerText(node.reader,node.transformParams);
     if (node.constructorId) {
       const rule = {
         POINT_FROM_LAT_LON_V1:'Crea un punto EPSG:4326 in ordine longitudine, latitudine. Occorrono entrambe le coordinate, entro ±180° e ±90° rispettivamente. Se entrambe mancano il punto è assente, se ne manca una sola la riga presenta un errore.',
         TEXT_JOIN_V1:'Unisce in ordine le parti presenti con il separatore ' + JSON.stringify(node.params?.separator) + '. Se mancano tutte, il testo è assente.',
-        LIST_SPLIT_V1:'Divide il testo sul separatore ' + JSON.stringify(node.params?.separator) + ', legge ciascun elemento e scarta quelli assenti. Se non ne resta alcuno, l’elenco è assente. ' + readerText(node.params?.itemReader)
+        LIST_SPLIT_V1:'Divide il testo sul separatore ' + JSON.stringify(node.params?.separator) + ', legge ciascun elemento e scarta quelli assenti. Se non ne resta alcuno, l’elenco è assente. ' + readerText(node.params?.itemReader,node.params?.itemReaderParams)
       }[node.constructorId];
       return rule + ' ' + node.inputs.map(i => i.role + ' = ' + expressionText(i,definitions)).join(' · ');
     }
     const label = definitions[node.typeRef]?.label?.it || node.typeRef;
     return label + ' · ' + node.components.map(c => c.component + ' ← ' +
-      expressionText(c.structured || (Object.hasOwn(c,'constructor') ? c.constructor : c),definitions)).join(' · ');
+      expressionText(c,definitions)).join(' · ');
   }
   function definitionText(pin,definitions) {
     return [pin.label.it,...pin.definition.components.map(c =>
@@ -116,7 +156,7 @@
   }
   function compositionsView(mapping,bindings,article) {
     if (!mapping?.compositions?.length) return;
-    const definitions = Object.fromEntries((bindings || []).filter(b => b.definition).map(b => [b.semanticId+'@'+b.publicationSetId,b]));
+    const definitions = Object.fromEntries((bindings || []).filter(b => b.definitionSha256).map(b => [b.semanticId+'@'+b.publicationSetId,b]));
     element('h3','Proprietà composte',article);
     for (const c of mapping.compositions) {
       element('h4',c.targetPropertyIri + ' · ' + accessNames[c.dataAccessLabel],article);

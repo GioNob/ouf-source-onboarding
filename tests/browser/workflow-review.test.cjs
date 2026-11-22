@@ -5,7 +5,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {chromium}=require('playwright');
 
-test('workflow HUMAN UI makes no automatic decisions and resumes exact approval before publication',async()=>{
+test('workflow HUMAN UI makes no automatic decisions and resumes exact approval before publication',async t=>{
   const root=path.resolve('src/main/resources/ths');
   let sessionExpired=false,returnPage;
   const server=http.createServer((req,res)=>{
@@ -69,6 +69,40 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     semantic={...semantic,target_content_hash:'d'.repeat(64)};
     await page.getByRole('button',{name:'Accedi di nuovo'}).click();await page.locator('article.card').waitFor();
     assert.equal(await page.locator('article input').isChecked(),false);assert.equal(posts.length,2);
+    await t.test('d084_16 mostra la scheda DATATYPE restituita dal Semantic', async () => {
+      const component = {nome:'strade', etichetta:'Strade <img>', tipo:'Testo', cardinalità:'Più valori',
+        obbligatorio:'Sì', vincoli:'Lunghezza massima 80'};
+      const review = {componenti:[component], versionePrecedente:'Prima pubblicazione', differenze:[]};
+      semantic = {...semantic, artifact_type:'DATATYPE', label_json:{it:'Indirizzo'}, datatypeReview:review};
+      await page.reload();
+      const table = page.getByRole('table', {name:'Componenti del tipo strutturato'});
+      await table.waitFor();
+      assert.deepEqual(await table.locator('thead th').allTextContents(), ['Nome','Tipo','Cardinalità','Obbligatorio','Vincoli']);
+      assert.deepEqual(await table.locator('tbody tr > *').allTextContents(), ['strade · Strade <img>','Testo','Più valori','Sì','Lunghezza massima 80']);
+      assert.equal(await table.locator('img').count(), 0);
+      await page.getByText('Prima pubblicazione', {exact:true}).waitFor();
+      review.versionePrecedente = '1.0';
+      const old = {name:'strade',type:'string',cardinality:'MANY',required:false};
+      review.differenze = [
+        {campo:'strade', modifica:'Modificato', prima:old, dopo:{...old,required:true,constraints:{maxLength:80}}},
+        {campo:'cap', modifica:'Aggiunto', dopo:{...old,name:'cap'}},
+        {campo:'civico', modifica:'Rimosso', prima:{...old,name:'civico'}},
+        {campo:'Ordine dei componenti', modifica:'Modificato', prima:['a','b'], dopo:['b','a']}
+      ];
+      await page.reload();
+      await page.getByText('1.0', {exact:true}).waitFor();
+      for (const change of review.differenze) {
+        await page.getByRole('heading', {name:change.campo + ' · ' + change.modifica}).waitFor();
+      }
+      for (const text of ['Prima · strade · testo · Più valori · Facoltativo',
+        'Dopo · strade · testo · Più valori · Obbligatorio · Lunghezza massima 80',
+        'Dopo · cap · testo · Più valori · Facoltativo','Prima · civico · testo · Più valori · Facoltativo',
+        'Prima · a → b','Dopo · b → a']) await page.getByText(text, {exact:true}).waitFor();
+      review.differenze = [];
+      await page.reload();
+      await page.getByText('Nessuna differenza.', {exact:true}).waitFor();
+      assert.equal(posts.length, 2);
+    });
     let sourcePosts=0,budgetPosts=0,budgetCommand;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{targetClasses:[{classIri:"urn:example:class",category:{schemeIri:"urn:example:scheme",conceptIri:"urn:example:concept"}},{classIri:"urn:example:other"}],propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
     source.configuration.dataAccessPolicies=[{scope:'PROPERTY',target:'urn:name',label:'RESTRICTED'}];
     source.termVerification='COMPLETE';
