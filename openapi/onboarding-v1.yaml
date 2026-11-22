@@ -155,6 +155,115 @@ paths:
                 $ref: '#/components/schemas/ManagedFilePreview'
         default:
           $ref: '#/components/responses/Problem'
+  /managed-file-mcp/preview:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: previewManagedFileForMcp
+      summary: Read a retained profile, profile job, column page, or tenant-owned asset list
+      x-ouf-mcp-capability: ouf.managed-source.preview
+      description: |
+        Task 40f target contract. The paging extension requires owner-route wiring before adoption.
+        Owner route for Gateway delegation of source.file.preview. Each request requires a fresh bound
+        preview receipt. Column pages and access to retained distinct values require proven tenant and
+        subject ownership. Historical subject-owned previews without tenant proof expose counts only.
+        Profile, job-profile and COLUMNS bodies are bounded after JSON escaping in UTF-8.
+        Configure ouf.onboarding.preview.max-response-bytes (8192–786432, default 786432).
+        A shared, dedicated owner key file (ouf.onboarding.preview.cursor-key-file, 32 bytes encoded
+        as 64 hexadecimal digits) keeps cursors verifiable across replicas and restarts. With the
+        key file unset, cursors are process-local.
+      parameters:
+        - {name: X-OUF-Managed-File-Receipt, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Arguments]
+              properties:
+                Arguments:
+                  oneOf:
+                    - type: object
+                      required: [assetId, profileId]
+                      additionalProperties: false
+                      properties:
+                        assetId: {type: string, format: uuid}
+                        profileId: {type: string, format: uuid}
+                    - type: object
+                      required: [assetId, jobId]
+                      additionalProperties: false
+                      properties:
+                        assetId: {type: string, format: uuid}
+                        jobId: {type: string, format: uuid}
+                    - type: object
+                      required: [view, assetId, profileId]
+                      additionalProperties: false
+                      properties:
+                        view: {const: COLUMNS}
+                        assetId: {type: string, format: uuid}
+                        profileId: {type: string, format: uuid}
+                        layer: {type: string, description: Exact layer or table name for a layered profile.}
+                        offset: {type: integer, minimum: 0, default: 0}
+                        limit: {type: integer, minimum: 1, maximum: 128, default: 128}
+                        distinctValuesCursor:
+                          $ref: '#/components/schemas/DistinctValuesCursor'
+                          description: Continue the retained values of a single column. Send only view, assetId, profileId and this cursor.
+                      if: {required: [distinctValuesCursor]}
+                      then:
+                        not:
+                          anyOf: [{required: [offset]}, {required: [limit]}, {required: [layer]}]
+                    - type: object
+                      required: [view]
+                      additionalProperties: false
+                      properties:
+                        view: {const: ASSETS}
+                        limit: {type: integer, minimum: 1, maximum: 50, default: 20}
+                        afterAssetId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: |
+            An exact profile, job, column page or asset list. A COLUMNS page can return fewer than
+            limit columns. To continue through columns, use nextOffset while hasMore is true.
+            A request with distinctValuesCursor returns one column at its original offset, with
+            hasMore false and nextOffset null. Follow its distinctValuesCursor until
+            distinctValuesComplete is true. This sequence is independent of column-page traversal.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ManagedMcpColumnPage'
+                  - $ref: '#/components/schemas/ManagedMcpProfilePreview'
+                  - type: object
+                    required: [jobId, status]
+                    properties:
+                      jobId: {type: string, format: uuid}
+                      status: {type: string}
+                      resultRef: {type: [string, 'null'], format: uuid}
+                      schemaHash: {type: string}
+                      columns:
+                        type: array
+                        items: {$ref: '#/components/schemas/ManagedMcpPreviewColumn'}
+                      columnCount: {type: integer, minimum: 1}
+                      offset: {type: integer, minimum: 0}
+                      hasMore: {type: boolean}
+                      nextOffset: {type: [integer, 'null'], minimum: 0}
+                  - type: object
+                    required: [items, hasMore]
+                    properties:
+                      items: {type: array, items: {type: object}}
+                      hasMore: {type: boolean}
+        '400':
+          description: Invalid request. An invalid, expired, altered or mismatched cursor returns ONB_DISTINCT_VALUES_CURSOR_INVALID.
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        '422':
+          description: Irreducible profile metadata exceeds the configured budget (ONB_PROFILE_PREVIEW_BUDGET_EXCEEDED).
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        default:
+          $ref: '#/components/responses/Problem'
   /managed-files/{assetId}/create-onboarding:
     post:
       operationId: createManagedFileOnboarding
@@ -488,6 +597,94 @@ components:
         identityProposal: {type: object, additionalProperties: true}
         proposalStatus: {const: PENDING_HUMAN_REVIEW}
       additionalProperties: true
+    DistinctValuesCursor:
+      type: string
+      description: |
+        Opaque, signed, and scoped to the tenant, subject, asset, profile, schema, column and position.
+        It expires 15 minutes after the first page and contains no source values. Restart or key rotation
+        can invalidate outstanding cursors. To obtain a new one, read the profile or column page again.
+      minLength: 1
+    ManagedMcpPreviewColumn:
+      type: object
+      required: [name, dataType, nullable, distinctCount]
+      properties:
+        name: {type: string}
+        dataType: {type: string}
+        nullable: {type: boolean}
+        distinctCount: {type: integer, minimum: 0}
+        distinctValues:
+          type: array
+          maxItems: 2000
+          items: {type: string, maxLength: 128}
+          description: Ordered retained values for this slice of the column. An initial profile slice may be empty while a cursor is available.
+        distinctValuesComplete:
+          type: boolean
+          description: True when there are no more values in the list. Present when distinctValues is exposed.
+        distinctValuesCursor:
+          $ref: '#/components/schemas/DistinctValuesCursor'
+          description: Present when distinctValuesComplete is false.
+    ManagedMcpColumnPage:
+      type: object
+      required: [view, assetId, profileId, profileVersion, format, schemaHash, columnCount, offset, columns, hasMore, nextOffset, limitsProfile]
+      properties:
+        view: {const: COLUMNS}
+        assetId: {type: string, format: uuid}
+        profileId: {type: string, format: uuid}
+        profileVersion: {type: integer}
+        format: {type: string}
+        schemaHash: {type: string}
+        limitsProfile: {type: string}
+        layer: {type: string}
+        columnCount: {type: integer, minimum: 1, maximum: 1024}
+        offset: {type: integer, minimum: 0}
+        columns:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items: {$ref: '#/components/schemas/ManagedMcpPreviewColumn'}
+        hasMore: {type: boolean}
+        nextOffset: {type: [integer, 'null'], minimum: 0}
+    ManagedMcpProfilePreview:
+      type: object
+      required: [assetId, profileId, profileVersion, format, schemaHash, columns, candidateKeys, redactedSample, recordModel, identityProposal, proposalStatus]
+      properties:
+        assetId: {type: string, format: uuid}
+        profileId: {type: string, format: uuid}
+        profileVersion: {type: integer}
+        format: {type: string}
+        schemaHash: {type: string}
+        columns:
+          type: array
+          items: {$ref: '#/components/schemas/ManagedMcpPreviewColumn'}
+        columnCount: {type: integer, minimum: 1}
+        offset: {type: integer, minimum: 0}
+        hasMore: {type: boolean}
+        nextOffset: {type: [integer, 'null'], minimum: 0}
+        candidateKeys: {type: array, items: {type: string}}
+        candidateKeysTruncated: {const: true}
+        redactedSample: {type: array, maxItems: 5, items: {type: object}}
+        redactedSampleTruncated: {const: true}
+        metadataTruncated:
+          const: true
+          description: |
+            Layer detail was reduced to stay within the profile budget. Read columns with view COLUMNS
+            and the layer name. The direct retained-profile API provides complete layer metadata.
+        metadata:
+          type: object
+          properties:
+            layers:
+              type: array
+              items:
+                type: object
+                properties:
+                  layer: {type: string}
+                  columnCount: {type: integer, minimum: 0}
+                  columns:
+                    type: array
+                    items: {$ref: '#/components/schemas/ManagedMcpPreviewColumn'}
+        recordModel: {const: ONE_ROW_ONE_SOURCE_OBJECT}
+        identityProposal: {type: object}
+        proposalStatus: {const: PENDING_HUMAN_REVIEW}
     CreateManagedFileOnboardingRequest:
       type: object
       required: [sourceId, name, owner, targetClassIri, semanticRefs]
