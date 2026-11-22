@@ -99,7 +99,8 @@ export async function startFixture() {
         }
         case '/internal/object-storage/v1/content':
           assert.ok(req.headers.authorization === 'Bearer ' + objectToken);
-          assert.ok(['object://ci/legacy.csv', 'object://ci/review.csv', 'object://ci/value-types.csv'].includes(url.searchParams.get('ref')));
+          assert.ok(['object://ci/legacy.csv', 'object://ci/review.csv', 'object://ci/value-types.csv',
+            'object://ci/return-profile.csv'].includes(url.searchParams.get('ref')));
           res.writeHead(200, {'Content-Type': 'text/csv', 'Content-Length': csv.length});
           return res.end(csv);
         default:

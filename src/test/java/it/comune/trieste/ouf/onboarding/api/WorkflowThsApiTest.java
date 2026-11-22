@@ -162,6 +162,53 @@ class WorkflowThsApiTest {
     assertThatThrownBy(()->new WorkflowThsApi(mock(OAuth2AuthorizedClientService.class),new ObjectMapper(),"http://elsewhere.example")).hasMessage("THS_WORKFLOW_GATEWAY_INVALID");
     assertThatThrownBy(()->new WorkflowThsApi(mock(OAuth2AuthorizedClientService.class),new ObjectMapper(),"https://gateway.example/arbitrary")).hasMessage("THS_WORKFLOW_GATEWAY_INVALID");
   }
+  @Test void d084_36_valueMapCardCanCrossLegacyLimitAndBeApprovedWithTheSameHash()throws Exception{
+    var json=new ObjectMapper();
+    UUID id=UUID.randomUUID();
+    String hash="a".repeat(64);
+    var entries=new ArrayList<Map<String,String>>();
+    var projection=new ArrayList<Map<String,String>>();
+    for(int i=1000;i<3000;i++){
+      String code="x".repeat(124)+i,concept="urn:test:"+"c".repeat(114)+i;
+      entries.add(Map.of("code",code,"concept",concept));
+      projection.add(Map.of("code",code,"concept",concept,"conceptLabel","Concetto "+i));
+    }
+    var definition=Map.of("targetVocabulary","urn:test:vocabulary@"+id,"entries",entries);
+    var review=Map.of("name","Mappa di prova","targetVocabulary",Map.of("label","Vocabolario",
+        "semanticId","urn:test:vocabulary","publicationSetId",id),"entryCount",2000,"entries",projection);
+    var body=json.createObjectNode().put("challenge_id",id.toString()).put("artifact_type","VALUE_MAP")
+        .put("target_content_hash",hash).put("status","OPEN");
+    body.set("definition_json",json.valueToTree(definition));
+    body.set("valueMapReview",json.valueToTree(review));
+    var payload=new AtomicReference<>(json.writeValueAsBytes(body));
+    assertThat(payload.get().length).isGreaterThan(1_048_576);
+    var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+    var posts=new AtomicInteger();
+    server.createContext("/api/trusted-human/v1/",exchange->{
+      var bytes=payload.get();
+      if("POST".equals(exchange.getRequestMethod())){
+        posts.incrementAndGet();
+        exchange.getRequestBody().readAllBytes();
+        bytes="{}".getBytes(StandardCharsets.UTF_8);
+      }
+      exchange.sendResponseHeaders(200,0); // Also exercise the byte bound without Content-Length.
+      try(var stream=exchange.getResponseBody()){stream.write(bytes);}
+    });
+    server.start();
+    try{
+      var clients=mock(OAuth2AuthorizedClientService.class);var request=session(clients);
+      var api=new WorkflowThsApi(clients,json,"http://127.0.0.1:"+server.getAddress().getPort());
+      var card=json.valueToTree(api.card("semantic",id,request).getBody()).path("card");
+      assertThat(card.path("valueMapReview").path("entries").size()).isEqualTo(2000);
+      api.action("semantic",id,"decision",json.writeValueAsBytes(Map.of("decision","APPROVED","expectedContentHash",hash)),request);
+      assertThat(posts).hasValue(1);
+      payload.set(json.writeValueAsBytes(body.deepCopy().put("artifact_type","DATATYPE")));
+      assertThatThrownBy(()->api.card("semantic",id,request)).hasMessageContaining("THS_OWNER_RESPONSE_TOO_LARGE");
+      payload.set(new byte[8*1_048_576+1]);
+      assertThatThrownBy(()->api.card("semantic",id,request)).hasMessageContaining("THS_OWNER_RESPONSE_TOO_LARGE");
+      assertThat(posts).hasValue(1);
+    }finally{SecurityContextHolder.clearContext();server.stop(0);}
+  }
   private MockHttpServletRequest session(OAuth2AuthorizedClientService clients){
     var registration=ClientRegistration.withRegistrationId("ouf-ths").clientId("test").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE).redirectUri("http://localhost/callback").authorizationUri("http://localhost/auth").tokenUri("http://localhost/token").build();
     var access=new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER,"private-human-token",Instant.now().minusSeconds(1),Instant.now().plusSeconds(60));

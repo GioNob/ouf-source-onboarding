@@ -45,7 +45,7 @@ class ManagedFileMcpApiTest {
   @Test void jobStatusExposesOnlyBoundedFieldsAndChecksAssetOwner(){
     var files=mock(ManagedFileService.class);
     var receipts=mock(PermissionDelegationVerifier.class);
-    UUID asset=UUID.randomUUID(),job=UUID.randomUUID();
+    UUID asset=UUID.randomUUID(),job=UUID.randomUUID(),profile=UUID.randomUUID();
     byte[] raw=("{\"Arguments\":{\"assetId\":\""+asset+"\",\"jobId\":\""+job+"\"}}").getBytes();
     var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/preview");
     var principal=new PrincipalContext("human:alice","tenant-a",PrincipalContext.ActorType.HUMAN,"ouf-mcp-server","1",
@@ -53,12 +53,14 @@ class ManagedFileMcpApiTest {
         new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
     when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.preview",raw))
         .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
-    when(files.profileJob(asset,job)).thenReturn(Map.of("jobId",job,"status","SUCCEEDED","resultRef",UUID.randomUUID(),
+    when(files.profileJob(asset,job)).thenReturn(Map.of("jobId",job,"status","SUCCEEDED","resultRef",profile,
         "staging_ref","object://private/secret","claimed_by","worker"));
+    var columns=java.util.List.of(Map.of("name","code","distinctCount",2,"distinctValues",java.util.List.of("A","B")));
+    when(files.previewProfile(asset,profile,"tenant-a","human:alice")).thenReturn(Map.of("columns",columns));
     var result=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class)).preview(raw,request);
     verify(files).requireOwner(asset,"human:alice");
-    assertThat(result).containsEntry("jobId",job).containsEntry("status","SUCCEEDED");
-    assertThat(result).doesNotContainKeys("staging_ref","claimed_by");
+    assertThat(result).containsEntry("jobId",job).containsEntry("status","SUCCEEDED").containsEntry("columns",columns);
+    assertThat(result).doesNotContainKeys("staging_ref","claimed_by","redactedSample");
   }
   @Test void createDraftUsesDelegatedHumanAndIdempotentOwnerService(){
     var files=mock(ManagedFileService.class);var receipts=mock(PermissionDelegationVerifier.class);

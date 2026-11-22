@@ -97,9 +97,13 @@ public class ManagedFileMcpApi {
       Map<String,Object> safe=new LinkedHashMap<>();
       for(String key:new String[]{"jobId","status","resultRef","errorCode"})safe.put(key,job.get(key));
       if(job.get("errorCode")!=null)safe.put("diagnosticCategory",profileFailureCategory(job.get("last_error")));
+      if("SUCCEEDED".equals(job.get("status")) && job.get("resultRef") instanceof UUID profileId){
+        var result=files.previewProfile(asset,profileId,caller.principal().tenantId(),owner);
+        safe.put("columns",result.get("columns"));
+      }
       return safe;
     }
-    return files.preview(asset,UUID.fromString(args.get("profileId").asText()));
+    return files.previewProfile(asset,UUID.fromString(args.get("profileId").asText()),caller.principal().tenantId(),owner);
   }
   private static int pageInteger(JsonNode selection,String key,int fallback){
     if(!selection.has(key))return fallback;

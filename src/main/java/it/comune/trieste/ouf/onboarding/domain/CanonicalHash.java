@@ -15,7 +15,11 @@ public final class CanonicalHash {
     catch(Exception e){throw new IllegalStateException("canonical hash failure",e);}
   }
   public String ofDefinition(java.util.Map<?,?> definition){
-    try{return ofBytes(mapper.writer().without(SerializationFeature.INDENT_OUTPUT).writeValueAsBytes(definition));}
+    return ofBytes(definitionBytes(definition));
+  }
+  public byte[] definitionBytes(java.util.Map<?,?> definition){
+    // Match the Registry's compact JSON followed by UTF-8 encoding, including supplementary characters.
+    try{return mapper.writer().without(SerializationFeature.INDENT_OUTPUT).writeValueAsString(definition).getBytes(StandardCharsets.UTF_8);}
     catch(com.fasterxml.jackson.core.JsonProcessingException e){throw new IllegalStateException("canonical definition hash failure",e);}
   }
   public String ofBytes(byte[] value){

@@ -53,12 +53,18 @@ async function profile(fixture, sourceId) {
     stagingRef: 'object://ci/' + sourceId + '.csv', contentHash: 'sha256:' + sha256(csv),
     mediaType: 'text/csv', sizeBytes: csv.length, retentionRef: 'retention://ci',
   })});
-  const {job_id: job} = await json(`${files}/${assetId}/profile`, {method: 'POST', status: 202,
+  const request = () => json(`${files}/${assetId}/profile`, {method: 'POST', status: 202,
     headers: {...headers, 'Idempotency-Key': 'profile-' + sourceId}});
+  const {job_id: job} = await request();
   for (let n = 0; n < 45; n++) {
     const result = await json(`${files}/${assetId}/profile-jobs/${job}`, {headers});
     if (result.status === 'SUCCEEDED') {
       assert.ok(result.resultRef);
+      if (sourceId === 'return-profile') {
+        const replay = await request();
+        assert.equal(replay.job_id, job);
+        assert.equal(replay.resultRef, result.resultRef);
+      }
       return {sourceId, assetId, profileId: result.resultRef};
     }
     assert.ok(['QUEUED', 'RUNNING'].includes(result.status), 'Unexpected profile state: ' + result.status);
@@ -141,7 +147,7 @@ export async function writeV42(fixture) {
   return {legacy, legacyReview, parent, file};
 }
 
-export async function writeV43(fixture, {parent, file}) {
+export async function writeCandidate(fixture, {parent, file}) {
   const review = await prepare(fixture, parent, 'prepare-parent');
   const {card, headers} = await openCard(fixture, review);
   assert.deepEqual(card.reviewSnapshot.columnOrder, ['name', 'unused']);
@@ -157,6 +163,13 @@ export async function writeV43(fixture, {parent, file}) {
   assert.equal(row.version, 2);
   assert.equal(row.parent_version_id, parent.onboardingVersionId);
   const typedFile = await profile(fixture, 'value-types');
+  const result = await command(fixture, 'preview', caps.preview,
+    {assetId: typedFile.assetId, profileId: typedFile.profileId}, 'candidate-profile-read');
+  const [redacted, eligible] = result.columns;
+  assert.equal(redacted.distinctValues, undefined);
+  assert.equal(redacted.distinctCount, 1);
+  assert.deepEqual(eligible.distinctValues, ['1']);
+  assert.equal(result.redactedSample[0].name, '[REDACTED]');
   const typed = await command(fixture, 'create', caps.create, {...typedFile, name:'CI value types', owner:'CI',
     targetClassIri:type, semanticRefs:[type+'@1',property+'@1'], sourceObjectKeyFields:['name'],
     fields:[{fieldName:'name',extractionDecision:'INCLUDE',dataAccessLabel:'OPEN'},
@@ -194,4 +207,9 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.notEqual(prepared.challengeId, review.challengeId);
   assert.deepEqual(await prepare(fixture, child, 'return-review'), prepared);
   assert.equal((await version(fixture, child)).configuration_hash, prepared.configurationHash);
+  const headers = {Authorization: 'Bearer ' + fixture.bearer()};
+  const retained = await json(`${files}/${typed.assetId}/profiles/${typed.profileId}`, {headers});
+  assert.deepEqual(retained.inferred_schema.map(c => c.distinctValues), [1, 1]);
+  assert.equal(retained.distinct_cell_values, undefined);
+  return profile(fixture, 'return-profile');
 }

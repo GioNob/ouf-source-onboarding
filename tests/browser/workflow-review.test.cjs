@@ -115,6 +115,41 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
       await page.setViewportSize(viewport);
       assert.equal(posts.length, 2);
     });
+    await t.test('d084_31 presenta e rende scorrevole la mappa di valori semantica a 375 px', async () => {
+      const viewport = page.viewportSize();
+      await page.setViewportSize({width:375,height:720});
+      const review = {name:'Stati <img>', targetVocabulary:{label:'Stato di apertura',semanticId:'urn:test:vocabolario',publicationSetId:id},
+        entryCount:2000, sourceColumn:{fieldName:'codice_stato',sourceId:'source-1'},
+        entries:Array.from({length:2000}, (_, i) => ({code:'C'+String(i).padStart(4,'0'),
+          concept:'urn:test:concetto:'+('x'.repeat(120))+i, conceptLabel:'Etichetta <img> '+i})),
+        changes:{added:['C1999'],removed:['COLD'],changed:[{code:'C0000',from:'urn:before',to:'urn:after'}]}};
+      semantic = {...semantic, artifact_type:'VALUE_MAP', label_json:{it:review.name}, valueMapReview:review, validationFindings:[]};
+      await page.reload();
+      await page.getByRole('heading', {name:'Stai approvando la mappa di valori «Stati <img>»'}).waitFor();
+      const view = page.locator('.value-map-review');
+      for (const text of ['Stato di apertura','urn:test:vocabolario','2000','codice_stato','source-1','1 aggiunti · 1 rimossi · 1 modificati',
+        'Prima · urn:before','Dopo · urn:after','COLD']) await view.getByText(text, {exact:true}).waitFor({state:'attached'});
+      const region = view.getByRole('region', {name:'Codici e concetti associati'});
+      const rows = region.locator('tbody tr');
+      assert.equal(await rows.count(),2000);
+      assert.equal(await rows.first().getByRole('rowheader').innerText(),'C0000');
+      assert.match(await rows.first().getByRole('cell').innerText(),/Etichetta <img> 0/);
+      assert.equal(await view.locator('img').count(),0);
+      await region.focus();
+      assert.equal(await region.evaluate(el => el === document.activeElement && el.scrollHeight > el.clientHeight && el.scrollWidth === el.clientWidth),true);
+      await rows.last().scrollIntoViewIfNeeded();
+      assert.ok(await region.evaluate(el => el.scrollTop > 0));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),true);
+      await page.locator('article input[type=checkbox]').check();
+      assert.equal(await page.locator('#approve').isEnabled(),true);
+      delete semantic.valueMapReview;
+      await page.reload();
+      await page.getByText(/Dettagli della mappa di valori non disponibili/).waitFor();
+      await page.locator('article input[type=checkbox]').check();
+      assert.equal(await page.locator('#approve').isDisabled(),true);
+      assert.equal(posts.length,2);
+      await page.setViewportSize(viewport);
+    });
     let sourcePosts=0,budgetPosts=0,budgetCommand;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{targetClasses:[{classIri:"urn:example:class",category:{schemeIri:"urn:example:scheme",conceptIri:"urn:example:concept"}},{classIri:"urn:example:other"}],propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};
     source.configuration.dataAccessPolicies=[{scope:'PROPERTY',target:'urn:name',label:'RESTRICTED'}];
     source.termVerification='COMPLETE';

@@ -1,24 +1,22 @@
 package it.comune.trieste.ouf.managed;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import it.comune.trieste.ouf.geopackage.GeometryCoordinate;
 import java.io.*;
 import java.nio.*;
 import java.nio.charset.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.stream.IntStream;
 import java.util.zip.*;
 import org.geotools.data.shapefile.ShapefileDataStore;
-import org.geotools.geojson.geom.GeometryJSON;
 import org.geotools.referencing.CRS;
-import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.*;
 
 /** Bounded static 2D feature intake. No remote resources, styles or expressions are loaded. */
 public final class ShapefileReader implements AutoCloseable {
   public record Layer(String name,String crs,String encoding,String geometryColumn,List<String> columns,List<Map<String,Object>> rows) {}
   private final Path directory;
   private final List<Layer> layers = new ArrayList<>();
-  private static final ObjectMapper JSON = new ObjectMapper();
   public ShapefileReader(byte[] archive) {
     if(archive.length==0||archive.length>10*1024*1024)throw invalid("ARCHIVE_SIZE");
     try{directory=Files.createTempDirectory("ouf-shapefile-");}catch(IOException e){throw invalid("TEMP_STORAGE");}
@@ -69,8 +67,7 @@ public final class ShapefileReader implements AutoCloseable {
                 if(column.equals(geometryColumn)){
                   if(!(value instanceof Geometry g)||g.isEmpty()||g.getNumPoints()>100000||!g.isValid())throw invalid("GEOMETRY_INVALID");
                   for(var coordinate:g.getCoordinates())if(!Double.isFinite(coordinate.x)||!Double.isFinite(coordinate.y))throw invalid("GEOMETRY_INVALID");
-                  var writer=new StringWriter();new GeometryJSON(16).write(g,writer);
-                  value=Map.of("crs",crs,"geoJson",JSON.readValue(writer.toString(),new TypeReference<Map<String,Object>>(){}));
+                  value=Map.of("crs",crs,"geoJson",Map.of("type",g.getGeometryType(),"coordinates",coordinates(g)));
                 }else if(value instanceof Date date)value=date.toInstant().atZone(java.time.ZoneOffset.UTC).toLocalDate().toString();
                 else if(value!=null&&!(value instanceof String||value instanceof Number||value instanceof Boolean))throw invalid("ATTRIBUTE_TYPE");
                 if(value instanceof String s&&s.length()>65536)throw invalid("CELL_LIMIT");
@@ -86,6 +83,32 @@ public final class ShapefileReader implements AutoCloseable {
     }catch(Exception e){close();throw invalid("INVALID_OR_UNSUPPORTED");}
   }
   public List<Layer> layers(){return List.copyOf(layers);}
+  private static Object coordinates(Geometry geometry){
+    return switch(geometry){
+      case Point point -> position(point.getCoordinateSequence(),0);
+      case LineString line -> positions(line);
+      case Polygon polygon -> {
+        var rings=new ArrayList<List<List<GeometryCoordinate>>>();
+        rings.add(positions(polygon.getExteriorRing()));
+        for(int i=0;i<polygon.getNumInteriorRing();i++)rings.add(positions(polygon.getInteriorRingN(i)));
+        yield rings;
+      }
+      case MultiPoint points -> parts(points);
+      case MultiLineString lines -> parts(lines);
+      case MultiPolygon polygons -> parts(polygons);
+      default -> throw invalid("GEOMETRY_INVALID");
+    };
+  }
+  private static List<Object> parts(GeometryCollection collection){
+    return IntStream.range(0,collection.getNumGeometries()).mapToObj(i->coordinates(collection.getGeometryN(i))).toList();
+  }
+  private static List<List<GeometryCoordinate>> positions(LineString line){
+    var sequence=line.getCoordinateSequence();
+    return IntStream.range(0,sequence.size()).mapToObj(i->position(sequence,i)).toList();
+  }
+  private static List<GeometryCoordinate> position(CoordinateSequence sequence,int index){
+    return List.of(new GeometryCoordinate(sequence.getX(index)),new GeometryCoordinate(sequence.getY(index)));
+  }
   private static void validateHeaders(byte[] shp,byte[] shx,byte[] dbf){
     if(shp.length<100||shx.length<100||dbf.length<32||(shx.length-100)%8!=0)throw invalid("HEADER_INVALID");
     var s=ByteBuffer.wrap(shp);var x=ByteBuffer.wrap(shx);

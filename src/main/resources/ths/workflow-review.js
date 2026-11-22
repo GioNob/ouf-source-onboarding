@@ -22,14 +22,16 @@
   }
   function semanticSummary(card, article) {
     const types = {CLASS:'della classe', PROPERTY:'della proprietà', RELATIONSHIP:'della relazione',
-      DATATYPE:'del tipo strutturato', VOCABULARY:'del vocabolario', CONCEPT:'del concetto', ONTOLOGY:'dell’ontologia'};
+      DATATYPE:'del tipo strutturato', VALUE_MAP:'della mappa di valori', VOCABULARY:'del vocabolario',
+      CONCEPT:'del concetto', ONTOLOGY:'dell’ontologia'};
     const source = card.adoptionProvenance || {};
     const label = card.label_json?.it || card.local_name || card.semantic_id;
     const english = card.label_json?.en;
     const open = card.status === 'OPEN' && !expired(card);
-    const nativeDatatype = card.artifact_type === 'DATATYPE' && !card.adoptionProvenance;
-    const heading = nativeDatatype
-      ? (open ? 'Stai approvando il tipo strutturato' : 'Richiesta di approvazione del tipo strutturato')
+    const nativeType = !card.adoptionProvenance &&
+      {DATATYPE:'il tipo strutturato', VALUE_MAP:'la mappa di valori'}[card.artifact_type];
+    const heading = nativeType
+      ? (open ? 'Stai approvando ' + nativeType : 'Richiesta di approvazione ' + types[card.artifact_type])
       : (open ? 'Stai approvando l’adozione' : 'Richiesta di adozione') + ' ' + (types[card.artifact_type] || 'della definizione');
     element('h2', `${heading} «${label}»${english ? ' (' + english + ')' : ''}`, article);
     const facts = document.createElement('dl');
@@ -55,8 +57,10 @@
     fact('Scadenza della richiesta', Number.isFinite(date.valueOf()) ? date.toLocaleString('it-IT', {timeZoneName:'short'}) : card.expires_at);
     article.append(facts);
     if (card.artifact_type === 'DATATYPE' && card.datatypeReview) datatypeSummary(card.datatypeReview, article);
+    if (card.artifact_type === 'VALUE_MAP' && hasValueMapReview(card)) valueMapSummary(card.valueMapReview, article);
     const warnings = [];
-    if (source.licenseWarning || (!nativeDatatype && !source.license)) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
+    if (card.artifact_type === 'VALUE_MAP' && !hasValueMapReview(card)) warnings.push('Dettagli della mappa di valori non disponibili. Ricarica la richiesta per poterla approvare.');
+    if (source.licenseWarning || (!nativeType && !source.license)) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
     for (const finding of card.validationFindings || []) {
       warnings.push(typeof finding === 'string' ? finding : finding.message || finding.code || JSON.stringify(finding));
     }
@@ -69,6 +73,66 @@
     }
     element('h3', 'Cosa comporta l’approvazione', article);
     element('p', 'Approvi questa revisione. Con il successivo comando «Pubblica» la definizione diventa pubblicata e utilizzabile nei mapping delle fonti dell’ente. Non modifica dati esistenti e può essere deprecata in seguito.', article);
+  }
+  function hasValueMapReview(card) {
+    const review = card.valueMapReview;
+    return !!review?.name && !!review.targetVocabulary?.semanticId && !!review.targetVocabulary?.publicationSetId
+      && Array.isArray(review.entries) && review.entries.length > 0 && review.entryCount === review.entries.length
+      && review.entries.every(entry => typeof entry?.code === 'string' && typeof entry.concept === 'string');
+  }
+  function valueMapSummary(review, article) {
+    const section = element('section', '', article);
+    section.className = 'value-map-review';
+    element('h3', review.name, section);
+    const facts = element('dl', '', section);
+    const fact = (name, value) => { element('dt', name, facts); element('dd', value, facts); };
+    const vocabulary = review.targetVocabulary;
+    fact('Vocabolario di destinazione', vocabulary.label || vocabulary.semanticId);
+    fact('Identificativo (IRI)', vocabulary.semanticId);
+    fact('Set di pubblicazione', vocabulary.publicationSetId);
+    fact('Numero di voci', review.entryCount);
+    if (review.sourceColumn?.fieldName) {
+      fact('Colonna sorgente', review.sourceColumn.fieldName);
+      if (review.sourceColumn.sourceId) fact('Identificativo della fonte', review.sourceColumn.sourceId);
+    }
+
+    const tableBody = (title, headings, parent) => {
+      const region = element('div', '', parent);
+      region.className = 'field-scroll value-map-scroll';
+      region.tabIndex = 0;
+      region.setAttribute('role', 'region');
+      region.setAttribute('aria-label', title);
+      const table = element('table', '', region);
+      element('caption', title, table);
+      const header = element('tr', '', element('thead', '', table));
+      for (const heading of headings) element('th', heading, header).scope = 'col';
+      return element('tbody', '', table);
+    };
+    const entries = tableBody('Codici e concetti associati', ['Codice', 'Concetto'], section);
+    for (const entry of review.entries) {
+      const row = element('tr', '', entries);
+      element('th', entry.code, row).scope = 'row';
+      const concept = element('td', entry.conceptLabel || entry.concept, row);
+      if (entry.conceptLabel && entry.conceptLabel !== entry.concept) element('small', entry.concept, concept);
+    }
+    if (!review.changes) return;
+    element('h4', 'Differenze rispetto alla versione precedente', section);
+    const {added = [], removed = [], changed = []} = review.changes;
+    element('p', `${added.length} aggiunti · ${removed.length} rimossi · ${changed.length} modificati`, section);
+    if (added.length + removed.length + changed.length === 0) return;
+    const changes = tableBody('Modifiche ai codici', ['Codice', 'Modifica'], section);
+    const changeRow = (code, change) => {
+      const row = element('tr', '', changes);
+      element('th', code, row).scope = 'row';
+      return element('td', change, row);
+    };
+    for (const code of added) changeRow(code, 'Aggiunto');
+    for (const code of removed) changeRow(code, 'Rimosso');
+    for (const {code, from, to} of changed) {
+      const cell = changeRow(code, 'Modificato');
+      element('small', 'Prima · ' + from, cell);
+      element('small', 'Dopo · ' + to, cell);
+    }
   }
   function datatypeSummary(review, article) {
     const title = 'Componenti del tipo strutturato';
@@ -134,7 +198,7 @@
     DATETIME_ISO_OFFSET_V1:'Legge data e ora ISO con scarto orario esplicito e le riporta al tempo universale UTC. I secondi sono facoltativi, con al massimo nove cifre decimali.',
     DATETIME_LOCAL_ROME_V1:'Interpreta anno-mese-giorno e ora locale senza scarto nel fuso di Roma. I secondi sono facoltativi. Al cambio di ora rifiuta gli orari inesistenti o ambigui.',
     GEOJSON_V1:'Legge una geometria GeoJSON in EPSG:4326.',
-    WKT_V1:'Legge una geometria WKT nel sistema di coordinate dichiarato',
+    WKT_V1:'Legge una geometria WKT 2D o Z nel sistema di coordinate dichiarato. Le ordinate di misura M e ZM non sono ammesse',
     VALUE_MAP_V1:'Rimuove gli spazi esterni e cerca il codice esatto nella mappa pubblicata. Un codice sconosciuto produce un errore'
   };
   function readerText(reader, params = {}, valueMap) {
@@ -330,7 +394,8 @@
   const expired = card => Date.parse(card.expires_at) <= Date.now();
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
   const missingFileSnapshot = card => !card.reviewSnapshot && (card.configuration?.extractionProfile?.selection?.assetId || card.configuration?.semanticMapping?.sourceType?.typeCode === 'FILE');
-  const approvalBlocked = card => !semantic && (missingFileSnapshot(card) || card.termVerification !== 'COMPLETE');
+  const approvalBlocked = card => semantic ? card.artifact_type === 'VALUE_MAP' && !hasValueMapReview(card)
+    : missingFileSnapshot(card) || card.termVerification !== 'COMPLETE';
   const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : item.card.onboardingState === 'APPROVED' && !item.card.progress?.activationProgress?.budgetExhausted && item.card.progress?.activationProgress?.counterLineageVerified !== false && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
   const canBudget = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED' && item.card.progress?.activationProgress?.humanBudgetGrantAvailable === true && (item.reason?.value.trim().length || 0) >= 10;
   const canResume = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED'

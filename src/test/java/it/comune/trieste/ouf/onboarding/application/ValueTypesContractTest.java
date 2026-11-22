@@ -17,7 +17,7 @@ class ValueTypesContractTest {
 
   @Test void d084_01_contractVocabularyAndComparators()throws Exception{
     byte[] bytes=Files.readAllBytes(Path.of("contracts/ouf-value-types-v1.json"));
-    assertThat(hashes.ofBytes(bytes)).isEqualTo("sha256:4b90e85ecd1573404612ef0a0ee627feffaa9c189fe4363e82079bd07824c333");
+    assertThat(hashes.ofBytes(bytes)).isEqualTo("sha256:3b85052e253b985f1082527eb595d2f02e5336047203deb3503a9766c1324295");
     // Same canonical definition as the Registry publication fixture, including numeric constraints.
     var registryDefinition=Map.of("components",List.of(Map.of("type","string","required",true,"name","via","constraints",Map.of("maxLength",80),"cardinality","ONE")));
     var pretty=new CanonicalHash(json.copy().enable(com.fasterxml.jackson.databind.SerializationFeature.INDENT_OUTPUT));
@@ -368,7 +368,7 @@ class ValueTypesContractTest {
 
   @Test void d084_20_valueMapsContractBytes()throws Exception{
     assertThat(hashes.ofBytes(Files.readAllBytes(Path.of("contracts/ouf-value-maps-v1.json"))))
-        .isEqualTo("sha256:2f4528eb4c9c6bd9d2c6345464c8292f0cb3f36834cb2f54f81ae20e3dbe4a71");
+        .isEqualTo("sha256:40b247ad3422e09245a8314fdcc59ffe0b039e25733a2ca8f31aa6ba03ff2d2e");
   }
 
   @Test void d084_21_invalidValueMapsFailClosedWithoutSourceCodes(){

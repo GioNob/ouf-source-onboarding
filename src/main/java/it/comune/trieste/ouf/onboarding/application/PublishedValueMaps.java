@@ -6,6 +6,8 @@ import static it.comune.trieste.ouf.onboarding.application.DatatypeResolver.unre
 import static it.comune.trieste.ouf.onboarding.application.ValueCompositions.*;
 
 final class PublishedValueMaps {
+  private static final int MAX_DEFINITION_BYTES=786_432;
+  static final int MAX_BUNDLE_BYTES=1_048_576;
   private PublishedValueMaps(){}
 
   static String coordinate(String ref,Map<String,Map<String,Object>> pins){
@@ -22,7 +24,7 @@ final class PublishedValueMaps {
     return iri(ref.substring(0,at));
   }
 
-  static void verify(String ref,Map<String,Object> pin,Map<String,Object> actual,CanonicalHash hashes){
+  static int verify(String ref,Map<String,Object> pin,Map<String,Object> actual,CanonicalHash hashes){
     try{
       require("VALUE_MAP".equals(actual.get("artifact_type")) && "ACTIVE".equals(actual.get("status")));
       var definition=map(actual.get("definition"));
@@ -37,21 +39,24 @@ final class PublishedValueMaps {
       for(Object raw:list(definition.get("entries"),1,2000)){
         var entry=map(raw);
         keys(entry,Set.of("code","concept"),Set.of());
-        String code=text(entry,"code");
-        require(code.codePointCount(0,code.length())<=128 && code.equals(code.strip())
-            && code.chars().noneMatch(c->c<=0x1f || c==0x7f)
+        if(!(entry.get("code") instanceof String code))throw unresolvedValueMap();
+        require(!code.isEmpty() && code.codePointCount(0,code.length())<=128 && code.equals(CellWhitespace.trim(code))
+            && code.chars().noneMatch(Character::isISOControl)
             && (previous==null || previous.compareTo(code)<0));
-        iri(text(entry,"concept"));
+        String concept=iri(text(entry,"concept"));
+        require(concept.codePointCount(0,concept.length())<=512);
         previous=code;
       }
       String digest=text(actual,"definitionSha256");
-      require(hashes.ofDefinition(definition).substring(7).equals(digest));
+      byte[] canonical=hashes.definitionBytes(definition);
+      require(canonical.length<=MAX_DEFINITION_BYTES && hashes.ofBytes(canonical).substring(7).equals(digest));
       pin.put("valueMapRef",ref);
       pin.put("targetVocabulary",vocabulary);
       pin.put("definition",definition);
       pin.put("definitionSha256",digest);
       if(actual.get("label") instanceof Map<?,?> label && label.values().stream().allMatch(String.class::isInstance))
         pin.put("label",label);
+      return canonical.length;
     }catch(IllegalArgumentException invalid){throw unresolvedValueMap();}
   }
 }

@@ -33,6 +33,20 @@ class ShapefileReaderTest {
     var files=fixture();files.remove("assets.prj");assertThrows(IllegalArgumentException.class,()->new ShapefileReader(zip(files)));
     assertThrows(IllegalArgumentException.class,()->new ShapefileReader(zip(Map.of("../assets.shp",new byte[1]))));
   }
+  @Test void d084_33_shapefileRetainsTheOriginalBinary64Ordinates()throws Exception{
+    var files=fixture();
+    double x=Math.nextUp(13.77),y=0.000000000000000013776543210987654;
+    for(String part:List.of("assets.shp","assets.shx"))
+      ByteBuffer.wrap(files.get(part)).order(ByteOrder.LITTLE_ENDIAN).putDouble(36,x).putDouble(44,y).putDouble(52,x).putDouble(60,y);
+    ByteBuffer.wrap(files.get("assets.shp")).order(ByteOrder.LITTLE_ENDIAN).putDouble(112,x).putDouble(120,y);
+    try(var reader=new ShapefileReader(zip(files))){
+      var layer=reader.layers().getFirst();
+      var json=new com.fasterxml.jackson.databind.ObjectMapper();
+      var envelope=json.readTree(json.writeValueAsBytes(layer.rows().getFirst().get(layer.geometryColumn())));
+      assertEquals(x,envelope.path("geoJson").path("coordinates").get(0).asDouble());
+      assertEquals(y,envelope.path("geoJson").path("coordinates").get(1).asDouble());
+    }
+  }
   @Test void rejectsIndexMismatchBeforeEmittingFeatures() throws Exception {
     var files=fixture();ByteBuffer.wrap(files.get("assets.shx")).putInt(100,60);
     assertThrows(IllegalArgumentException.class,()->new ShapefileReader(zip(files)));

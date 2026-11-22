@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.onboarding.application;
 import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.util.*;
+import org.springframework.http.HttpStatus;
 import static it.comune.trieste.ouf.onboarding.application.ValueCompositions.*;
 
 /** Called on a private draft before its configuration hash and HUMAN challenge are created. */
@@ -67,6 +68,7 @@ final class PublishedDatatypes {
     Object executionSet=ManagedReviewSnapshot.child(runtime,"execution").get("semanticPublicationSetRef");
     // Bindings carry coordinates, not artifact kinds. Classify them from the Registry so even
     // an additional pinned DATATYPE (outside a property expression) carries its definition.
+    int valueMapBytes=0;
     for(var entry:pins.entrySet()){
       var pin=entry.getValue();
       String ref=entry.getKey();
@@ -75,7 +77,10 @@ final class PublishedDatatypes {
       String kind=text(actual,"artifact_type");
       boolean valueMap="VALUE_MAP".equals(kind);
       if(expectedMap || valueMap){
-        PublishedValueMaps.verify(ref,pin,actual,hashes);
+        valueMapBytes+=PublishedValueMaps.verify(ref,pin,actual,hashes);
+        if(valueMapBytes>PublishedValueMaps.MAX_BUNDLE_BYTES)
+          throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALUE_MAP_LIMIT_EXCEEDED",
+              "Embedded value map definitions exceed the bundle limit");
         String vocabulary=text(pin,"targetVocabulary");
         if((retainedTargets.containsKey(ref) && !vocabulary.equals(retainedTargets.get(ref)))
             || (retainedVocabularies.containsKey(ref) && !PublishedValueMaps.vocabularyId(vocabulary).equals(retainedVocabularies.get(ref))))

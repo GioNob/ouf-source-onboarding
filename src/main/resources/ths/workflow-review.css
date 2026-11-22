@@ -4,3 +4,10 @@
 .field-scroll{max-width:100%;overflow-x:auto}.field-scroll table{min-width:54rem}.field-scroll caption{text-align:left;font-weight:600;padding-bottom:.5rem}.field-scroll th[scope=row]{vertical-align:top}.excluded{background:#f0f1f1;color:#454b48}.card textarea{max-width:100%;box-sizing:border-box;font:inherit}.field-scroll label,.review-items label{margin:.4rem 0}.review-items li{margin:.7rem 0;overflow-wrap:anywhere}.card h2,.warnings{overflow-wrap:anywhere}@media(max-width:600px){main{padding:16px 10px}.card{padding:14px}.field-scroll:focus{outline:2px solid #176b50}}
 
 .datatype-components table{min-width:34rem}.datatype-components:focus-visible{outline:2px solid #176b50}
+.value-map-review{overflow-wrap:anywhere}
+.value-map-scroll{max-height:20rem;overflow:auto}
+.value-map-scroll:focus-visible{outline:2px solid #176b50}
+.value-map-scroll table{min-width:0;table-layout:fixed}
+.value-map-scroll th:first-child{width:30%}
+.value-map-scroll th,.value-map-scroll td{white-space:pre-wrap;vertical-align:top}
+.value-map-scroll small{display:block;margin-top:.2rem}
