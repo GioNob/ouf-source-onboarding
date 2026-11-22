@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -147,6 +148,14 @@ class ManagedPreviewPagingTest {
     var next = body(paging.columns(layered, values, TENANT, SUBJECT, null, 0, 128, cursor), budget);
     assertThat(next.path("layer").asText()).isEqualTo("roads");
     assertThat(next.path("columns").get(0).path("name").asText()).isEqualTo("code");
+
+    layered.put("metadata", Map.of("layers", List.of(Map.of("layer", "roads", "columns", preview.get("columns"))),
+        "largeDetail", "x".repeat(budget)));
+    var compact = body(paging.profile(layered, null, values, TENANT, SUBJECT), budget);
+    assertThat(compact.path("metadataTruncated").asBoolean()).isTrue();
+    assertThat(compact.path("metadata").path("layers").get(0).path("layer").asText()).isEqualTo("roads");
+    var layerPage = body(paging.columns(layered, values, TENANT, SUBJECT, "roads", 0, 128, null), budget);
+    assertThat(layerPage.path("columns").get(0).path("distinctValuesCursor").asText()).isNotEmpty();
   }
 
   @Test void d084_40f_05_retainedMetadataFallbackKeepsWholeColumnsAndCounts() throws Exception {
@@ -186,7 +195,7 @@ class ManagedPreviewPagingTest {
 
   private ManagedPreviewPaging paging(int budget, Instant time) {
     return new ManagedPreviewPaging(json, new CanonicalHash(json),
-        new DistinctValuesCursors(json, testKey, Clock.fixed(time, ZoneOffset.UTC)), budget);
+        new DistinctValuesCursors(json, testKey, Clock.fixed(time, ZoneOffset.UTC), Duration.ofMinutes(15)), budget);
   }
 
   private JsonNode body(Map<String,Object> response, int budget) throws Exception {

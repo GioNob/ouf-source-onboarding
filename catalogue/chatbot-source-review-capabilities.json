@@ -53,5 +53,14 @@
         "HUMAN"
       ]
     }
+  },
+  {
+    "ownerRef": "onboarding",
+    "descriptor": {
+      "capabilityId": "ouf.onboarding.ths-links.ingestion-run-recovery",
+      "operation": "READ",
+      "requiredScope": "ouf.onboarding.ths-links.ingestion-run-recovery",
+      "allowedActors": ["HUMAN"]
+    }
   }
 ]

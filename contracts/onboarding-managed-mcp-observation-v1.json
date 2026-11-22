@@ -175,6 +175,7 @@
       "description": "Azioni eleggibili sulla versione osservata. Ogni comando rivaluta IAM, precondizioni e documenti richiesti.",
       "enum": [
         "READ_AGAIN",
+        "READ_DISTINCT_VALUES",
         "PREPARE_REVIEW",
         "WAIT_HUMAN_REVIEW",
         "RENEW_REVIEW",
@@ -187,6 +188,7 @@
       ],
       "x-ouf-semantics": {
         "READ_AGAIN": "La lettura owner pertinente può essere ripetuta.",
+        "READ_DISTINCT_VALUES": "Una colonna della preview ha altri valori. Inviare view COLUMNS, assetId, profileId e distinctValuesCursor per la colonna.",
         "PREPARE_REVIEW": "Preparare la revisione della bozza con proposta, versione e nuova chiave secondo il contratto del comando.",
         "WAIT_HUMAN_REVIEW": "La challenge è aperta per la decisione HUMAN. Rileggere l’owner per osservare l’esito.",
         "RENEW_REVIEW": "Richiedere una nuova challenge per la stessa versione con il lockVersion corrente e una nuova chiave.",

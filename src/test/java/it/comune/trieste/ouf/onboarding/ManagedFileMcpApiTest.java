@@ -55,11 +55,21 @@ class ManagedFileMcpApiTest {
         .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
     when(files.profileJob(asset,job)).thenReturn(Map.of("jobId",job,"status","SUCCEEDED","resultRef",profile,
         "staging_ref","object://private/secret","claimed_by","worker"));
-    var columns=java.util.List.of(Map.of("name","code","distinctCount",2,"distinctValues",java.util.List.of("A","B")));
-    when(files.previewProfile(asset,profile,"tenant-a","human:alice")).thenReturn(Map.of("columns",columns));
+    var columns=java.util.List.of(Map.of("name","code","distinctCount",2,"distinctValues",java.util.List.of("A"),
+        "distinctValuesComplete",false,"distinctValuesCursor","continuation"));
+    when(files.previewProfile(eq(asset),eq(profile),eq("tenant-a"),eq("human:alice"),anyMap())).thenAnswer(call->{
+      var body=new java.util.LinkedHashMap<String,Object>(call.<Map<String,Object>>getArgument(4));
+      body.put("columns",columns);
+      body.put("nextOffset",1);
+      return body;
+    });
     var result=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class)).preview(raw,request);
     verify(files).requireOwner(asset,"human:alice");
-    assertThat(result).containsEntry("jobId",job).containsEntry("status","SUCCEEDED").containsEntry("columns",columns);
+    assertThat(result).containsEntry("jobId",job).containsEntry("status","SUCCEEDED").containsEntry("columns",columns)
+        .containsEntry("resultRef",profile).containsEntry("nextOffset",1).containsKey("errorCode");
+    assertThat(result.get("allowedActions")).isEqualTo(java.util.List.of(
+        it.comune.trieste.ouf.onboarding.application.ManagedMcpObservation.Action.READ_AGAIN,
+        it.comune.trieste.ouf.onboarding.application.ManagedMcpObservation.Action.READ_DISTINCT_VALUES));
     assertThat(result).doesNotContainKeys("staging_ref","claimed_by","redactedSample");
   }
   @Test void createDraftUsesDelegatedHumanAndIdempotentOwnerService(){
@@ -122,9 +132,9 @@ class ManagedFileMcpApiTest {
     byte[] raw=json.writeValueAsBytes(Map.of("Arguments",Map.of("view","COLUMNS","assetId",asset,"profileId",profile,"offset",128,"limit",128)));
     var p=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.HUMAN,"mcp","1","issuer","aud",Set.of("ouf.managed-source.preview"),new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
     when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.preview",raw)).thenReturn(new PermissionDelegationVerifier.Delegated(p,"read-only"));
-    when(files.previewColumns(asset,profile,128,128)).thenReturn(Map.of("columnCount",1024,"hasMore",true));
+    when(files.previewColumns(asset,profile,"tenant-a","alice",null,128,128,null)).thenReturn(Map.of("columnCount",1024,"hasMore",true));
     var result=new ManagedFileMcpApi(receipts,files,json,mock(ManagedFileChatHandoff.class)).preview(raw,request);
-    var order=inOrder(files);order.verify(files).requireTenantOwner(asset,"tenant-a","alice");order.verify(files).previewColumns(asset,profile,128,128);
+    verify(files).previewColumns(asset,profile,"tenant-a","alice",null,128,128,null);
     assertThat(result).containsEntry("columnCount",1024);
   }
 

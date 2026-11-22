@@ -14,7 +14,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 @Component
-final class ManagedPreviewPaging {
+public final class ManagedPreviewPaging {
   // Reserve room inside the owner budget for the bounded workflow observation fields.
   private static final int OBSERVATION_BYTES = 512;
   private static final int FLAT = -1;
@@ -163,13 +163,19 @@ final class ManagedPreviewPaging {
     if (!schema.layers().isEmpty() && out.containsKey("metadata")) {
       var metadata = new LinkedHashMap<>(object(out.get("metadata")));
       var layers = new ArrayList<Map<String,Object>>();
+      var minimalLayers = new ArrayList<Map<String,Object>>();
+      var retainedLayers = items(metadata.get("layers"));
       for (int i = 0; i < schema.layers().size(); i++) {
-        layers.add(Map.of("layer", schema.layerName(i), "columns", List.of(), "columnCount", schema.columns(i).size()));
+        var minimal = Map.<String,Object>of("layer", schema.layerName(i), "columns", List.of(), "columnCount", schema.columns(i).size());
+        var layer = new LinkedHashMap<>(object(retainedLayers.get(i)));
+        layer.putAll(minimal);
+        layers.add(layer);
+        minimalLayers.add(minimal);
       }
       metadata.put("layers", layers);
       out.put("metadata", metadata);
       out.put("metadataTruncated", true);
-      if (bytes(out) > budget) out.put("metadata", Map.of());
+      if (bytes(out) > budget) out.put("metadata", Map.of("layers", minimalLayers));
     }
     if (schema.columns().isEmpty()) return checked(out);
     return page(out, schema, values, scope, FLAT, 0, ManagedFileLimits.COLUMN_PAGE_SIZE, deadline);

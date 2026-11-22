@@ -28,9 +28,11 @@ import org.springframework.web.server.ResponseStatusException;
 
 /** Session adapter for the versioned Ingestion HUMAN API. Ingestion owns recovery decisions. */
 @RestController
-@RequestMapping("/trusted-human/ingestion-run-recovery")
+@RequestMapping(IngestionRunRecoveryThs.PATH)
 @ConditionalOnProperty(name="ouf.workflow.ths.gateway-base-url")
 public class IngestionRunRecoveryThs {
+  static final String PATH = "/trusted-human/ingestion-run-recovery";
+  static final long MAX_CONTROL_VERSION = 9007199254740991L; // Exact in the browser and in JSON.
   private final OAuth2AuthorizedClientService clients;
   private final ObjectMapper json;
   private final URI gateway;
@@ -89,7 +91,7 @@ public class IngestionRunRecoveryThs {
   }
 
   private static void validateVersion(long version){
-    if(version<0||version>9007199254740991L)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_INGESTION_VERSION_INVALID");
+    if(version<0||version>MAX_CONTROL_VERSION)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_INGESTION_VERSION_INVALID");
   }
 
   private static long observedVersion(JsonNode card,UUID runId){
@@ -97,7 +99,7 @@ public class IngestionRunRecoveryThs {
         ||!card.path("control_version").canConvertToLong()||!card.path("state").isTextual())
       throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_INGESTION_OWNER_RESPONSE_INVALID");
     long version=card.path("control_version").longValue();
-    if(version<0||version>9007199254740991L)
+    if(version<0||version>MAX_CONTROL_VERSION)
       throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_INGESTION_OWNER_RESPONSE_INVALID");
     return version;
   }

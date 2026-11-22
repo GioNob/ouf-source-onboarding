@@ -29,7 +29,6 @@ final class DistinctValuesCursors {
   private static final int PAYLOAD_BYTES = 1 + 3 * Integer.BYTES + Long.BYTES;
   private static final int TOKEN_BYTES = PAYLOAD_BYTES + 32;
   private static final int TOKEN_CHARS = (TOKEN_BYTES * 8 + 5) / 6;
-  private static final Duration TTL = Duration.ofMinutes(15);
   private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
   private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
 
@@ -39,21 +38,25 @@ final class DistinctValuesCursors {
   private final ObjectMapper json;
   private final SecretKeySpec key;
   private final Clock clock;
+  private final Duration ttl;
 
   @Autowired
   DistinctValuesCursors(ObjectMapper json,
-      @Value("${ouf.onboarding.preview.cursor-key-file:}") String keyFile) {
-    this(json, loadKey(keyFile), Clock.systemUTC());
+      @Value("${ouf.onboarding.preview.cursor-key-file:}") String keyFile,
+      @Value("${ouf.onboarding.preview.cursor-ttl:PT15M}") Duration ttl) {
+    this(json, loadKey(keyFile), Clock.systemUTC(), ttl);
   }
 
-  DistinctValuesCursors(ObjectMapper json, byte[] key, Clock clock) {
+  DistinctValuesCursors(ObjectMapper json, byte[] key, Clock clock, Duration ttl) {
+    if (ttl.compareTo(Duration.ofSeconds(1)) < 0) throw new IllegalArgumentException("Preview cursor TTL must be at least one second");
     this.json = json;
     this.key = new SecretKeySpec(key, "HmacSHA256");
     this.clock = clock;
+    this.ttl = ttl;
   }
 
   long deadline() {
-    return clock.instant().plus(TTL).getEpochSecond();
+    return clock.instant().plus(ttl).getEpochSecond();
   }
 
   String issue(Scope scope, Position position) {

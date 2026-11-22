@@ -9,6 +9,7 @@ import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileLimits;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileChatHandoff;
 import it.comune.trieste.ouf.onboarding.application.OnboardingService;
+import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.LinkedHashMap;
@@ -16,6 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.List;
 import java.util.Set;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -62,16 +64,24 @@ public class ManagedFileMcpApi {
   @PostMapping("/preview") public Map<String,Object> preview(@RequestBody byte[] raw,HttpServletRequest request){
     var caller=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),"ouf.managed-source.preview",raw);
     String owner=caller.principal().subjectId();
+    String tenant=caller.principal().tenantId();
     try{
       JsonNode selection=json.readTree(raw).required("Arguments");
-      if("COLUMNS".equals(selection.path("view").asText())){
-        Set<String> allowed=Set.of("view","assetId","profileId","offset","limit");
+      boolean columnsView="COLUMNS".equals(selection.path("view").textValue());
+      boolean exactProfile=selection.path("assetId").isTextual()&&selection.path("profileId").isTextual();
+      String cursor=selection.path("distinctValuesCursor").textValue();
+      if(selection.has("distinctValuesCursor")&&(!columnsView||!exactProfile||cursor==null||cursor.isEmpty()||selection.size()!=4))
+        throw new DomainFailure(HttpStatus.BAD_REQUEST,"ONB_DISTINCT_VALUES_CURSOR_INVALID","Invalid distinct values cursor query");
+      if(columnsView){
+        Set<String> allowed=Set.of("view","assetId","profileId","offset","limit","layer","distinctValuesCursor");
         for(var keys=selection.fieldNames();keys.hasNext();)if(!allowed.contains(keys.next()))throw new IllegalArgumentException("invalid column page query");
-        if(!selection.path("assetId").isTextual()||!selection.path("profileId").isTextual())throw new IllegalArgumentException("exact asset and profile required");
+        if(!exactProfile)throw new IllegalArgumentException("exact asset and profile required");
+        String layer=selection.path("layer").textValue();
+        if(selection.has("layer")&&(layer==null||layer.isEmpty()))throw new IllegalArgumentException("exact profile layer required");
         int offset=pageInteger(selection,"offset",0),limit=pageInteger(selection,"limit",ManagedFileLimits.COLUMN_PAGE_SIZE);
         UUID asset=UUID.fromString(selection.get("assetId").asText()),profile=UUID.fromString(selection.get("profileId").asText());
-        files.requireTenantOwner(asset,caller.principal().tenantId(),owner);
-        return with(files.previewColumns(asset,profile,offset,limit), State.PROFILE_COLUMNS, Reason.COLUMN_PAGE, Action.READ_AGAIN);
+        return ManagedMcpObservation.preview(files.previewColumns(asset,profile,tenant,owner,layer,offset,limit,cursor),
+            State.PROFILE_COLUMNS,Reason.COLUMN_PAGE);
       }
       if(selection.has("view")){
         if(!selection.path("view").isTextual()||!"ASSETS".equals(selection.path("view").asText())||selection.size()>3)throw new IllegalArgumentException("invalid owner asset query");
@@ -85,7 +95,7 @@ public class ManagedFileMcpApi {
           after=UUID.fromString(selection.get("afterAssetId").asText());
           if(!after.toString().equals(selection.get("afterAssetId").asText()))throw new IllegalArgumentException("invalid owner asset cursor");
         }
-        return with(files.ownedAssets(caller.principal().tenantId(),owner,limit,after), State.ASSETS, Reason.ASSET_LIST, Action.READ_AGAIN);
+        return with(files.ownedAssets(tenant,owner,limit,after), State.ASSETS, Reason.ASSET_LIST, Action.READ_AGAIN);
       }
     }catch(IOException e){throw new IllegalArgumentException("invalid owner asset query",e);}
     JsonNode args;
@@ -94,19 +104,17 @@ public class ManagedFileMcpApi {
     UUID asset=UUID.fromString(args.get("assetId").asText());
     files.requireOwner(asset,owner);
     if(args.has("jobId")){
-      files.requireTenantOwner(asset,caller.principal().tenantId(),owner);
+      files.requireTenantOwner(asset,tenant,owner);
       var job=files.profileJob(asset,UUID.fromString(args.get("jobId").asText()));
       Map<String,Object> safe=new LinkedHashMap<>();
       for(String key:new String[]{"jobId","status","resultRef","errorCode"})safe.put(key,job.get(key));
       if(job.get("errorCode")!=null)safe.put("diagnosticCategory",profileFailureCategory(job.get("last_error")));
-      if("SUCCEEDED".equals(job.get("status")) && job.get("resultRef") instanceof UUID profileId){
-        var result=files.previewProfile(asset,profileId,caller.principal().tenantId(),owner);
-        safe.put("columns",result.get("columns"));
-      }
+      if("SUCCEEDED".equals(job.get("status")) && job.get("resultRef") instanceof UUID profileId)
+        return ManagedMcpObservation.profile(files.previewProfile(asset,profileId,tenant,owner,safe));
       return ManagedMcpObservation.profile(safe);
     }
-    return with(files.previewProfile(asset,UUID.fromString(args.get("profileId").asText()),caller.principal().tenantId(),owner),
-        State.PROFILE_AVAILABLE, Reason.PROFILE_READY, Action.READ_AGAIN);
+    return ManagedMcpObservation.preview(files.previewProfile(asset,UUID.fromString(args.get("profileId").asText()),tenant,owner),
+        State.PROFILE_AVAILABLE,Reason.PROFILE_READY);
   }
   private static int pageInteger(JsonNode selection,String key,int fallback){
     if(!selection.has(key))return fallback;

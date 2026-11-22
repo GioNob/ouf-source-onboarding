@@ -30,6 +30,7 @@ ouf:
     preview:
       max-response-bytes: ${OUF_ONB_PREVIEW_MAX_RESPONSE_BYTES:786432}
       cursor-key-file: ${OUF_ONB_PREVIEW_CURSOR_KEY_FILE:}
+      cursor-ttl: ${OUF_ONB_PREVIEW_CURSOR_TTL:PT15M}
     log-export-worker:
       id: ${OUF_ONB_LOG_EXPORT_WORKER_ID:ths-log-export}
       lease: ${OUF_ONB_LOG_EXPORT_WORKER_LEASE:PT2M}

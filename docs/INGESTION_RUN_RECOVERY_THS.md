@@ -1,15 +1,16 @@
 # Contratto di integrazione della THS di recupero Ingestion
 
-Ingestion emette il `reviewUrl` HTTPS dalla configurazione governata dell’origine pubblica THS. Il percorso è
-`/trusted-human/ingestion-run-recovery/?runId={runId}&expectedVersion={control_version}`.
-Usare l’UUID canonico e la versione di controllo decimale osservata nella stessa proiezione autorizzata del run. Emettere il link per un run in pausa con una decisione HUMAN disponibile secondo i predicati di Ingestion. Il task-50c è il punto di emissione. Il task-50 trasferisce il link nel proprio `next.human.reviewUrl` con `decisionKind: RESUME_OR_ABORT`.
+Onboarding emette `reviewUrl` e `expiresAt` da `POST /api/internal/v1/onboarding/ths-links/ingestion-run-recovery`. Il MCP invia via Gateway il corpo `{sourceId, runId, expectedVersion}`, con UUID in forma canonica minuscola e versione di controllo come intero decimale JSON tra 0 e 9007199254740991. I valori provengono dalla stessa proiezione autorizzata del run. Il Gateway firma il metodo, il percorso, il corpo effettivo e la capability `ouf.onboarding.ths-links.ingestion-run-recovery` con la stessa ricevuta HUMAN delle rotte managed-file (`X-OUF-Managed-File-Receipt`, scopo `managed-file-owner`). Onboarding richiede una prova durevole della proprietà tenant e soggetto della fonte gestita.
 
-Il link identifica run e versione. L’accesso richiede la sessione OAuth THS, il grant per il run e la decisione autorizzata da Ingestion. Una versione superata apre una vista informativa e richiede un nuovo link per decidere. Il link rimane legato alla versione finché Ingestion non la cambia. Se la capability MCP richiede una scadenza per l’attesa, Ingestion deve fornire una finestra di decisione governata. La scadenza dell’ultimo budget del worker ha una semantica distinta.
+Il percorso è `/trusted-human/ingestion-run-recovery/?runId={runId}&expectedVersion={expectedVersion}` sull’origine HTTPS `ouf.authorization.ths.public-origin`, condivisa con le challenge. Con origine mancante o non valida, l’endpoint restituisce `503 ONB_THS_LINK_ORIGIN_REQUIRED`. La durata di presentazione `ouf.onboarding.ths-links.ingestion-run-recovery.presentation-ttl` accetta una durata ISO-8601 positiva ed è `PT10M` per default. `expiresAt` in UTC indica fino a quando il client può presentare il link ricevuto. L’accesso e la decisione richiedono sessione OAuth THS, grant per il run, stato e versione verificati da Ingestion. Una versione superata apre una vista informativa e richiede un nuovo link per decidere.
+
+Ingestion espone `decisionDeadline` in `status` e `history` per ogni run la cui `recoveryAction` richiede un umano. È la fine della finestra di decisione in formato ISO-8601 UTC e alimenta il `deadline` del `WAIT_FOR_HUMAN` del MCP. Per `HUMAN_RESUME_REQUIRED`, il MCP chiede a Onboarding il link da usare in `next.human.reviewUrl` con `decisionKind: RESUME_OR_ABORT`. La durata di presentazione del link e il budget del worker hanno scadenze distinte.
 
 ## Rotte da esporre nel Gateway
 
-| Metodo | Percorso pubblico | Destinazione |
+| Metodo | Percorso | Destinazione |
 |---|---|---|
+| POST | `/api/internal/v1/onboarding/ths-links/ingestion-run-recovery` | Onboarding, invocazione MCP con ricevuta Gateway HUMAN `ouf.onboarding.ths-links.ingestion-run-recovery` |
 | GET | `/trusted-human/ingestion-run-recovery/` | Onboarding, sessione THS |
 | GET | `/trusted-human/ingestion-run-recovery/recovery.js`, `/trusted-human/ingestion-run-recovery/recovery.css` | Onboarding, sessione THS |
 | GET | `/trusted-human/ingestion-run-recovery/api/{runId}/{expectedVersion}` | Onboarding, sessione THS |

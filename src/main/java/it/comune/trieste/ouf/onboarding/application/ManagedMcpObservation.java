@@ -24,7 +24,7 @@ public final class ManagedMcpObservation {
   }
 
   public enum Action {
-    READ_AGAIN, PREPARE_REVIEW, WAIT_HUMAN_REVIEW, RENEW_REVIEW,
+    READ_AGAIN, READ_DISTINCT_VALUES, PREPARE_REVIEW, WAIT_HUMAN_REVIEW, RENEW_REVIEW,
     HUMAN_ACTIVATE, HUMAN_RECHECK, HUMAN_GRANT_BUDGET, CREATE_REVISION, REDRAFT_SAME_FILE, NONE
   }
 
@@ -40,11 +40,26 @@ public final class ManagedMcpObservation {
     State state = State.valueOf((String) body.get("status"));
     return switch (state) {
       case QUEUED, RUNNING, RETRY_WAIT -> with(body, state, Reason.PROFILE_PENDING, Action.READ_AGAIN);
-      case SUCCEEDED -> with(body, state, Reason.PROFILE_READY, Action.READ_AGAIN);
+      case SUCCEEDED -> preview(body, state, Reason.PROFILE_READY);
       case FAILED -> with(body, state, Reason.PROFILE_FAILED);
       case CANCELLED -> with(body, state, Reason.PROFILE_CANCELLED);
       default -> throw new IllegalStateException("Invalid profile job state");
     };
+  }
+
+  public static Map<String,Object> preview(Map<String,Object> body, State state, Reason reason) {
+    boolean continuation = incompleteColumns(body.get("columns"));
+    if (!continuation && body.get("metadata") instanceof Map<?,?> metadata
+        && metadata.get("layers") instanceof List<?> layers) {
+      continuation = layers.stream().anyMatch(layer -> layer instanceof Map<?,?> map && incompleteColumns(map.get("columns")));
+    }
+    return continuation ? with(body, state, reason, Action.READ_AGAIN, Action.READ_DISTINCT_VALUES)
+        : with(body, state, reason, Action.READ_AGAIN);
+  }
+
+  private static boolean incompleteColumns(Object columns) {
+    return columns instanceof List<?> list && list.stream().anyMatch(column -> column instanceof Map<?,?> map
+        && Boolean.FALSE.equals(map.get("distinctValuesComplete")));
   }
 
   public static Map<String,Object> handoff(Map<String,Object> body) {
