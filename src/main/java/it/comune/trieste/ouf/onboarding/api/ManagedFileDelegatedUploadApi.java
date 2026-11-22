@@ -52,7 +52,8 @@ public class ManagedFileDelegatedUploadApi {
             try(var input=Files.newInputStream(spool)){return storage.put(input,checkedSize,"text/csv");}
             catch(IOException e){throw new DomainFailure(HttpStatus.BAD_GATEWAY,"ONB_STAGING_WRITE_FAILED","Managed file staging write failed");}
           });
-      return ResponseEntity.status(HttpStatus.CREATED).body(asset);
+      return ResponseEntity.status(HttpStatus.CREATED).body(
+          it.comune.trieste.ouf.onboarding.application.ManagedMcpObservation.handoff(asset));
     }catch(NoSuchAlgorithmException e){throw new IllegalStateException("SHA-256 unavailable",e);}
     finally{Files.deleteIfExists(spool);}
   }

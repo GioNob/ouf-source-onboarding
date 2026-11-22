@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ouf:contract:onboarding-managed-mcp-observation:v1",
+  "title": "ouf.onboarding.managed-mcp-observation.v1",
+  "description": "Campi additivi delle risposte JSON delle rotte owner managed-file-mcp e source-revision-mcp. Il blocco next appartiene al MCP.",
+  "type": "object",
+  "required": [
+    "workflowState",
+    "reasonCode",
+    "allowedActions"
+  ],
+  "properties": {
+    "workflowState": {
+      "$ref": "#/$defs/state"
+    },
+    "reasonCode": {
+      "$ref": "#/$defs/reason"
+    },
+    "allowedActions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/action"
+      },
+      "if": {
+        "contains": {
+          "const": "NONE"
+        }
+      },
+      "then": {
+        "maxItems": 1
+      }
+    },
+    "observationVersion": {
+      "$ref": "#/$defs/observationVersion"
+    },
+    "unchanged": {
+      "const": true,
+      "description": "Risposta HTTP 200 compatta a un review-read con validator identico."
+    }
+  },
+  "dependentRequired": {
+    "unchanged": [
+      "observationVersion",
+      "sourceId",
+      "onboardingVersionId",
+      "lockVersion",
+      "state"
+    ]
+  },
+  "$defs": {
+    "state": {
+      "type": "string",
+      "description": "Stato owner proiettato; state, status e commandState preesistenti restano disponibili.",
+      "enum": [
+        "QUEUED",
+        "RUNNING",
+        "RETRY_WAIT",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED",
+        "ASSETS",
+        "PROFILE_AVAILABLE",
+        "PROFILE_COLUMNS",
+        "PENDING",
+        "STAGED",
+        "PROFILED",
+        "QUARANTINED",
+        "COMMAND_ABSENT",
+        "ERROR",
+        "DRAFT",
+        "IN_REVIEW",
+        "APPROVED",
+        "ACTIVE",
+        "SUPERSEDED",
+        "REJECTED",
+        "REVOKED",
+        "CHANGES_REQUESTED"
+      ],
+      "x-ouf-semantics": {
+        "QUEUED": "Job di profilazione in coda.",
+        "RUNNING": "Job di profilazione in esecuzione.",
+        "RETRY_WAIT": "Job di profilazione in attesa del prossimo tentativo.",
+        "SUCCEEDED": "Profilazione completata.",
+        "FAILED": "Profilazione terminata con errore.",
+        "CANCELLED": "Profilazione annullata.",
+        "ASSETS": "Pagina dei file del proprietario.",
+        "PROFILE_AVAILABLE": "Profilo disponibile.",
+        "PROFILE_COLUMNS": "Pagina delle colonne del profilo.",
+        "PENDING": "Esito del caricamento ancora atteso.",
+        "STAGED": "File depositato.",
+        "PROFILED": "Ricevuta di upload riconciliata su file già profilato.",
+        "QUARANTINED": "Ricevuta di upload riconciliata su file in quarantena.",
+        "COMMAND_ABSENT": "Nessuna ricevuta di revisione per questo comando.",
+        "ERROR": "Errore applicativo owner. Il campo code conserva il codice specifico.",
+        "DRAFT": "Bozza.",
+        "IN_REVIEW": "Versione in revisione.",
+        "APPROVED": "Versione approvata.",
+        "ACTIVE": "Pubblicazione attiva.",
+        "SUPERSEDED": "Versione sostituita.",
+        "REJECTED": "Versione rifiutata o ritirata.",
+        "REVOKED": "Versione revocata.",
+        "CHANGES_REQUESTED": "Versione rifiutata con richiesta di modifiche registrata."
+      }
+    },
+    "reason": {
+      "type": "string",
+      "description": "Motivo stabile della proiezione, privo di testo proveniente dalla fonte.",
+      "enum": [
+        "PROFILE_PENDING",
+        "PROFILE_READY",
+        "PROFILE_FAILED",
+        "PROFILE_CANCELLED",
+        "ASSET_LIST",
+        "COLUMN_PAGE",
+        "UPLOAD_PENDING",
+        "UPLOAD_STAGED",
+        "UPLOAD_REJECTED",
+        "UPLOAD_QUARANTINED",
+        "DRAFT_READY",
+        "HUMAN_DECISION_PENDING",
+        "CHALLENGE_EXPIRED",
+        "REVIEW_UNAVAILABLE",
+        "HUMAN_ACTIVATION_REQUIRED",
+        "READINESS_IN_PROGRESS",
+        "READINESS_BACKOFF",
+        "DEPENDENCY_RECHECK_REQUIRED",
+        "READINESS_BUDGET_EXHAUSTED",
+        "READINESS_BLOCKED",
+        "PUBLICATION_ACTIVE",
+        "PUBLICATION_SUPERSEDED",
+        "PUBLICATION_REVOKED",
+        "REVIEW_REJECTED",
+        "REVIEW_CHANGES_REQUESTED",
+        "CANDIDATE_WITHDRAWN",
+        "REVISION_COMMAND_ABSENT",
+        "CURRENT_REVIEW_REQUIRED",
+        "OWNER_ERROR"
+      ],
+      "x-ouf-semantics": {
+        "PROFILE_PENDING": "Il job può avanzare.",
+        "PROFILE_READY": "Il profilo è disponibile.",
+        "PROFILE_FAILED": "Il job ha un errore terminale per questa osservazione.",
+        "PROFILE_CANCELLED": "Il job è stato annullato.",
+        "ASSET_LIST": "Lettura della pagina dei file.",
+        "COLUMN_PAGE": "Lettura della pagina delle colonne.",
+        "UPLOAD_PENDING": "Handoff senza esito.",
+        "UPLOAD_STAGED": "Handoff con file depositato.",
+        "UPLOAD_REJECTED": "Handoff con rifiuto.",
+        "UPLOAD_QUARANTINED": "Il file della ricevuta è in quarantena.",
+        "DRAFT_READY": "Bozza nello stato ammesso per la preparazione.",
+        "HUMAN_DECISION_PENDING": "Challenge aperta, corrente e con tempo residuo.",
+        "CHALLENGE_EXPIRED": "Challenge scaduta rinnovabile.",
+        "REVIEW_UNAVAILABLE": "Review assente, chiusa o priva di uno stato di decisione ammesso.",
+        "HUMAN_ACTIVATION_REQUIRED": "È ammessa una richiesta di attivazione HUMAN.",
+        "READINESS_IN_PROGRESS": "Un tentativo possiede il lease.",
+        "READINESS_BACKOFF": "Intervallo di attesa prima di un nuovo tentativo.",
+        "DEPENDENCY_RECHECK_REQUIRED": "È ammesso il ricontrollo HUMAN della dipendenza.",
+        "READINESS_BUDGET_EXHAUSTED": "Il budget è esaurito. Le azioni indicano se è proponibile un nuovo budget HUMAN.",
+        "READINESS_BLOCKED": "I prerequisiti del tentativo non sono dimostrati.",
+        "PUBLICATION_ACTIVE": "Versione attiva.",
+        "PUBLICATION_SUPERSEDED": "Versione sostituita.",
+        "PUBLICATION_REVOKED": "Versione revocata.",
+        "REVIEW_REJECTED": "Rifiuto della versione.",
+        "REVIEW_CHANGES_REQUESTED": "Richiesta di modifiche con feedback registrato.",
+        "CANDIDATE_WITHDRAWN": "Ritiro registrato.",
+        "REVISION_COMMAND_ABSENT": "Il comando non risulta registrato per il riferimento interrogato.",
+        "CURRENT_REVIEW_REQUIRED": "Il replay di create restituisce l’identità corrente. Leggere lo stato di revisione per i dettagli.",
+        "OWNER_ERROR": "Errore applicativo. Usare anche il campo code preesistente."
+      }
+    },
+    "action": {
+      "type": "string",
+      "description": "Azioni eleggibili sulla versione osservata. Ogni comando rivaluta IAM, precondizioni e documenti richiesti.",
+      "enum": [
+        "READ_AGAIN",
+        "PREPARE_REVIEW",
+        "WAIT_HUMAN_REVIEW",
+        "RENEW_REVIEW",
+        "HUMAN_ACTIVATE",
+        "HUMAN_RECHECK",
+        "HUMAN_GRANT_BUDGET",
+        "CREATE_REVISION",
+        "REDRAFT_SAME_FILE",
+        "NONE"
+      ],
+      "x-ouf-semantics": {
+        "READ_AGAIN": "La lettura owner pertinente può essere ripetuta.",
+        "PREPARE_REVIEW": "Preparare la revisione della bozza con proposta, versione e nuova chiave secondo il contratto del comando.",
+        "WAIT_HUMAN_REVIEW": "La challenge è aperta per la decisione HUMAN. Rileggere l’owner per osservare l’esito.",
+        "RENEW_REVIEW": "Richiedere una nuova challenge per la stessa versione con il lockVersion corrente e una nuova chiave.",
+        "HUMAN_ACTIVATE": "La scheda può ammettere la verifica e attivazione HUMAN.",
+        "HUMAN_RECHECK": "La scheda può ammettere il ricontrollo HUMAN con la generazione e il codice osservati.",
+        "HUMAN_GRANT_BUDGET": "La scheda può ammettere una decisione HUMAN su un nuovo budget finito.",
+        "CREATE_REVISION": "Il padre è eleggibile per revision.prepare. Un padre rifiutato richiede un nuovo riferimento a file/profilo.",
+        "REDRAFT_SAME_FILE": "La richiesta di revisione può ripartire da source.onboarding.create per la stessa fonte, asset e profilo, con una nuova chiave e decisioni di mapping esplicite.",
+        "NONE": "Nessuna azione esposta per il risultato corrente. Compare da solo."
+      }
+    },
+    "observationVersion": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "reviewReadArguments": {
+      "description": "Selezione esatta di versione oppure LATEST, con validator facoltativo per entrambi.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceId"
+      ],
+      "properties": {
+        "sourceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.:-]{1,160}$"
+        },
+        "onboardingVersionId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "view": {
+          "const": "LATEST"
+        },
+        "ifObservationVersion": {
+          "$ref": "#/$defs/observationVersion"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "onboardingVersionId"
+          ]
+        },
+        {
+          "required": [
+            "view"
+          ]
+        }
+      ]
+    }
+  }
+}

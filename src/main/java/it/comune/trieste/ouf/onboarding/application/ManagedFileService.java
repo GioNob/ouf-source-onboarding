@@ -363,7 +363,7 @@ public class ManagedFileService {
   }
   private Map<String,Object> draftIdentity(UUID asset,UUID profile,String source,UUID version){
     Map<String,Object> current=onboarding.version(source,version);
-    return Map.of("assetId",asset,"profileId",profile,"sourceId",source,"onboardingVersionId",version,"state",current.get("state"));
+    return Map.of("assetId",asset,"profileId",profile,"sourceId",source,"onboardingVersionId",version,"state",current.get("state"),"lockVersion",current.get("lock_version"));
   }
   public Map<String,Object> onboard(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,List<String> semanticRefs,List<String> sourceObjectKeyFields,List<FieldDecision> fieldDecisions,String selectedLayer,OnboardingService.Actor actor,String correlation){
     return onboard(assetId,profileId,sourceId,name,owner,targetClassIri,semanticRefs,sourceObjectKeyFields,fieldDecisions,selectedLayer,actor,correlation,null);
@@ -450,6 +450,36 @@ public class ManagedFileService {
     var metadata=(Map<?,?>)onboarding.source(source).get("metadata");
     if(!(metadata.get("managedFileAssetId") instanceof String origin))return null;
     requireTenantOwner(UUID.fromString(origin),tenant,actor.subject());
+    return matchingRedraftParent(asset.get("asset_id").toString(),profile.toString(),source,name,owner,tenant,actor.subject());
+  }
+
+  boolean sameFileRedraftAllowed(UUID version,String source,String tenant,String subject){
+    var selection=db.sql("""
+        select v.configuration #>> '{extractionProfile,selection,assetId}' asset_id,
+          v.configuration #>> '{extractionProfile,selection,fileProfileId}' profile_id,
+          s.metadata->>'managedFileAssetId' origin_id,s.name,s.owner_ref
+        from ouf_onboarding.onboarding_version v join ouf_onboarding.source s using(source_id)
+        where v.onboarding_version_id=:v and v.source_id=:s
+        """).param("v",version).param("s",source).query().singleRow();
+    if(!(selection.get("asset_id") instanceof String selected)||!(selection.get("profile_id") instanceof String profile)
+        ||!(selection.get("origin_id") instanceof String origin))return false;
+    UUID assetId,originId;
+    try{
+      assetId=UUID.fromString(selected);
+      originId=UUID.fromString(origin);
+      UUID.fromString(profile);
+    }catch(IllegalArgumentException malformedSelection){return false;}
+    boolean profileAvailable=db.sql("""
+        select exists(select 1 from ouf_onboarding.managed_file_asset a
+          join ouf_onboarding.file_profile f using(asset_id)
+          where a.asset_id=:asset and a.source_id=:source and a.status='PROFILED' and f.profile_id::text=:profile)
+        """).param("asset",assetId).param("source",source).param("profile",profile).query(Boolean.class).single();
+    return profileAvailable&&tenantOwnerProven(assetId,tenant,subject)&&tenantOwnerProven(originId,tenant,subject)
+        &&version.equals(matchingRedraftParent(selected,profile,source,(String)selection.get("name"),
+            (String)selection.get("owner_ref"),tenant,subject));
+  }
+
+  private UUID matchingRedraftParent(String asset,String profile,String source,String name,String owner,String tenant,String subject){
     // Preserve the publication base of an existing revision; the refused plan is the new draft's parent.
     return db.sql("""
         select v.onboarding_version_id from ouf_onboarding.onboarding_version v
@@ -473,8 +503,8 @@ public class ManagedFileService {
               or (other.state='ACTIVE' and other.onboarding_version_id is distinct from base.parent_version_id)))
           and (base.parent_state_at_prepare='ACTIVE' or not exists(select 1 from ouf_onboarding.published_configuration where source_id=:s))
           and not exists(select 1 from ouf_onboarding.managed_candidate_recovery w where w.candidate_id=v.onboarding_version_id and w.operation='WITHDRAW')
-        """).param("s",source).param("asset",asset.get("asset_id").toString()).param("profile",profile.toString())
-        .param("name",name).param("owner",owner).param("tenant",tenant).param("subject",actor.subject()).query(UUID.class).optional().orElse(null);
+        """).param("s",source).param("asset",asset).param("profile",profile)
+        .param("name",name).param("owner",owner).param("tenant",tenant).param("subject",subject).query(UUID.class).optional().orElse(null);
   }
   @SuppressWarnings("unchecked") Map<String,Object> selectedProfile(Map<String,Object> profile,String layer){
     if(!Set.of("GEOPACKAGE","ACCESS","SHAPEFILE").contains(profile.get("format"))){if(layer!=null)throw invalid("ONB_LAYER_UNEXPECTED","Layer/table applies to multi-table datasets only");return profile;}

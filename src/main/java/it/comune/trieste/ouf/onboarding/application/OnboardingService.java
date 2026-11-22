@@ -122,10 +122,12 @@ public class OnboardingService {
     ConfigurationValidator.spatial(configuration).ifPresent(profile->{response.put("spatialDecision",profile);response.put("spatialDecisionFindings",validator.validate(sourceId,configuration).findings().stream().filter(f->f.path().startsWith("/extractionProfile/runtime/udp/spatial")).toList());});return response;
   }
 
+  static final String OPEN_REVIEW_CHALLENGE = "onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>%s and configuration_hash=:h";
+
   @Transactional public Map<String,Object> confirm(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){
     if(!"HUMAN_USER".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_HUMAN_APPROVAL_REQUIRED","Approval requires a HUMAN_USER identity");
     Map<String,Object> v=lockChallengeVersion(sourceId,versionId);
-    int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=clock_timestamp() where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>clock_timestamp() and configuration_hash=:h")
+    int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=clock_timestamp() where challenge_id=:c and "+OPEN_REVIEW_CHALLENGE.formatted("clock_timestamp()"))
       .param("c",challengeId).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).update();
     if(challenge!=1)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");
     int changed=db.sql("update ouf_onboarding.onboarding_version set state='APPROVED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and source_id=:s and state='IN_REVIEW'")
@@ -222,9 +224,9 @@ public class OnboardingService {
     var version=lockChallengeVersion(sourceId,versionId);
     int closed=db.sql("""
         update ouf_onboarding.approval_challenge set status='CANCELLED'
-        where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED'
-          and expires_at>clock_timestamp() and configuration_hash=:h
-        """).param("c",challengeId).param("s",sourceId).param("v",versionId).param("h",version.get("configuration_hash")).update();
+        where challenge_id=:c and
+        """+OPEN_REVIEW_CHALLENGE.formatted("clock_timestamp()"))
+        .param("c",challengeId).param("s",sourceId).param("v",versionId).param("h",version.get("configuration_hash")).update();
     if(closed!=1||!"IN_REVIEW".equals(version.get("state")))throw new DomainFailure(HttpStatus.CONFLICT,
         "ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");
     db.sql("update ouf_onboarding.onboarding_version set state='REJECTED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v")

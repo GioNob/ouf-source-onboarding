@@ -6,6 +6,14 @@ The authenticated HUMAN delegated by MCP calls `source.onboarding.review.prepare
 
 When `source.onboarding.read` returns `IN_REVIEW` with `challengeExpired=true`, follow the returned `nextAction`. Send `review.prepare` for that version and current lock with a fresh command key and omit `executionProposal`. Concurrent identical requests return the same replacement. Opening the new URL displays the frozen candidate. One explicit HUMAN click confirms it. V42 retains both challenge IDs and the actor. A replay of an earlier command reads current progress.
 
+## Conditional owner observation
+
+The [owner observation contract](../contracts/onboarding-managed-mcp-observation-v1.json) publishes the closed vocabularies for `workflowState`, `reasonCode` and `allowedActions`. Existing fields are still available. Actions describe eligibility on the observed version. Commands recheck authorization, versions and command-specific input. MCP owns the `next` block.
+
+`review-read` accepts both `{sourceId, onboardingVersionId}` and `{sourceId, view: "LATEST"}`. Supply the last `observationVersion` as `ifObservationVersion` on the same authorized read. A matching validator gives HTTP 200 with `unchanged: true`, state, version, reason and actions. Keep the previous full view. A different validator gives the same full view as an unconditional read.
+
+The validator covers the selected version, challenge, time-dependent eligibility, readiness and budget, decision feedback, publication and the observed actions. Every read checks ownership and records authorization before comparing the validator. A match skips configuration loading, feedback decoding and assembly of the full receipt.
+
 A HUMAN may mark fields, identity rules, semantic references or acquisition limits on the card and choose **Chiedi modifiche all’agente**. The owner consumes the challenge and returns `CHANGES_REQUESTED`. The structured `reviewFeedback` contains up to 128 distinct targets, 500 characters per comment and 48 KiB in total. A plain rejection carries an empty list. The decision records its actor, challenge, authentication context and frozen hash. Older readers see the closed version as rejected.
 
 For a refused managed-file review, read the latest `source.onboarding.read`. Its `nextAction` identifies the source, asset and profile to reuse with `source.onboarding.create`. Supply the same source name and owner, revised field decisions and a fresh create key. An exact retry returns the original draft. Preparing that draft yields a new HUMAN challenge with a comparison against its parent and the previous feedback.

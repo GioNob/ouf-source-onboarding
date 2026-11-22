@@ -60,6 +60,41 @@ class ManagedOnboardingReviewRuntimeTest {
     return new Governed(mapper,command,reviews.prepare(mapper,command,"prepare"));
   }
   @MockitoBean DatatypeResolver registryReader;
+  @Test void task50bV02ConditionalReadDetectsExpiryAndReadinessAtTheSameLockVersion(){
+    var fixture=governed(new PublishedSnapshots().publish("https://example.org/onto/Place","1.0.0","Prima"));
+    var p=fixture.mapper();
+    String source=fixture.command().sourceId();
+    UUID version=fixture.command().onboardingVersionId();
+    var initial=reviews.readLatest(p,source);
+    String validator=(String)initial.get("observationVersion");
+    UUID challenge=(UUID)initial.get("challengeId");
+    assertThat(initial.get("allowedActions")).isEqualTo(List.of(ManagedMcpObservation.Action.WAIT_HUMAN_REVIEW,
+        ManagedMcpObservation.Action.READ_AGAIN));
+    assertThat(reviews.readLatest(p,source,validator)).containsEntry("unchanged",true)
+        .doesNotContainKeys("reviewUrl","activationProgress");
+    assertThatThrownBy(()->reviews.readLatest(principal("other-tenant","test-human"),source,validator))
+        .hasMessage("ONB_REVIEW_OWNER_SCOPE_UNPROVEN");
+    db.sql("update ouf_onboarding.approval_challenge set expires_at=clock_timestamp()-interval '1 second' where challenge_id=:c")
+        .param("c",challenge).update();
+    var expired=reviews.read(p,source,version,validator);
+    assertThat(expired).isEqualTo(reviews.read(p,source,version)).doesNotContainKey("unchanged")
+        .containsEntry("lockVersion",initial.get("lockVersion"))
+        .containsEntry("allowedActions",List.of(ManagedMcpObservation.Action.RENEW_REVIEW));
+    var renewed=reviews.prepare(p,new ManagedOnboardingReviewService.Prepare(source,version,
+        ((Number)expired.get("lockVersion")).longValue(),"new-review",null),"renew");
+    var approved=reviews.humanAction(p,(UUID)renewed.get("challengeId"),"confirm",
+        new ManagedOnboardingReviewService.Decision((String)renewed.get("configurationHash"),
+            ((Number)renewed.get("lockVersion")).longValue()),"test-auth");
+    db.sql("""
+        update ouf_onboarding.managed_onboarding_review set readiness_phase='BLOCKED',
+          readiness_generation=1,readiness_attempts=1,readiness_started_at=clock_timestamp(),
+          readiness_last_code='ONB_READINESS_DEPENDENCY_422' where onboarding_version_id=:v
+        """).param("v",version).update();
+    var blocked=reviews.read(p,source,version,(String)approved.get("observationVersion"));
+    assertThat(blocked).containsEntry("lockVersion",approved.get("lockVersion")).doesNotContainKey("unchanged")
+        .containsEntry("allowedActions",List.of(ManagedMcpObservation.Action.HUMAN_RECHECK));
+    assertThat(reviews.readLatest(p,source,(String)blocked.get("observationVersion"))).containsEntry("unchanged",true);
+  }
   @Test @SuppressWarnings("unchecked") void d084_11_failedLookupLeavesDraftThenFreezesPublishedDefinitionBeforeReview(){
     String type="urn:fixture:Postal",nested="urn:fixture:Location",property="urn:fixture:address",cls="urn:fixture:Place",source="typed",tenant="test-tenant";
     String set=UUID.randomUUID().toString(),rev=UUID.randomUUID().toString();
@@ -252,6 +287,8 @@ class ManagedOnboardingReviewRuntimeTest {
     var result=reviews.humanAction(p,challenge,changes?"changes":"reject",decision,"test-auth");
     assertThat(result).containsEntry("state",changes?"CHANGES_REQUESTED":"REJECTED").containsEntry("challengeStatus","CANCELLED");
     var read=reviews.readLatest(p,source);
+    assertThat(read.get("allowedActions")).isEqualTo(List.of(ManagedMcpObservation.Action.REDRAFT_SAME_FILE,
+        ManagedMcpObservation.Action.CREATE_REVISION));
     assertThat(read.get("reviewFeedback")).isEqualTo(changes?List.of(Map.of("section","FIELD","target","unused","comment","È personale")):List.of());
     assertThatThrownBy(()->reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,expected),"test-auth"))
         .hasMessage("ONB_REVIEW_STALE_CARD");
@@ -262,6 +299,10 @@ class ManagedOnboardingReviewRuntimeTest {
     java.util.function.Function<String,Map<String,Object>> create=key->files.onboardIdempotent(asset,profile,source,"Edicole","Mapper",
         type,List.of(type+"@1"),List.of("name"),decisions,null,human,"redraft",key,p.tenantId());
     var draft=create.apply("redraft:1");UUID child=(UUID)draft.get("onboardingVersionId");
+    assertThat(reviews.readLatest(p,source,(String)read.get("observationVersion")))
+        .containsEntry("onboardingVersionId",child).doesNotContainKey("unchanged");
+    assertThat(reviews.read(p,source,version,(String)read.get("observationVersion")))
+        .containsEntry("allowedActions",List.of(ManagedMcpObservation.Action.NONE)).doesNotContainKey("unchanged");
     assertThat(onboarding.version(source,child)).containsEntry("parent_version_id",version).containsEntry("version",2);
     assertThat(create.apply("redraft:1")).isEqualTo(draft);
     assertThatThrownBy(()->create.apply("redraft:duplicate")).isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class);

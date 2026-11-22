@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 /** Prepares one immutable source review. A delegated request cannot approve or activate it. */
 @Service
@@ -53,13 +54,16 @@ public class ManagedOnboardingReviewService {
   }
   @SuppressWarnings("unchecked") private Map<String,Object> ownedVersion(PrincipalContext p,String source,UUID version){
     var current=onboarding.version(source,version);
+    requireManagedOwner(p,source);
+    return current;
+  }
+  @SuppressWarnings("unchecked") private void requireManagedOwner(PrincipalContext p,String source){
     var metadata=(Map<String,Object>)onboarding.source(source).get("metadata");
     if(metadata.containsKey("managedTenantId")&&!Objects.equals(metadata.get("managedTenantId"),p.tenantId()))
       throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
     Object raw=metadata.get("managedFileAssetId");
     if(!(raw instanceof String value))throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_MANAGED_SOURCE_REQUIRED");
     files.requireOwner(UUID.fromString(value),p.subjectId());
-    return current;
   }
   private String url(UUID challenge){
     URI origin;
@@ -115,7 +119,7 @@ public class ManagedOnboardingReviewService {
     }
     if(request.candidateAction()!=null||!retained.isEmpty())
       return recoverCandidate(p,request,fingerprint,retained.isEmpty()?null:retained.getFirst(),correlation);
-    if(!"DRAFT".equals(current.get("state"))
+    if(!ManagedMcpObservation.draftState(current)
         ||((Number)current.get("lock_version")).longValue()!=request.expectedVersion())
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_VERSION");
     var actor=new OnboardingService.Actor(p.subjectId(),"HUMAN_USER",Set.of(PREPARE));
@@ -216,10 +220,8 @@ public class ManagedOnboardingReviewService {
       if(!"IN_REVIEW".equals(current.get("state"))||old==null||
           db.sql("""
               update ouf_onboarding.approval_challenge set status='EXPIRED'
-              where challenge_id=:c and onboarding_version_id=:v and configuration_hash=:h
-                and status in ('CREATED','EXPIRED') and expires_at<=clock_timestamp()
-                and not exists(select 1 from ouf_onboarding.approval_decision where onboarding_version_id=:v)
-              """).param("c",old).param("v",version).param("h",hash).update()!=1)
+              where challenge_id=:c and onboarding_version_id=:v and configuration_hash=:h and
+              """+RENEWABLE_CHALLENGE).param("c",old).param("v",version).param("h",hash).update()!=1)
         throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_COMMAND_CONFLICT");
     }
     if(((Number)current.get("lock_version")).longValue()!=request.expectedVersion())
@@ -322,8 +324,13 @@ public class ManagedOnboardingReviewService {
 
   /** Resolve a current reference from owner state, not chatbot memory. */
   // The owner read also persists the authorization decision in this transaction.
-  @Transactional @SuppressWarnings("unchecked")
+  @Transactional(isolation=Isolation.REPEATABLE_READ)
   public Map<String,Object> readLatest(PrincipalContext p,String source){
+    return readLatest(p,source,null);
+  }
+
+  @Transactional(isolation=Isolation.REPEATABLE_READ) @SuppressWarnings("unchecked")
+  public Map<String,Object> readLatest(PrincipalContext p,String source,String ifObservationVersion){
     if(source==null||!source.matches("[A-Za-z0-9_.:-]{1,160}"))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_ARGUMENTS_INVALID");
     var rows=db.sql("select onboarding_version_id from ouf_onboarding.onboarding_version where source_id=:s order by version desc limit 1")
       .param("s",source).query(UUID.class).list();
@@ -336,18 +343,52 @@ public class ManagedOnboardingReviewService {
       :db.sql("select 1 from ouf_onboarding.managed_onboarding_review where source_id=:source and tenant_id=:tenant and subject_id=:subject limit 1")
         .param("source",source).param("tenant",p.tenantId()).param("subject",p.subjectId()).query(Integer.class).optional().isPresent();
     if(!proven)throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_OWNER_SCOPE_UNPROVEN");
-    return read(p,source,version);
+    return readAuthorized(p,source,version,ifObservationVersion);
   }
 
-  @Transactional public Map<String,Object> read(PrincipalContext p,String source,UUID version){
+  @Transactional(isolation=Isolation.REPEATABLE_READ)
+  public Map<String,Object> read(PrincipalContext p,String source,UUID version){
+    return read(p,source,version,null);
+  }
+
+  @Transactional(isolation=Isolation.REPEATABLE_READ)
+  public Map<String,Object> read(PrincipalContext p,String source,UUID version,String ifObservationVersion){
     authorize(p,READ,"READ",source,version);
-    var current=ownedVersion(p,source,version);
+    return readAuthorized(p,source,version,ifObservationVersion);
+  }
+
+  private Map<String,Object> readAuthorized(PrincipalContext p,String source,UUID version,String ifObservationVersion){
+    var current=db.sql("""
+        select source_id,onboarding_version_id,state,lock_version,configuration_hash,version
+        from ouf_onboarding.onboarding_version where source_id=:s and onboarding_version_id=:v
+        """).param("s",source).param("v",version).query().listOfRows().stream().findFirst()
+        .orElseThrow(()->new DomainFailure(HttpStatus.NOT_FOUND,"ONB_NOT_FOUND","version not found"));
+    requireManagedOwner(p,source);
     var retained=db.sql("select * from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:v")
         .param("v",version).query().listOfRows();
     if(!retained.isEmpty()&&(!Objects.equals(retained.getFirst().get("tenant_id"),p.tenantId())||!Objects.equals(retained.getFirst().get("subject_id"),p.subjectId())))throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
-    return receipt(current,retained.isEmpty()?null:retained.getFirst());
+    var observation=observe(current,retained.isEmpty()?null:retained.getFirst());
+    if(observation.version().equals(ifObservationVersion)){
+      var unchanged=new LinkedHashMap<String,Object>();
+      for(String field:List.of("sourceId","onboardingVersionId","state","lockVersion","workflowState","reasonCode","allowedActions","observationVersion"))
+        unchanged.put(field,observation.fields().get(field));
+      unchanged.put("unchanged",true);
+      return unchanged;
+    }
+    return render(observation,()->onboarding.version(source,version));
   }
+
+  private static final String RENEWABLE_CHALLENGE="""
+      status in ('CREATED','EXPIRED') and expires_at<=statement_timestamp()
+        and not exists(select 1 from ouf_onboarding.approval_decision where onboarding_version_id=:v)
+      """;
+  private record Observation(Map<String,Object> fields,String feedback,boolean latestRefusal,String version){}
+
   Map<String,Object> receipt(Map<String,Object> current,Map<String,Object> review){
+    return render(observe(current,review),()->current);
+  }
+
+  private Observation observe(Map<String,Object> current,Map<String,Object> review){
     var result=new LinkedHashMap<String,Object>();
     result.put("sourceId",current.get("source_id"));result.put("onboardingVersionId",current.get("onboarding_version_id"));
     result.put("state",current.get("state"));result.put("lockVersion",current.get("lock_version"));
@@ -358,27 +399,33 @@ public class ManagedOnboardingReviewService {
     if(review!=null){
       if(!Objects.equals(review.get("configuration_hash"),current.get("configuration_hash")))
         throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_CONFIGURATION_DRIFT");
-      UUID id=(UUID)review.get("challenge_id");var card=onboarding.approvalCard(id);
-      result.put("challengeId",id);result.put("challengeStatus",card.get("status"));
-      result.put("expiresAt",card.get("expires_at"));result.put("reviewUrl",url(id));
-      boolean expired=db.sql("select expires_at<=clock_timestamp() from ouf_onboarding.approval_challenge where challenge_id=:c")
-          .param("c",id).query(Boolean.class).single();
-      result.put("challengeExpired",expired);
-      if(expired&&"IN_REVIEW".equals(current.get("state"))&&Set.of("CREATED","EXPIRED").contains(card.get("status")))
-        result.put("nextAction",Map.of("tool","source.onboarding.review.prepare","sourceId",current.get("source_id"),
-            "onboardingVersionId",current.get("onboarding_version_id"),"expectedVersion",current.get("lock_version"),
-            "newCommandKeyRequired",true));
+      UUID id=(UUID)review.get("challenge_id");
+      var challenge=db.sql("""
+          select status,expires_at,expires_at<=statement_timestamp() expired,
+          (onboarding_version_id=:v and configuration_hash=:h and (
+          """+RENEWABLE_CHALLENGE+")) renewable, ("+OnboardingService.OPEN_REVIEW_CHALLENGE.formatted("statement_timestamp()")
+          +") pending from ouf_onboarding.approval_challenge where challenge_id=:c")
+          .param("c",id).param("v",current.get("onboarding_version_id")).param("h",current.get("configuration_hash"))
+          .param("s",current.get("source_id"))
+          .query().singleRow();
+      boolean inReview="IN_REVIEW".equals(current.get("state"));
+      result.put("challengeId",id);result.put("challengeStatus",challenge.get("status"));
+      result.put("expiresAt",challenge.get("expires_at"));result.put("reviewUrl",url(id));
+      result.put("challengeExpired",challenge.get("expired"));
+      result.put("challengeRenewable",inReview&&Boolean.TRUE.equals(challenge.get("renewable")));
+      result.put("humanReviewPending",inReview&&Boolean.TRUE.equals(challenge.get("pending")));
     }
+    String notes=null;
+    boolean latestRefusal=false;
     if("REJECTED".equals(current.get("state"))&&review!=null&&!"WITHDRAWN".equals(result.get("candidateDisposition"))){
-      var notes=feedback(current.get("onboarding_version_id"));
-      if(!notes.isEmpty())result.put("state","CHANGES_REQUESTED");
-      result.put("reviewFeedback",notes);
-      var selection=ManagedReviewSnapshot.child(ManagedReviewSnapshot.child(ManagedReviewSnapshot.object(current.get("configuration")),"extractionProfile"),"selection");
-      if(selection.containsKey("assetId")&&selection.containsKey("fileProfileId")&&db.sql(
-          "select not exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s and version>:n)")
-          .param("s",current.get("source_id")).param("n",current.get("version")).query(Boolean.class).single())result.put("nextAction",Map.of("tool","source.onboarding.create","sourceId",current.get("source_id"),
-          "assetId",selection.get("assetId"),"profileId",selection.get("fileProfileId"),"newCommandKeyRequired",true,
-          "instruction","Prepara una nuova bozza sullo stesso file tenendo conto delle modifiche richieste."));
+      notes=db.sql("select review_feedback::text from ouf_onboarding.approval_decision where onboarding_version_id=:v and review_outcome='CHANGES_REQUESTED'")
+          .param("v",current.get("onboarding_version_id")).query(String.class).optional().orElse("[]");
+      if(!"[]".equals(notes))result.put("state","CHANGES_REQUESTED");
+      latestRefusal=db.sql("select not exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s and version>:n)")
+          .param("s",current.get("source_id")).param("n",current.get("version")).query(Boolean.class).single();
+      if(latestRefusal&&review.get("tenant_id") instanceof String tenant&&review.get("subject_id") instanceof String subject)
+        result.put("sameFileRedraftAllowed",files.sameFileRedraftAllowed((UUID)current.get("onboarding_version_id"),
+            (String)current.get("source_id"),tenant,subject));
     }
     var publications=db.sql("select publication_id,checksum,active from ouf_onboarding.published_configuration where onboarding_version_id=:v order by created_at desc limit 1")
         .param("v",current.get("onboarding_version_id")).query().listOfRows();
@@ -400,15 +447,41 @@ public class ManagedOnboardingReviewService {
       value.put("budgetExpiresAt",budget.get("budget_deadline"));
       value.put("budgetExhausted",Boolean.TRUE.equals(budget.get("budget_exhausted")));
       value.put("counterLineageVerified",Boolean.TRUE.equals(budget.get("budget_lineage_valid")));
-      value.put("humanRecheckAllowed","APPROVED".equals(current.get("state"))&&"CONFIRMED".equals(result.get("challengeStatus"))
-          &&recheckableBlock(budget)&&Boolean.TRUE.equals(budget.get("budget_lineage_valid"))
-          &&!Boolean.TRUE.equals(budget.get("budget_exhausted"))&&!Boolean.TRUE.equals(budget.get("delayed")));
-      String reason=renewalCode(budget);
-      boolean available="APPROVED".equals(current.get("state"))&&reason!=null;
+      boolean approved=approvedReview(current,result.get("challengeStatus"));
+      value.put("humanRecheckAllowed",approved&&recheckDenial(budget)==null);
+      value.put("humanActivationAllowed",approved&&activationDenial(budget)==null);
+      value.put("leased",Boolean.TRUE.equals(budget.get("leased")));
+      value.put("delayed",Boolean.TRUE.equals(budget.get("delayed")));
+      String reason=budgetGrantReason(current,budget);
+      boolean available=approved&&reason!=null;
       value.put("humanBudgetGrantAvailable",available);
       if(available)value.put("reconciledBudgetReason",reason);
       value.put("newBudgetProfile",Map.of("profile","managed-review-recovery.v1","maximumAttempts",3,"maximumElapsedSeconds",900));
       value.put("requiresAuthenticatedHumanResume",true);result.put("activationProgress",value);
+    }
+    var fields=ManagedMcpObservation.version(result,SourceRevisionService.revisionEligible(db,current));
+    String validator=hashes.of(Arrays.asList(fields,notes,latestRefusal));
+    fields.put("observationVersion",validator);
+    return new Observation(fields,notes,latestRefusal,validator);
+  }
+
+  private Map<String,Object> render(Observation observation,java.util.function.Supplier<Map<String,Object>> loadVersion){
+    var result=observation.fields();
+    if(Boolean.TRUE.equals(result.get("challengeExpired"))&&"IN_REVIEW".equals(result.get("state"))
+        &&Set.of("CREATED","EXPIRED").contains(result.get("challengeStatus")))
+      result.put("nextAction",Map.of("tool","source.onboarding.review.prepare","sourceId",result.get("sourceId"),
+          "onboardingVersionId",result.get("onboardingVersionId"),"expectedVersion",result.get("lockVersion"),
+          "newCommandKeyRequired",true));
+    if(observation.feedback()!=null){
+      result.put("reviewFeedback",onboarding.retainedJson(observation.feedback(),List.class));
+      if(observation.latestRefusal()){
+        var current=loadVersion.get();
+        var selection=ManagedReviewSnapshot.child(ManagedReviewSnapshot.child(ManagedReviewSnapshot.object(current.get("configuration")),"extractionProfile"),"selection");
+        if(selection.containsKey("assetId")&&selection.containsKey("fileProfileId"))
+          result.put("nextAction",Map.of("tool","source.onboarding.create","sourceId",current.get("source_id"),
+              "assetId",selection.get("assetId"),"profileId",selection.get("fileProfileId"),"newCommandKeyRequired",true,
+              "instruction","Prepara una nuova bozza sullo stesso file tenendo conto delle modifiche richieste."));
+      }
     }
     return result;
   }
@@ -499,6 +572,41 @@ public class ManagedOnboardingReviewService {
         &&((Number)state.get("readiness_generation")).longValue()>0
         &&humanRecheckCode((String)state.get("readiness_last_code"));
   }
+  private static boolean approvedReview(Map<String,Object> current,Object challengeStatus){
+    return "APPROVED".equals(current.get("state"))&&"CONFIRMED".equals(challengeStatus);
+  }
+
+  private record ReadinessDenial(HttpStatus status,String code){
+    DomainFailure failure(){return fail(status,code);}
+  }
+
+  private static ReadinessDenial recheckDenial(Map<String,Object> state){
+    if(!recheckableBlock(state))return new ReadinessDenial(HttpStatus.CONFLICT,"ONB_READINESS_RESUME_NOT_ALLOWED");
+    return availableBudget(state);
+  }
+
+  private static ReadinessDenial activationDenial(Map<String,Object> state){
+    if(!Boolean.TRUE.equals(state.get("budget_lineage_valid")))
+      return new ReadinessDenial(HttpStatus.CONFLICT,"ONB_READINESS_COUNTER_LINEAGE_UNPROVEN");
+    if(Boolean.TRUE.equals(state.get("leased")))return new ReadinessDenial(HttpStatus.CONFLICT,"ONB_READINESS_IN_PROGRESS");
+    if("BLOCKED".equals(state.get("readiness_phase")))return new ReadinessDenial(HttpStatus.CONFLICT,"ONB_READINESS_BLOCKED");
+    return availableBudget(state);
+  }
+
+  private static ReadinessDenial availableBudget(Map<String,Object> state){
+    if(!Boolean.TRUE.equals(state.get("budget_lineage_valid")))
+      return new ReadinessDenial(HttpStatus.CONFLICT,"ONB_READINESS_COUNTER_LINEAGE_UNPROVEN");
+    if(Boolean.TRUE.equals(state.get("budget_exhausted")))return new ReadinessDenial(HttpStatus.CONFLICT,"ONB_READINESS_BUDGET_EXHAUSTED");
+    if(Boolean.TRUE.equals(state.get("delayed")))return new ReadinessDenial(HttpStatus.TOO_MANY_REQUESTS,"ONB_READINESS_BACKOFF");
+    return null;
+  }
+
+  private static String budgetGrantReason(Map<String,Object> current,Map<String,Object> state){
+    if(!"APPROVED".equals(current.get("state"))||((Number)state.get("readiness_attempts")).longValue()>Integer.MAX_VALUE-3)
+      return null;
+    return renewalCode(state);
+  }
+
   private static String renewalCode(Map<String,Object> state){
     if(!Boolean.TRUE.equals(state.get("budget_lineage_valid"))||!Boolean.TRUE.equals(state.get("budget_exhausted"))
         ||(state.get("readiness_session_id")!=null&&!"ACTIVE".equals(state.get("session_state"))&&!"EXHAUSTED".equals(state.get("session_state")))
@@ -548,14 +656,13 @@ public class ManagedOnboardingReviewService {
       result.put("reconciledBudgetSessionId",row.get("session_id"));return result;
     }
     var state=budgetState(challenge);
-    if(!"APPROVED".equals(current.get("state"))||!"CONFIRMED".equals(onboarding.approvalCard(challenge).get("status")))
+    if(!approvedReview(current,onboarding.approvalCard(challenge).get("status")))
       throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_APPROVAL_REQUIRED");
     if(((Number)current.get("lock_version")).longValue()!=decision.expectedVersion()
         ||((Number)state.get("readiness_generation")).longValue()!=decision.expectedGeneration())
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
-    String reasonCode=renewalCode(state);
-    if(reasonCode==null||!hash.equals(hashes.of(current.get("configuration")))
-        ||((Number)state.get("readiness_attempts")).longValue()>Integer.MAX_VALUE-3)
+    String reasonCode=budgetGrantReason(current,state);
+    if(reasonCode==null||!hash.equals(hashes.of(current.get("configuration"))))
       throw fail(HttpStatus.CONFLICT,"ONB_READINESS_BUDGET_RECONCILIATION_REQUIRED");
     // The old session, legacy start, attempts, last code and backoff are never reset.
     db.sql("update ouf_onboarding.managed_readiness_budget_session set state='EXHAUSTED' where challenge_id=:c and state='ACTIVE'")
@@ -588,18 +695,15 @@ public class ManagedOnboardingReviewService {
     var current=onboarding.version(source,version);String hash=String.valueOf(current.get("configuration_hash"));
     if(decision==null||!Objects.equals(decision.configurationHash(),hash)||!Objects.equals(review.get("configuration_hash"),hash))throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
     if("ACTIVE".equals(current.get("state")))return new ActivationClaim(challenge,version,source,hash,((Number)current.get("lock_version")).longValue(),0,Map.of(),receipt(current,review),true,false);
-    if(!"APPROVED".equals(current.get("state"))||!"CONFIRMED".equals(onboarding.approvalCard(challenge).get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_APPROVAL_REQUIRED");
+    if(!approvedReview(current,onboarding.approvalCard(challenge).get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_APPROVAL_REQUIRED");
     if(((Number)current.get("lock_version")).longValue()!=decision.expectedVersion())throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
     var state=budgetState(challenge);
-    if(!Boolean.TRUE.equals(state.get("budget_lineage_valid")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_COUNTER_LINEAGE_UNPROVEN");
-    if(Boolean.TRUE.equals(state.get("leased")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_IN_PROGRESS");
-    if("BLOCKED".equals(state.get("readiness_phase")))throw fail(HttpStatus.CONFLICT,"ONB_READINESS_BLOCKED");
-    if(Boolean.TRUE.equals(state.get("budget_exhausted"))){
+    var denial=activationDenial(state);
+    if(denial!=null&&"ONB_READINESS_BUDGET_EXHAUSTED".equals(denial.code())){
       db.sql("update ouf_onboarding.managed_onboarding_review set readiness_phase='EXHAUSTED',readiness_lease_until=null where challenge_id=:c").param("c",challenge).update();
       db.sql("update ouf_onboarding.managed_readiness_budget_session set state='EXHAUSTED' where challenge_id=:c and state='ACTIVE'").param("c",challenge).update();
-      throw fail(HttpStatus.CONFLICT,"ONB_READINESS_BUDGET_EXHAUSTED");
     }
-    if(Boolean.TRUE.equals(state.get("delayed")))throw fail(HttpStatus.TOO_MANY_REQUESTS,"ONB_READINESS_BACKOFF");
+    if(denial!=null)throw denial.failure();
     boolean recheck="PAUSED".equals(state.get("readiness_phase"))&&humanRecheckCode((String)state.get("readiness_last_code"));
     long generation=db.sql("update ouf_onboarding.managed_onboarding_review set readiness_started_at=coalesce(readiness_started_at,clock_timestamp()),readiness_attempts=readiness_attempts+1,readiness_generation=readiness_generation+1,readiness_phase='CHECKING_COMPATIBILITY',readiness_lease_until=least(clock_timestamp()+interval '60 seconds',cast(:deadline as timestamptz)),readiness_next_at=null,readiness_last_code=null where challenge_id=:c returning readiness_generation").param("c",challenge).param("deadline",state.get("budget_deadline")).query(Long.class).single();
     return new ActivationClaim(challenge,version,source,hash,decision.expectedVersion(),generation,(Map<String,Object>)current.get("configuration"),receipt(current,review),false,recheck);
@@ -699,15 +803,10 @@ public class ManagedOnboardingReviewService {
         ||request.expectedGeneration()!=((Number)state.get("readiness_generation")).longValue()
         ||!Objects.equals(request.blockedCode(),state.get("readiness_last_code")))
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
-    if(!"APPROVED".equals(current.get("state"))||!"CONFIRMED".equals(onboarding.approvalCard(challenge).get("status")))
+    if(!approvedReview(current,onboarding.approvalCard(challenge).get("status")))
       throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_APPROVAL_REQUIRED");
-    if(!recheckableBlock(state))
-      throw fail(HttpStatus.CONFLICT,"ONB_READINESS_RESUME_NOT_ALLOWED");
-    if(!Boolean.TRUE.equals(state.get("budget_lineage_valid")))
-      throw fail(HttpStatus.CONFLICT,"ONB_READINESS_COUNTER_LINEAGE_UNPROVEN");
-    if(Boolean.TRUE.equals(state.get("budget_exhausted")))
-      throw fail(HttpStatus.CONFLICT,"ONB_READINESS_BUDGET_EXHAUSTED");
-    if(Boolean.TRUE.equals(state.get("delayed")))throw fail(HttpStatus.TOO_MANY_REQUESTS,"ONB_READINESS_BACKOFF");
+    var denial=recheckDenial(state);
+    if(denial!=null)throw denial.failure();
     if(authentication==null||authentication.isBlank())throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHENTICATION_REQUIRED");
     db.sql("update ouf_onboarding.managed_onboarding_review set readiness_generation=readiness_generation+1,readiness_phase='PAUSED',readiness_lease_until=null,readiness_next_at=null where challenge_id=:c")
         .param("c",challenge).update();

@@ -38,7 +38,7 @@ class ManagedFileMcpApiTest {
         .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
     when(handoffs.result(id,"human:alice")).thenReturn(Map.of("assetId",asset,"status","STAGED"));
     var result=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),handoffs).handoff(raw,request);
-    assertThat(result).containsOnlyKeys("assetId","status");
+    assertThat(result).containsOnlyKeys("assetId","status","workflowState","reasonCode","allowedActions");
     verify(handoffs).result(id,"human:alice");
     verifyNoInteractions(files);
   }
@@ -72,7 +72,12 @@ class ManagedFileMcpApiTest {
         new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
     when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.onboarding.create",raw))
         .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
-    var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class));api.create(raw,request);
+    when(files.onboardIdempotent(any(),any(),anyString(),anyString(),anyString(),anyString(),
+        anyList(),anyList(),anyList(),isNull(),any(),anyString(),anyString(),anyString(),isNull(),isNull()))
+        .thenReturn(Map.of("state","DRAFT","lockVersion",0));
+    var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class));
+    assertThat(api.create(raw,request)).containsEntry("allowedActions",java.util.List.of(
+        it.comune.trieste.ouf.onboarding.application.ManagedMcpObservation.Action.PREPARE_REVIEW));
     var actor=org.mockito.ArgumentCaptor.forClass(it.comune.trieste.ouf.onboarding.application.OnboardingService.Actor.class);
     verify(files).onboardIdempotent(eq(asset),eq(profile),eq("cinema"),eq("Cinema"),eq("Comune"),eq("https://example.org/Cinema"),
         eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"),eq("tenant-a"),isNull(),isNull());
@@ -141,6 +146,9 @@ class ManagedFileMcpApiTest {
         Map.of("role","part","fieldName","campo_1","reader","IDENTITY"),Map.of("role","part","fieldName","campo_2","reader","IDENTITY")),
         "params",Map.of("separator"," ")));
     args.put("compositions",compositions);
+    when(files.onboardIdempotent(any(),any(),anyString(),anyString(),anyString(),anyString(),
+        anyList(),anyList(),anyList(),isNull(),any(),anyString(),anyString(),anyString(),eq(category),eq(compositions)))
+        .thenReturn(Map.of("state","DRAFT","lockVersion",0));
     api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request);
     verify(files).onboardIdempotent(any(),any(),eq("sue-test"),any(),any(),any(),any(),any(),argThat(x->x.size()==1024 && x.getFirst().transformParams().equals(Map.of("crs","EPSG:4326"))),isNull(),any(),eq("wide"),eq("wide-command"),eq("tenant-a"),eq(category),eq(compositions));
     fields.add(Map.of("fieldName","overflow","extractionDecision","EXCLUDE","dataAccessLabel","OPEN"));

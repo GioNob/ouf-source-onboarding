@@ -74,7 +74,7 @@ public class ManagedProfileRecoveryThs {
       return ResponseEntity.status(code).contentType(MediaType.APPLICATION_JSON).cacheControl(CacheControl.noStore()).body(new String(response.body(),java.nio.charset.StandardCharsets.UTF_8));
     }catch(Exception unavailable){pending.cancel(true);if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_PROFILE_OWNER_UNAVAILABLE");}
   }
-  private static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]>{
+  static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]>{
     private final CompletableFuture<byte[]> result=new CompletableFuture<>();private final ByteArrayOutputStream bytes=new ByteArrayOutputStream();private Flow.Subscription subscription;
     @Override public CompletionStage<byte[]> getBody(){return result;}
     @Override public void onSubscribe(Flow.Subscription s){subscription=s;s.request(1);}

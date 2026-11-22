@@ -181,6 +181,9 @@ public class WorkflowThsApi {
     return new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_OWNER_RESPONSE_TOO_LARGE");
   }
   private String token(HttpServletRequest request){
+    return token(request,clients);
+  }
+  static String token(HttpServletRequest request,OAuth2AuthorizedClientService clients){
     if(!Boolean.TRUE.equals(request.getAttribute("ouf.permissionThsSession"))
         ||!(SecurityContextHolder.getContext().getAuthentication() instanceof OAuth2AuthenticationToken authentication))
       throw new ResponseStatusException(HttpStatus.FORBIDDEN,"THS_SESSION_REQUIRED");
@@ -193,7 +196,7 @@ public class WorkflowThsApi {
       throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_WORKFLOW_OWNER_UNAVAILABLE");
     return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).cacheControl(CacheControl.noStore()).body(response.body());
   }
-  private static ResponseEntity<byte[]> asset(String name,MediaType type)throws IOException{
+  static ResponseEntity<byte[]> asset(String name,MediaType type)throws IOException{
     return ResponseEntity.ok().contentType(type).cacheControl(CacheControl.noStore())
         .header("X-Content-Type-Options","nosniff").header("Referrer-Policy","no-referrer").header("X-Frame-Options","DENY")
         .header("Content-Security-Policy","default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
