@@ -227,7 +227,10 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.equal(row.parent_version_id, parent.onboardingVersionId);
   assert.equal(row.state, 'DRAFT');
   // Reconcile a candidate command, then exercise a new predecessor write and its identical retry.
-  assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'), child);
+  // The candidate adds the D-085 observation fields; the predecessor replays the same command with its V43 shape.
+  const additive = new Set(['workflowState', 'reasonCode', 'allowedActions', 'lockVersion']);
+  assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'),
+    Object.fromEntries(Object.entries(child).filter(([key]) => !additive.has(key))));
   const prepared = await prepare(fixture, child, 'return-review');
   assert.equal(prepared.state, 'IN_REVIEW');
   assert.equal(prepared.challengeStatus, 'CREATED');
