@@ -78,7 +78,7 @@ public class ConfigurationValidator {
         String datatype=Objects.toString(property.get("datatype"),"");
         boolean supported=ValueReader.DATATYPES.containsValue(datatype) || Set.of("string","number","integer","boolean","object","date","list").contains(datatype)
             || configuration.get("semanticReferenceBindings") instanceof List<?> pins && pins.stream()
-                .anyMatch(pin->pin instanceof Map<?,?> binding && datatype.equals(binding.get("semanticId")) && binding.get("definition") instanceof Map<?,?>);
+                .anyMatch(pin->pin instanceof Map<?,?> binding && datatype.equals(binding.get("semanticId")) && !binding.containsKey("valueMapRef") && binding.get("definition") instanceof Map<?,?>);
         if(!"urn:ouf:policy:linked-object-property-reconciliation:v1".equals(rule.get("policyRef"))
             ||!Set.of("SINGLE","MULTI").contains(Objects.toString(rule.get("cardinality"),""))
             ||!Set.of("EXACT_TYPED","NFC_TRIM").contains(Objects.toString(rule.get("normalizerRef"),""))

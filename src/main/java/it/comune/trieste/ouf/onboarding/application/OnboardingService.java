@@ -203,7 +203,16 @@ public class OnboardingService {
   public List<Map<String,Object>> bundleHistory(String sourceId){return db.sql("select publication_id,source_id,onboarding_version_id,bundle_version,checksum,effective_from,active,created_at from ouf_onboarding.published_configuration where source_id=:s order by bundle_version desc").param("s",sourceId).query().listOfRows();}
 
   public Map<String,Object> approvalCard(UUID challengeId){Map<String,Object> row=jsonRow(db.sql("select c.challenge_id,c.source_id,c.onboarding_version_id,c.configuration_hash,c.status,c.expires_at,c.created_at,v.version,v.configuration::text configuration,s.name source_name from ouf_onboarding.approval_challenge c join ouf_onboarding.onboarding_version v on v.onboarding_version_id=c.onboarding_version_id join ouf_onboarding.source s on s.source_id=c.source_id where c.challenge_id=:i").param("i",challengeId).query().listOfRows().stream().findFirst().orElseThrow(()->missing("approval challenge")),"configuration");Map<String,Object> out=new LinkedHashMap<>(row);out.put("trustedApprovalRef","ths://approval-challenges/"+challengeId);out.put("changedSections",changedSections((Map<String,Object>)row.get("configuration"),latestConfigurationBefore(String.valueOf(row.get("source_id")),((Number)row.get("version")).intValue())));
-    var configuration=(Map<String,Object>)row.get("configuration");ConfigurationValidator.spatial(configuration).ifPresent(profile->{out.put("spatialDecision",profile);out.put("spatialDecisionFindings",validator.validate(String.valueOf(row.get("source_id")),configuration).findings().stream().filter(f->f.path().startsWith("/extractionProfile/runtime/udp/spatial")).toList());});return out;}
+    var configuration=(Map<String,Object>)row.get("configuration");
+    if(configuration.get("semanticReferenceBindings") instanceof List<?> bindings){
+      var reviewBindings=ManagedReviewSnapshot.reviewBindings(bindings);
+      if(!bindings.equals(reviewBindings)){
+        var reviewConfiguration=new LinkedHashMap<>(configuration);
+        reviewConfiguration.put("semanticReferenceBindings",reviewBindings);
+        out.put("configuration",reviewConfiguration);
+      }
+    }
+    ConfigurationValidator.spatial(configuration).ifPresent(profile->{out.put("spatialDecision",profile);out.put("spatialDecisionFindings",validator.validate(String.valueOf(row.get("source_id")),configuration).findings().stream().filter(f->f.path().startsWith("/extractionProfile/runtime/udp/spatial")).toList());});return out;}
   @Transactional public Map<String,Object> reject(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){
     return closeWithoutApproval(sourceId,versionId,challengeId,actor,correlation,authenticationContextRef,null);
   }

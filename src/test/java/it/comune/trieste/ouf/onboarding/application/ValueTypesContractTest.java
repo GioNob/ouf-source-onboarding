@@ -300,65 +300,139 @@ class ValueTypesContractTest {
     assertThat(pin.path("definition")).isEqualTo(json.valueToTree(definition(INNER)));
   }
 
-  @Test void d084_15_valueMapPinRequiresPublishedEvidenceForDirectAndListReaders(){
-    String mapId="urn:test:map",ref=mapId+"@"+SET,vocabulary="urn:test:colours";
-    String member="urn:test:red";
-    var ids=List.of(PROPERTY,mapId,member);
+  @Test void d084_15_valueMapReadersUseTheExactPublishedDefinition()throws Exception{
     for(boolean direct:List.of(false,true)){
-      var mapping=new LinkedHashMap<String,Object>(Map.of("semanticRefs",ids.stream().map(id->id+"@1").toList(),
-          "mappingId","m","sourceType",Map.of("typeCode","FILE")));
-      mapping.put("compositions",direct?List.of():List.of(top(split("VALUE_MAP_V1",Map.of("valueMapRef",ref)))));
-      mapping.put("propertyMappings",direct?List.of(Map.of("sourceField","text","targetPropertyIri",PROPERTY,"transform","VALUE_MAP_V1",
-          "valueMapRef",mapId)):List.of());
-      var config=config();
-      config.put("semanticMapping",mapping);
-      config.put("semanticReferenceBindings",ids.stream().map(ValueTypesContractTest::binding).toList());
-      var profiles=Map.of("text","STRING");
-      DatatypeResolver withoutProof=(id,rev,set)->{
-        var actual=new LinkedHashMap<String,Object>(Map.of("semantic_id",id,"semantic_version","1","revision_id",rev,
-            "publication_set_id",set,"artifact_type",id.equals(member)?"CONCEPT":id.equals(PROPERTY)?"PROPERTY":"RULE"));
-        if(id.equals(member))actual.put("definition",Map.of("vocabularyRef",vocabulary));
-        return actual;
-      };
-      assertThatThrownBy(()->PublishedDatatypes.prepare(config,profiles,withoutProof,hashes)).isInstanceOfSatisfying(
-          DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_VALUE_MAP_UNRESOLVED"));
-      // Fixture of the publisher boundary. A CONCEPT's vocabulary alone cannot attest a map.
-      var proof=new java.util.concurrent.atomic.AtomicReference<>(new DatatypeResolver.ValueMapPin(mapId,SET,vocabulary));
-      DatatypeResolver withProof=new DatatypeResolver(){
-        public Map<String,Object> resolve(String id,String rev,String set){return withoutProof.resolve(id,rev,set);}
-        public ValueMapPin valueMapPin(Map<String,Object> published){
-          assertThat(published).containsEntry("semantic_id",mapId).containsEntry("publication_set_id",SET).containsEntry("revision_id",REV);
-          return proof.get();
-        }
-      };
-      PublishedDatatypes.prepare(config,profiles,withProof,hashes);
+      var config=valueMapConfig(direct?null:top(split("VALUE_MAP_V1",Map.of("valueMapRef",MAP+"@"+SET))));
+      var actual=valueMapResponse(valueMapDefinition());
+      var builder=org.springframework.web.client.RestClient.builder();
+      var server=org.springframework.test.web.client.MockRestServiceServer.bindTo(builder).build();
+      for(String id:List.of(PROPERTY,MAP,MEMBER))
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo(
+            "https://gateway.test"+RegistryDatatypeResolver.path(id,REV,SET)))
+            .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers.header("Authorization","Bearer fixture"))
+            .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess(
+                json.writeValueAsString(id.equals(MAP)?actual:valueMapOtherResponse(id)),org.springframework.http.MediaType.APPLICATION_JSON));
+      var registry=new RegistryDatatypeResolver(json,"https://gateway.test",builder,()->"fixture");
+      PublishedDatatypes.prepare(config,Map.of("text","STRING"),registry,hashes);
+      server.verify();
       var bundle=new PublishedBundleCompiler(hashes).compile("s",UUID.randomUUID(),1,hashes.of(config),config);
       var pin=json.valueToTree(bundle.get("semanticReferenceBindings")).get(1);
-      assertThat(pin.path("valueMapRef").asText()).isEqualTo(ref);
-      assertThat(pin.path("vocabularyRef").asText()).isEqualTo(vocabulary);
+      assertThat(pin.path("valueMapRef").asText()).isEqualTo(MAP+"@"+SET);
+      assertThat(pin.path("targetVocabulary").asText()).isEqualTo(VOCABULARY+"@"+REV);
       assertThat(pin.path("revisionId").asText()).isEqualTo(REV);
-      assertThat(json.valueToTree(bundle.get("semanticReferenceBindings")).get(2).path("definition").path("vocabularyRef").asText()).isEqualTo(vocabulary);
-      Object frozen=config.get("semanticReferenceBindings");
-      for(var wrong:List.of(new DatatypeResolver.ValueMapPin("other",SET,vocabulary),
-          new DatatypeResolver.ValueMapPin(mapId,REV,vocabulary),new DatatypeResolver.ValueMapPin(mapId,SET,"relative"),
-          new DatatypeResolver.ValueMapPin(mapId,SET,"urn:different"))){
-        proof.set(wrong);
-        assertThatThrownBy(()->PublishedDatatypes.prepare(config,profiles,withProof,hashes)).isInstanceOfSatisfying(
-            DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_VALUE_MAP_UNRESOLVED"));
-        assertThat(config.get("semanticReferenceBindings")).isSameAs(frozen);
+      assertThat(pin.path("definition")).isEqualTo(json.valueToTree(valueMapDefinition()));
+      assertThat(pin.path("definitionSha256").asText()).isEqualTo(actual.get("definitionSha256"));
+      assertThat(json.valueToTree(bundle.get("semanticReferenceBindings")).get(2).path("definition").path("vocabularyRef").asText())
+          .isEqualTo(VOCABULARY);
+      if(direct){
+        var extraction=new LinkedHashMap<>(ManagedReviewSnapshot.child(config,"extractionProfile"));
+        var reviewConfig=new LinkedHashMap<>(config);
+        reviewConfig.put("extractionProfile",Map.of("runtime",extraction.get("runtime"),"projection",Map.of("FILE",List.of("text"))));
+        var snapshot=ManagedReviewSnapshot.build(reviewConfig,Map.of("display_name","Fixture"),
+            Map.of("inferred_schema",List.of(Map.of("name","text","dataType","STRING"))),"owner","source");
+        var summary=json.valueToTree(snapshot).path("FIELD").path("text").path("valueMap");
+        assertThat(summary).isEqualTo(json.valueToTree(Map.of("valueMapRef",MAP+"@"+SET,"name","Colori pubblicati",
+            "targetVocabulary",VOCABULARY+"@"+REV,"entryCount",2)));
+        assertThat(json.writeValueAsString(snapshot)).doesNotContain("private-code");
       }
-      proof.set(new DatatypeResolver.ValueMapPin(mapId,SET,vocabulary));
-      var driftedConcept=new DatatypeResolver(){
-        public Map<String,Object> resolve(String id,String rev,String set){
-          var actual=withoutProof.resolve(id,rev,set);
-          if(id.equals(member))actual.put("definition",Map.of("vocabularyRef","urn:test:different-vocabulary"));
+    }
+  }
+
+  private static final String MAP="urn:test:map",VOCABULARY="urn:test:colours",MEMBER="urn:test:red";
+  private Map<String,Object> valueMapOtherResponse(String id){
+    if(!MEMBER.equals(id))return response(id);
+    return Map.of("semantic_id",id,"semantic_version","1","revision_id",REV,"publication_set_id",SET,
+        "artifact_type","CONCEPT","status","ACTIVE","definition",Map.of("vocabularyRef",VOCABULARY));
+  }
+  private static Map<String,Object> valueMapDefinition(){
+    return Map.of("targetVocabulary",VOCABULARY+"@"+REV,"labels",Map.of("it","Colori pubblicati"),
+        "entries",List.of(Map.of("code","private-code","concept","urn:test:red"),Map.of("code","z","concept","urn:test:green")));
+  }
+  private Map<String,Object> valueMapResponse(Map<String,Object> definition){
+    return new LinkedHashMap<>(Map.of("semantic_id",MAP,"semantic_version","1","revision_id",REV,"publication_set_id",SET,
+        "artifact_type","VALUE_MAP","status","ACTIVE","definition",definition,"definitionSha256",hashes.ofDefinition(definition).substring(7)));
+  }
+  private static Map<String,Object> valueMapConfig(Map<String,Object> expression){
+    var ids=new ArrayList<>(List.of(PROPERTY,MAP,MEMBER));
+    if(expression!=null && expression.containsKey("typeRef"))ids.add(INNER);
+    var mapping=new LinkedHashMap<String,Object>(Map.of("semanticRefs",ids.stream().map(id->id+"@1").toList(),
+        "mappingId","m","sourceType",Map.of("typeCode","FILE")));
+    mapping.put("compositions",expression==null?List.of():List.of(expression));
+    mapping.put("propertyMappings",expression==null?List.of(Map.of("sourceField","text","targetPropertyIri",PROPERTY,
+        "transform","VALUE_MAP_V1","valueMapRef",MAP)):List.of());
+    var config=config();
+    config.put("semanticMapping",mapping);
+    config.put("semanticReferenceBindings",ids.stream().map(ValueTypesContractTest::binding).toList());
+    return config;
+  }
+
+  @Test void d084_20_valueMapsContractBytes()throws Exception{
+    assertThat(hashes.ofBytes(Files.readAllBytes(Path.of("contracts/ouf-value-maps-v1.json"))))
+        .isEqualTo("sha256:2f4528eb4c9c6bd9d2c6345464c8292f0cb3f36834cb2f54f81ae20e3dbe4a71");
+  }
+
+  @Test void d084_21_invalidValueMapsFailClosedWithoutSourceCodes(){
+    var config=valueMapConfig(null);
+    var definition=valueMapDefinition();
+    var wrongVocabulary=new LinkedHashMap<>(definition);
+    wrongVocabulary.put("targetVocabulary",VOCABULARY);
+    var reversed=new LinkedHashMap<>(definition);
+    reversed.put("entries",((List<?>)definition.get("entries")).reversed());
+    var duplicated=new LinkedHashMap<>(definition);
+    var first=((List<?>)definition.get("entries")).getFirst();
+    duplicated.put("entries",List.of(first,first));
+    var frozen=valueMapResponse(definition);
+    DatatypeResolver registry=(id,rev,set)->id.equals(MAP)?frozen:valueMapOtherResponse(id);
+    PublishedDatatypes.prepare(config,Map.of("text","STRING"),registry,hashes);
+    Object bindings=config.get("semanticReferenceBindings");
+    var changed=new LinkedHashMap<>(definition);
+    changed.put("entries",List.of(first));
+    for(var response:List.of(Map.of("status","DEPRECATED"),Map.of("status","RETIRED"),Map.of("artifact_type","CONCEPT"),
+        Map.of("artifact_type","DATATYPE"),Map.of("revision_id",SET),Map.of("publication_set_id",REV),
+        Map.of("definitionSha256","0".repeat(64)),valueMapResponse(wrongVocabulary),valueMapResponse(reversed),
+        valueMapResponse(duplicated),valueMapResponse(changed))){
+      var invalid=valueMapResponse(definition);invalid.putAll(response);
+      assertThatThrownBy(()->PublishedDatatypes.prepare(config,Map.of("text","STRING"),
+          (id,rev,set)->id.equals(MAP)?invalid:valueMapOtherResponse(id),hashes)).isInstanceOfSatisfying(DomainFailure.class,e->{
+            assertThat(e.code()).isEqualTo("ONB_VALUE_MAP_UNRESOLVED");
+            assertThat(e.getMessage()).doesNotContain("private-code");
+          });
+      assertThat(config.get("semanticReferenceBindings")).isSameAs(bindings);
+    }
+    assertThatThrownBy(()->PublishedDatatypes.prepare(config,Map.of("text","STRING"),
+        (id,rev,set)->{if(id.equals(MAP))throw DatatypeResolver.unresolved();return valueMapOtherResponse(id);},hashes))
+        .isInstanceOfSatisfying(DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_VALUE_MAP_UNRESOLVED"));
+    var unavailable=new DomainFailure(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+        "ONB_DATATYPE_LOOKUP_UNAVAILABLE","Registry read temporarily unavailable",Map.of("retryAfterSeconds",15));
+    assertThatThrownBy(()->PublishedDatatypes.prepare(config,Map.of("text","STRING"),
+        (id,rev,set)->{if(id.equals(MAP))throw unavailable;return valueMapOtherResponse(id);},hashes))
+        .isSameAs(unavailable);
+    assertThat(config.get("semanticReferenceBindings")).isSameAs(bindings);
+  }
+
+  @Test void d084_22_componentVocabularyMustMatchPublishedMapForSingleManyAndListReaders(){
+    var reader=Map.of("fieldName","text","reader","VALUE_MAP_V1","transformParams",Map.of("valueMapRef",MAP+"@"+SET));
+    for(var builder:List.of(new LinkedHashMap<String,Object>(reader),Map.<String,Object>of("items",List.of(reader)),
+        Map.<String,Object>of("constructor",split("VALUE_MAP_V1",Map.of("valueMapRef",MAP+"@"+SET))))){
+      var component=new LinkedHashMap<>(builder);component.put("component","colour");
+      var config=valueMapConfig(top(struct(INNER,List.of(component))));
+      var matching=new LinkedHashMap<>(spec("colour","concept",builder.containsKey("fieldName")?"ONE":"MANY",true));
+      for(String vocabulary:List.of("urn:test:different",VOCABULARY)){
+        matching.put("constraints",Map.of("vocabularyRef",vocabulary));
+        var def=Map.of("components",List.of(matching));
+        DatatypeResolver registry=(id,rev,set)->{
+          if(id.equals(MAP))return valueMapResponse(valueMapDefinition());
+          var actual=valueMapOtherResponse(id);
+          if(id.equals(INNER)){
+            actual.put("definition",def);
+            actual.put("definitionSha256",hashes.ofDefinition(def).substring(7));
+          }
           return actual;
-        }
-        public ValueMapPin valueMapPin(Map<String,Object> published){return withProof.valueMapPin(published);}
-      };
-      assertThatThrownBy(()->PublishedDatatypes.prepare(config,profiles,driftedConcept,hashes)).isInstanceOfSatisfying(
-          DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_DATATYPE_UNRESOLVED"));
-      assertThat(config.get("semanticReferenceBindings")).isSameAs(frozen);
+        };
+        if(VOCABULARY.equals(vocabulary))PublishedDatatypes.prepare(config,Map.of("text","STRING"),registry,hashes);
+        else assertThatThrownBy(()->PublishedDatatypes.prepare(config,Map.of("text","STRING"),registry,hashes))
+            .hasMessage("ONB_COMPOSITION_INVALID");
+      }
     }
   }
 

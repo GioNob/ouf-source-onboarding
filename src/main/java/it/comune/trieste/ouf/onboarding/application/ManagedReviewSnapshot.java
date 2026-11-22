@@ -35,6 +35,16 @@ final class ManagedReviewSnapshot {
     }
     var semantics=new LinkedHashMap<String,Object>();
     var bindings=list(config.get("semanticReferenceBindings"));
+    var valueMaps=new HashMap<Object,Map<?,?>>();
+    var byId=new HashMap<Object,Map<?,?>>();
+    var ambiguous=new HashSet<Object>();
+    for(Object raw:bindings){
+      var pin=object(raw);
+      Object id=pin.get("semanticId");
+      if(byId.putIfAbsent(id,pin)!=null)ambiguous.add(id);
+      if(pin.containsKey("valueMapRef"))valueMaps.put(pin.get("valueMapRef"),pin);
+    }
+    ambiguous.forEach(byId::remove);
     for(var raw:list(mapping.get("targetClasses"))){
       var target=object(raw);
       addReference(semantics,config,bindings,target.get("classIri"),target.get("ontologyId"),target.get("ontologyVersion"),"CLASS");
@@ -71,6 +81,19 @@ final class ManagedReviewSnapshot {
       var row=new LinkedHashMap<String,Object>();
       row.put("included",included);row.put("property",iri);row.put("transform",property.get("transform"));
       if(property.containsKey("transformParams"))row.put("transformParams",property.get("transformParams"));
+      if("VALUE_MAP_V1".equals(property.get("transform"))){
+        Object ref=child(property,"transformParams").get("valueMapRef");
+        if(ref==null)ref=property.get("valueMapRef");
+        var pin=valueMaps.getOrDefault(ref,byId.get(ref));
+        if(pin!=null && pin.get("targetVocabulary") instanceof String vocabulary){
+          var definition=child(pin,"definition");
+          Object labelIt=child(definition,"labels").get("it");
+          if(labelIt==null)labelIt=child(pin,"label").get("it");
+          String mapName=labelIt instanceof String value && !value.isBlank()?value:(String)pin.get("semanticId");
+          row.put("valueMap",Map.of("valueMapRef",pin.get("valueMapRef"),"name",mapName,"targetVocabulary",vocabulary,
+              "entryCount",list(definition.get("entries")).size()));
+        }
+      }
       row.put("profileType",column.get("dataType"));row.put("sourceKey",keys.contains(field));
       row.put("signal",signals.contains(iri));
       Object label=included?labels.get(iri==null?field:iri):null;
@@ -97,7 +120,7 @@ final class ManagedReviewSnapshot {
     var snapshot=new LinkedHashMap<String,Object>();
     snapshot.put("sourceName",name);snapshot.put("owner",owner);snapshot.put("file",file);
     // JSONB objects have no insertion order. Keep the original header order separately.
-    snapshot.put("bindings",bindings);
+    snapshot.put("bindings",reviewBindings(bindings));
     snapshot.put("columnOrder",List.copyOf(fields.keySet()));
     var compositions=new LinkedHashMap<String,Object>();
     for(Object raw:list(mapping.get("compositions"))){
@@ -108,12 +131,22 @@ final class ManagedReviewSnapshot {
     var definitions=new LinkedHashMap<String,Object>();
     for(Object raw:bindings){
       var pin=object(raw);
-      if(pin.containsKey("definitionSha256"))definitions.put(pin.get("semanticId")+"@"+pin.get("publicationSetId"),pin);
+      if(pin.containsKey("definitionSha256") && !pin.containsKey("valueMapRef"))definitions.put(pin.get("semanticId")+"@"+pin.get("publicationSetId"),pin);
     }
     if(!definitions.isEmpty())snapshot.put("DATATYPE",definitions);
     snapshot.put("FIELD",fields);snapshot.put("IDENTITY",identity);snapshot.put("SEMANTIC",semantics);snapshot.put("LIMITS",limits);
     return snapshot;
   }
+  static List<?> reviewBindings(List<?> bindings){
+    return bindings.stream().map(raw->{
+      var pin=object(raw);
+      if(!pin.containsKey("valueMapRef"))return raw;
+      var summary=new LinkedHashMap<>(pin);
+      summary.remove("definition");
+      return summary;
+    }).toList();
+  }
+
   private static void addReference(Map<String,Object> refs,Map<?,?> config,List<?> bindings,Object iri,Object ontology,Object version,String kind){
     if(!(iri instanceof String id))return;
     var description=child(child(config,"semanticReviewTerms"),id);

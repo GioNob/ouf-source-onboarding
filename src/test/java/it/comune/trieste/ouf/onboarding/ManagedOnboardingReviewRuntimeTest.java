@@ -116,6 +116,66 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(((Map<?,?>)datatypes.get(type+"@"+set)).get("definition")).isEqualTo(definition);
     assertThat(((Map<?,?>)datatypes.get(nested+"@"+nestedSet)).get("definition")).isEqualTo(nestedDefinition);
   }
+  @Test void d084_24_valueMapIsFrozenBeforeReviewAndTheCardExposesOnlyItsSummary()throws Exception{
+    String source="colours",tenant="test-tenant",cls="urn:fixture:Place",property="urn:fixture:colour",map="urn:fixture:map";
+    String set=UUID.randomUUID().toString(),mapSet=UUID.randomUUID().toString(),ref=map+"@"+mapSet;
+    String vocabulary="urn:fixture:colours@"+UUID.randomUUID();
+    byte[] csv="code\nprivate-fixture-code\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.registerOwned(null,"object://fixture/codes.csv",hashes.ofBytes(csv),"text/csv",
+        csv.length,human.subject(),"retention://test",tenant).get("asset_id");
+    UUID profile=(UUID)files.profile(asset,csv,"object://fixture/codes-sample").get("profile_id");
+    var fields=List.of(new ManagedFileService.FieldDecision("code","INCLUDE","OPEN",property,"VALUE_MAP_V1",
+        null,null,null,Map.of("valueMapRef",ref)));
+    var ids=List.of(cls,property,map);
+    var draft=files.onboardIdempotent(asset,profile,source,"Colori","Comune",cls,ids.stream().map(id->id+"@1").toList(),
+        List.of("code"),fields,null,human,"create","create",tenant);
+    UUID version=(UUID)draft.get("onboardingVersionId");
+    var signal=Map.of("id",property,"semanticRef",property+"@"+set,"comparator","CONCEPT",
+        "excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","urn:assertion");
+    var identity=Map.of("ref","policy","version","1","tenantId",tenant,"sourceId",source,"canonicalClass",cls,
+        "allowAutoNew",false,"maxCandidates",10,"signals",List.of(signal),
+        "sufficientRules",List.of(Map.of("id","rule","signalIds",List.of(property),"assertionRef","urn:rule")));
+    var udp=Map.<String,Object>of("resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1",
+        "policyRef","policy","governedIdentity",identity),"materialization",Map.of("policyRef","policy","properties",List.of(
+            Map.of("sourceField",property,"propertyIri",property,"datatype","http://www.w3.org/2001/XMLSchema#anyURI",
+                "accessLabel","OPEN","authorityOrder",List.of(source))),"bitemporalProperties",List.of(),"checkpointInterval",1));
+    var bindings=ids.stream().map(id->new ManagedFileExecutionProposal.SemanticBinding(id,"1",
+        UUID.randomUUID().toString(),map.equals(id)?mapSet:set)).toList();
+    var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"map-review",
+        new ManagedFileExecutionProposal.Proposal(bindings,set,udp,new ManagedFileExecutionProposal.Limits(100,2,100)));
+    var actor=principal(tenant,human.subject());
+    var definition=Map.of("targetVocabulary",vocabulary,"labels",Map.of("it","Colori pubblicati"),
+        "entries",List.of(Map.of("code","private-fixture-code","concept","urn:fixture:red")));
+    var mapResponse=new LinkedHashMap<String,Object>();
+    for(var pin:bindings){
+      String kind=cls.equals(pin.semanticId())?"CLASS":property.equals(pin.semanticId())?"PROPERTY":"VALUE_MAP";
+      var response=new LinkedHashMap<String,Object>(Map.of("semantic_id",pin.semanticId(),"semantic_version","1",
+          "revision_id",pin.revisionId(),"publication_set_id",pin.publicationSetId(),"artifact_type",kind,"status","ACTIVE"));
+      if("VALUE_MAP".equals(kind)){
+        response.put("status","RETIRED");response.put("definition",definition);
+        response.put("definitionSha256",hashes.ofDefinition(definition).substring(7));
+        mapResponse.putAll(response);
+      }
+      when(registryReader.resolve(pin.semanticId(),pin.revisionId(),pin.publicationSetId()))
+          .thenReturn("VALUE_MAP".equals(kind)?mapResponse:response);
+    }
+    assertThatThrownBy(()->reviews.prepare(actor,command,"prepare")).isInstanceOfSatisfying(
+        it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_VALUE_MAP_UNRESOLVED"));
+    assertThat(onboarding.version(source,version)).containsEntry("state","DRAFT");
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_challenge where onboarding_version_id=:v")
+        .param("v",version).query(Long.class).single()).isZero();
+    mapResponse.put("status","ACTIVE");
+    var review=reviews.prepare(actor,command,"retry");
+    var json=new com.fasterxml.jackson.databind.ObjectMapper();
+    var frozen=json.valueToTree(onboarding.version(source,version).get("configuration"));
+    assertThat(frozen.path("semanticReferenceBindings").get(2).path("definition")).isEqualTo(json.valueToTree(definition));
+    assertThat(hashes.of(onboarding.version(source,version).get("configuration"))).isEqualTo(review.get("configurationHash"));
+    var card=json.valueToTree(reviews.humanCard(actor,(UUID)review.get("challengeId")));
+    assertThat(card.path("reviewSnapshot").path("FIELD").path("code").path("valueMap")).isEqualTo(json.valueToTree(
+        Map.of("valueMapRef",ref,"name","Colori pubblicati","targetVocabulary",vocabulary,"entryCount",1)));
+    assertThat(card.toString()).doesNotContain("private-fixture-code");
+  }
+
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(strings={"ACTIVE","DEPRECATED","RETIRED"})
   void d084_17_historicalBundleReturnsFrozenDatatypeWithoutLiveStatusGate(String currentStatus)throws Exception{
@@ -126,13 +186,20 @@ class ManagedOnboardingReviewRuntimeTest {
     var definition=Map.of("components",List.of(Map.of("name","name","type","string","required",true,"cardinality","ONE")));
     var pin=Map.of("semanticId",id,"publicationSetId",set,"revisionId",rev,"semanticVersion","1",
         "definition",definition,"definitionSha256",hashes.ofDefinition(definition).substring(7));
-    var bundle=Map.of("semanticReferenceBindings",List.of(pin));
+    String map="urn:test:historical-map",ref=map+"@"+set,vocabulary="urn:test:vocabulary@"+set;
+    var mapDefinition=Map.of("targetVocabulary",vocabulary,
+        "entries",List.of(Map.of("code","historical-code","concept","urn:test:concept")));
+    var mapPin=Map.of("semanticId",map,"semanticVersion","1","publicationSetId",set,"valueMapRef",ref,
+        "revisionId",rev,"targetVocabulary",vocabulary,"definition",mapDefinition,
+        "definitionSha256",hashes.ofDefinition(mapDefinition).substring(7));
+    var bundle=Map.of("semanticReferenceBindings",List.of(pin,mapPin));
     db.sql("""
         insert into ouf_onboarding.published_configuration(publication_id,source_id,onboarding_version_id,bundle_version,bundle,checksum,active,effective_from)
         values(:id,:s,:v,1,cast(:b as jsonb),:h,false,transaction_timestamp())
         """).param("id",UUID.randomUUID()).param("s",source).param("v",version)
         .param("b",new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(bundle)).param("h",hashes.of(bundle)).update();
     when(registryReader.resolve(id,rev,set)).thenReturn(Map.of("status",currentStatus));
+    when(registryReader.resolve(map,rev,set)).thenReturn(Map.of("status",currentStatus));
     assertThat(onboarding.historicalBundle(source,version)).containsEntry("bundle",bundle).containsEntry("checksum",hashes.of(bundle));
     verifyNoInteractions(registryReader);
   }

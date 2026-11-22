@@ -137,9 +137,13 @@
     WKT_V1:'Legge una geometria WKT nel sistema di coordinate dichiarato',
     VALUE_MAP_V1:'Rimuove gli spazi esterni e cerca il codice esatto nella mappa pubblicata. Un codice sconosciuto produce un errore'
   };
-  function readerText(reader, params = {}) {
+  function readerText(reader, params = {}, valueMap) {
     if (!reader) return '—';
-    return [readerRules[reader] || reader, params?.crs, params?.valueMapRef].filter(Boolean).join(' · ');
+    const map = reader === 'VALUE_MAP_V1' && valueMap
+      ? ['Mappa di valori ' + valueMap.name, 'Vocabolario di destinazione ' + valueMap.targetVocabulary,
+         valueMap.entryCount + (valueMap.entryCount === 1 ? ' voce' : ' voci')].join(' · ')
+      : params?.valueMapRef;
+    return [readerRules[reader] || reader, params?.crs, map].filter(Boolean).join(' · ');
   }
   function expressionText(node, definitions) {
     if (node.items) return 'Elenco in ordine · ' + node.items.map(item => expressionText(item,definitions)).join(' · ');
@@ -166,7 +170,7 @@
   }
   function compositionsView(mapping,bindings,article) {
     if (!mapping?.compositions?.length) return;
-    const definitions = Object.fromEntries((bindings || []).filter(b => b.definitionSha256).map(b => [b.semanticId+'@'+b.publicationSetId,b]));
+    const definitions = Object.fromEntries((bindings || []).filter(b => b.definitionSha256 && !b.valueMapRef).map(b => [b.semanticId+'@'+b.publicationSetId,b]));
     element('h3','Proprietà composte',article);
     for (const c of mapping.compositions) {
       element('h4',c.targetPropertyIri + ' · ' + accessNames[c.dataAccessLabel],article);
@@ -202,7 +206,7 @@
     return 'Criteri di confronto · ' + JSON.stringify(value);
   }
   function fieldDescription(row) {
-    return [row.included ? 'inclusa' : 'esclusa', row.property, row.transform && readerText(row.transform,row.transformParams), row.access, row.sourceKey && 'chiave della fonte', row.signal && 'segnale d’identità',row.authorityOrder?.length && 'ordine delle autorità ' + row.authorityOrder.join(', '), row.reconciliation && 'regole ' + JSON.stringify(row.reconciliation)].filter(Boolean).join(' · ');
+    return [row.included ? 'inclusa' : 'esclusa', row.property, row.transform && readerText(row.transform,row.transformParams,row.valueMap), row.access, row.sourceKey && 'chiave della fonte', row.signal && 'segnale d’identità',row.authorityOrder?.length && 'ordine delle autorità ' + row.authorityOrder.join(', '), row.reconciliation && 'regole ' + JSON.stringify(row.reconciliation)].filter(Boolean).join(' · ');
   }
   function semanticReference(card, iri, parent, warnings) {
     sourceLink(parent,iri,iri);
@@ -294,7 +298,7 @@
       if (row.property) sourceLink(property,row.property,row.property);
       if (row.reconciliation) detail('Regole di riconciliazione della proprietà',row.reconciliation,property);
       if (row.authorityOrder?.length) element('p','Ordine delle autorità · ' + row.authorityOrder.join(', '),property);
-      element('td',readerText(row.transform,row.transformParams),tr);
+      element('td',readerText(row.transform,row.transformParams,row.valueMap),tr);
       element('td',row.access ? row.access + ' · ' + accessNames[row.access] : 'Non indicato',tr);
       element('td',[row.sourceKey && 'chiave della fonte',row.signal && 'segnale d’identità'].filter(Boolean).join(' · ') || '—',tr);
       if (editable) flag('FIELD',name,element('td','',tr));
@@ -399,7 +403,7 @@
         for (const value of [field, property && termLabel(card,property) + ' · ' + property, transform, labels.get(property) || labels.get(field)]) element('td', value, tr);
         table.append(tr);
       };
-      for (const row of rows) appendField(row.sourceField, row.targetPropertyIri, readerText(row.transform,row.transformParams));
+      for (const row of rows) appendField(row.sourceField, row.targetPropertyIri, readerText(row.transform,row.transformParams,row.valueMap));
       const mapped = new Set(rows.map(row => row.sourceField));
       const projection = config.extractionProfile?.projection?.[mapping.sourceType?.typeCode || 'FILE'] || [];
       for (const field of projection) if (!mapped.has(field)) appendField(field, null, null);

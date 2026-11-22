@@ -7,7 +7,8 @@ import java.util.function.Function;
 /** Walks the mapping, and, at preparation, the matching published definition in lockstep. */
 final class ValueCompositions {
   static final Set<String> LABELS=Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED");
-  record Output(String type,boolean many){
+  record Output(String type,boolean many,String valueMapRef){
+    Output(String type,boolean many){this(type,many,null);}
     String datatype(){
       if(many)return "list";
       if(ValueReader.DATATYPES.containsKey(type))return ValueReader.DATATYPES.get(type);
@@ -21,10 +22,16 @@ final class ValueCompositions {
   final Set<String> used=new HashSet<>();
   private final Map<String,String> fields;
   private final Function<String,Map<?,?>> definition;
+  private final Function<String,String> valueMapVocabulary;
   private int leaves;
 
   ValueCompositions(Object raw,Map<String,String> fields,Function<String,Map<?,?>> definition){
-    this.fields=fields;this.definition=definition;
+    this(raw,fields,definition,null);
+  }
+
+  ValueCompositions(Object raw,Map<String,String> fields,Function<String,Map<?,?>> definition,
+      Function<String,String> valueMapVocabulary){
+    this.fields=fields;this.definition=definition;this.valueMapVocabulary=valueMapVocabulary;
     for(Object item:list(raw,0,ManagedFileLimits.MAX_COLUMNS)){
       Map<?,?> row=map(item);
       String target=iri(text(row,"targetPropertyIri")),label=text(row,"dataAccessLabel");
@@ -46,13 +53,14 @@ final class ValueCompositions {
     require(fields.containsKey(field));
     String profile=fields.get(field);
     require(profile==null||rule.supports(profile));
-    readerParameters(rule,input.get("transformParams"));
     used.add(field);
-    return new Output(rule.output,false);
+    return read(rule,input.get("transformParams"),false);
   }
-  private void readerParameters(ValueReader reader,Object params){
+  private Output read(ValueReader reader,Object params,boolean many){
     var checked=reader.parameters(params,null);
-    if(reader==ValueReader.VALUE_MAP_V1)valueMapRefs.add((String)checked.get("valueMapRef"));
+    String ref=(String)checked.get("valueMapRef");
+    if(ref!=null)valueMapRefs.add(ref);
+    return new Output(reader.output,many,ref);
   }
   private Output constructor(Map<?,?> expression){
     keys(expression,Set.of("constructorId","inputs"),Set.of("params"));
@@ -83,8 +91,7 @@ final class ValueCompositions {
     keys(params,Set.of("separator","itemReader"),Set.of("itemReaderParams"));
     require(roles.equals(List.of("value")));
     var itemReader=ValueReader.named(text(params,"itemReader"));
-    readerParameters(itemReader,params.containsKey("itemReaderParams")?map(params.get("itemReaderParams")):null);
-    return new Output(itemReader.output,true);
+    return read(itemReader,params.containsKey("itemReaderParams")?map(params.get("itemReaderParams")):null,true);
   }
   private Output structured(Map<?,?> expression,Set<String> path){
     keys(expression,Set.of("typeRef","components"),Set.of());
@@ -112,18 +119,26 @@ final class ValueCompositions {
         for(Object item:list(builder.get("items"),0,Integer.MAX_VALUE)){
           leaves=before;
           Output value=singleBuilder(map(item),path);
-          require(!value.many() && (spec==null || value.type().equals(spec.get("type"))));
+          require(!value.many());
+          checkComponent(value,spec,false);
           expanded=Math.max(expanded,leaves);
         }
         leaves=expanded;
       }else{
         Output value=singleBuilder(builder,path);
-        require(spec==null || value.type().equals(spec.get("type")) && value.many()=="MANY".equals(spec.get("cardinality")));
+        checkComponent(value,spec,spec!=null && "MANY".equals(spec.get("cardinality")));
       }
     }
     require(definition==null||expected.keySet().equals(names));
     path.remove(id);
     return new Output(ref,false);
+  }
+  private void checkComponent(Output value,Map<?,?> spec,boolean many){
+    if(spec==null)return;
+    require(value.type().equals(spec.get("type")) && value.many()==many);
+    Object vocabulary=ManagedReviewSnapshot.child(spec,"constraints").get("vocabularyRef");
+    if(vocabulary!=null && value.valueMapRef()!=null && valueMapVocabulary!=null)
+      require(vocabulary.equals(valueMapVocabulary.apply(value.valueMapRef())));
   }
   private Output singleBuilder(Map<?,?> builder,Set<String> path){
     if(builder.containsKey("structured")){
@@ -189,7 +204,7 @@ final class ValueCompositions {
   }
   static String text(Map<?,?> map,String key){String s=textAllowSpace(map,key);require(!s.isBlank());return s;}
   private static String textAllowSpace(Map<?,?> map,String key){if(map.get(key) instanceof String s)return s;throw invalid();}
-  private static void keys(Map<?,?> map,Set<String> required,Set<String> optional){
+  static void keys(Map<?,?> map,Set<String> required,Set<String> optional){
     require(map.keySet().containsAll(required)&&map.keySet().stream().allMatch(k->required.contains(k)||optional.contains(k)));
   }
   static void require(boolean ok){if(!ok)throw invalid();}

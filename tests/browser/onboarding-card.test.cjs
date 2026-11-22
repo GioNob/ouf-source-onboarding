@@ -5,7 +5,7 @@ const {chromium} = require('playwright');
 test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisione dal rifiuto', async () => {
   const browser = await chromium.launch({headless:true});
   try {
-    const page = await browser.newPage({viewport:{width:390,height:844}});
+    const page = await browser.newPage({viewport:{width:375,height:844}});
     const id = '00000000-0000-4000-8000-000000000001', base = 'https://ths.test/trusted-human/onboarding/';
     const cls = 'https://example.org/luoghi/Luogo';
     const names = ['codice','nome','latitudine','capienza','apertura','referente','indirizzo','civico','frazione','provincia','telefono','mail','sito','orario','note','zona','stato','gestore','anno','ingresso','uscita'];
@@ -28,6 +28,9 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
     const snapshot = {sourceName:'Luoghi civici',owner:'Comune',file:{name:'Luoghi.csv',size:4217,rows:27,columns:21,format:'CSV'},
       columnOrder:names,FIELD:field,SEMANTIC:Object.fromEntries(Object.keys(semantic).map(iri=>[iri,agent])),LIMITS:{maxRows:1500,maxColumns:25,maxCellChars:800},
       IDENTITY:{sourceKey:['codice'],...signals,'sufficientRules:codice':{id:'codice',signalIds:[field.codice.property]},allowAutoNew:false,maxCandidates:5}};
+    const mapRef='urn:test:map@'+id, vocabulary='urn:test:vocabulary@'+id;
+    field.nome = {...field.nome,transform:'VALUE_MAP_V1',transformParams:{valueMapRef:mapRef},
+      valueMap:{valueMapRef:mapRef,name:'Stati di apertura',targetVocabulary:vocabulary,entryCount:2}};
     const card = {challenge_id:id,source_id:'luoghi',version:1,status:'CREATED',onboardingState:'IN_REVIEW',configuration_hash:'sha256:'+'b'.repeat(64),lockVersion:2,
       expires_at:'2999-01-01T00:00:00Z',reviewSnapshot:snapshot,verifiedTerms:semantic,termVerification:'COMPLETE',
       configuration:{semanticReviewTerms:{[cls]:agent},semanticReferenceBindings:[{reviewTerms:[agent]}],semanticMapping:{targetClasses:[{classIri:cls}]}}};
@@ -73,6 +76,12 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
     assert.equal(await table.getByText('Esclusa · non verrà acquisita',{exact:true}).count(),16);
     assert.equal(await table.getByRole('link',{name:field.codice.property,exact:true}).getAttribute('href'),field.codice.property);
     assert.match(await table.innerText(),/dato personale/);
+    // d084_25 — the column shows the governed summary, with no source-code table.
+    const mappedName=table.getByRole('row').filter({has:page.getByRole('rowheader',{name:'nome',exact:true})});
+    assert.match(await mappedName.innerText(),/Mappa di valori Stati di apertura/);
+    assert.ok((await mappedName.innerText()).includes('Vocabolario di destinazione '+vocabulary));
+    assert.match(await mappedName.innerText(),/2 voci/);
+    assert.doesNotMatch(await mappedName.innerText(),/Concetto associato|Codice della fonte/);
     for(const text of ['testo','numero','data','ha codice','chiave della fonte','segnale d’identità'])assert.ok((await table.innerText()).includes(text));
     const article=page.locator('article');
     for(const text of ['Luoghi.csv','4217 byte','27 righe · 21 colonne','Luogo pubblico','del proprietario Comune','Cosa comporta l’approvazione','Ingestion acquisisce','UDP materializza','disattivare','1500','set-luoghi','tutti i segnali','creazione richiede'])assert.ok((await article.innerText()).includes(text),text);

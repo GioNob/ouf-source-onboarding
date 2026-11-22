@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.onboarding.application;
 
 import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
+import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.util.*;
 import static it.comune.trieste.ouf.onboarding.application.ValueCompositions.*;
 
@@ -9,7 +10,7 @@ final class PublishedDatatypes {
   private PublishedDatatypes(){}
   static boolean hasPinnedEvidence(Map<?,?> pin){
     return pin.containsKey("definition") || pin.containsKey("definitionSha256")
-        || pin.containsKey("valueMapRef") || pin.containsKey("vocabularyRef");
+        || pin.containsKey("valueMapRef") || pin.containsKey("vocabularyRef") || pin.containsKey("targetVocabulary");
   }
   static boolean requiresPreparation(Map<?,?> mapping,Map<?,?> extraction,Object bindings){
     if(mapping.containsKey("compositions"))return true;
@@ -25,6 +26,7 @@ final class PublishedDatatypes {
     var refs=list(mapping.get("semanticRefs"),1,32);
     Map<String,Map<String,Object>> pins=new LinkedHashMap<>();
     Map<String,Object> retainedVocabularies=new HashMap<>();
+    Map<String,Object> retainedTargets=new HashMap<>();
     Map<String,Object> retainedDigests=new HashMap<>();
     Map<String,Object> retainedDefinitions=new HashMap<>();
     Set<String> versions=new HashSet<>();
@@ -36,10 +38,12 @@ final class PublishedDatatypes {
       require(versions.add(id+"@"+pin.get("semanticVersion")));
       String ref=id+"@"+pin.get("publicationSetId");
       require(pins.put(ref,pin)==null);
-      if(binding.containsKey("valueMapRef") || binding.containsKey("vocabularyRef")){
-        if(!ref.equals(binding.get("valueMapRef")) || !(binding.get("vocabularyRef") instanceof String))
+      if(binding.containsKey("valueMapRef") || binding.containsKey("vocabularyRef") || binding.containsKey("targetVocabulary")){
+        if(!ref.equals(binding.get("valueMapRef"))
+            || (!binding.containsKey("vocabularyRef") && !binding.containsKey("targetVocabulary")))
           throw DatatypeResolver.unresolvedValueMap();
-        retainedVocabularies.put(ref,binding.get("vocabularyRef"));
+        if(binding.containsKey("vocabularyRef"))retainedVocabularies.put(ref,binding.get("vocabularyRef"));
+        if(binding.containsKey("targetVocabulary"))retainedTargets.put(ref,binding.get("targetVocabulary"));
       }
       if(binding.containsKey("definitionSha256"))retainedDigests.put(ref,binding.get("definitionSha256"));
       if(binding.containsKey("definition"))retainedDefinitions.put(ref,binding.get("definition"));
@@ -54,64 +58,52 @@ final class PublishedDatatypes {
       var params=reader.mappingParameters(property);
       if(reader==ValueReader.VALUE_MAP_V1)mapRefs.add((String)params.get("valueMapRef"));
     }
-    var mapPins=new HashSet<String>();
-    for(String ref:mapRefs){
-      if(pins.containsKey(ref))mapPins.add(ref);
-      else{
-        var matches=pins.entrySet().stream().filter(e->ref.equals(e.getValue().get("semanticId"))).toList();
-        if(matches.size()!=1)throw DatatypeResolver.unresolvedValueMap();
-        mapPins.add(matches.getFirst().getKey());
-      }
-    }
+    Map<String,String> mapCoordinates=new HashMap<>();
+    for(String ref:mapRefs)mapCoordinates.put(ref,PublishedValueMaps.coordinate(ref,pins));
+    var mapPins=new HashSet<>(mapCoordinates.values());
     mapPins.addAll(retainedVocabularies.keySet());
+    mapPins.addAll(retainedTargets.keySet());
     var runtime=map(map(config.get("extractionProfile")).get("runtime"));
     Object executionSet=ManagedReviewSnapshot.child(runtime,"execution").get("semanticPublicationSetRef");
     // Bindings carry coordinates, not artifact kinds. Classify them from the Registry so even
     // an additional pinned DATATYPE (outside a property expression) carries its definition.
     for(var entry:pins.entrySet()){
       var pin=entry.getValue();
-      var actual=registry.resolve(text(pin,"semanticId"),text(pin,"revisionId"),text(pin,"publicationSetId"));
-      if(actual==null || !(actual.get("artifact_type") instanceof String) || !pin.get("semanticId").equals(actual.get("semantic_id")) || !pin.get("semanticVersion").equals(actual.get("semantic_version"))
-          || !pin.get("publicationSetId").equals(actual.get("publication_set_id")) || !pin.get("revisionId").equals(actual.get("revision_id")))
-        throw DatatypeResolver.unresolved();
+      String ref=entry.getKey();
+      boolean expectedMap=mapPins.contains(ref);
+      var actual=resolve(registry,pin,expectedMap);
       String kind=text(actual,"artifact_type");
-      boolean datatype="DATATYPE".equals(kind);
-      if(mapPins.contains(entry.getKey())){
-        if(datatype || "CONCEPT".equals(kind))throw DatatypeResolver.unresolvedValueMap();
-        var proof=registry.valueMapPin(actual);
-        if(proof==null || !pin.get("semanticId").equals(proof.valueMapRef())
-            || !pin.get("publicationSetId").equals(proof.publicationSetId()) || proof.vocabularyRef()==null)
+      boolean valueMap="VALUE_MAP".equals(kind);
+      if(expectedMap || valueMap){
+        PublishedValueMaps.verify(ref,pin,actual,hashes);
+        String vocabulary=text(pin,"targetVocabulary");
+        if((retainedTargets.containsKey(ref) && !vocabulary.equals(retainedTargets.get(ref)))
+            || (retainedVocabularies.containsKey(ref) && !PublishedValueMaps.vocabularyId(vocabulary).equals(retainedVocabularies.get(ref))))
           throw DatatypeResolver.unresolvedValueMap();
-        try{iri(proof.vocabularyRef());}catch(IllegalArgumentException invalid){throw DatatypeResolver.unresolvedValueMap();}
-        if(retainedVocabularies.containsKey(entry.getKey()) && !proof.vocabularyRef().equals(retainedVocabularies.get(entry.getKey())))
-          throw DatatypeResolver.unresolvedValueMap();
-        pin.put("valueMapRef",entry.getKey());
-        pin.put("vocabularyRef",proof.vocabularyRef());
-      }
-      if(datatype){
+      }else if("DATATYPE".equals(kind)){
         verify(pin,actual,hashes);
-        if(retainedDigests.containsKey(entry.getKey()) && !Objects.equals(retainedDigests.get(entry.getKey()),pin.get("definitionSha256")))
-          throw DatatypeResolver.unresolved();
-      }else if(combined.typeRefs.contains(entry.getKey()) || retainedDigests.containsKey(entry.getKey()))throw DatatypeResolver.unresolved();
+      }else if(retainedDigests.containsKey(ref))throw DatatypeResolver.unresolved();
+      if(combined.typeRefs.contains(ref) && !"DATATYPE".equals(kind))throw DatatypeResolver.unresolved();
       if("CONCEPT".equals(kind) && actual.get("definition") instanceof Map<?,?> concept && concept.containsKey("vocabularyRef")){
         iri(text(concept,"vocabularyRef"));
         pin.put("definition",concept);
       }
-      if(retainedDefinitions.containsKey(entry.getKey())
-          && !Objects.equals(retainedDefinitions.get(entry.getKey()),pin.get("definition")))
-        throw DatatypeResolver.unresolved();
+      if((retainedDefinitions.containsKey(ref) && !Objects.equals(retainedDefinitions.get(ref),pin.get("definition")))
+          || (retainedDigests.containsKey(ref) && !Objects.equals(retainedDigests.get(ref),pin.get("definitionSha256"))))
+        throw valueMap?DatatypeResolver.unresolvedValueMap():DatatypeResolver.unresolved();
       if(combined.labels.containsKey(pin.get("semanticId")) && !"PROPERTY".equals(kind))throw DatatypeResolver.unresolved();
     }
     var mappedTypes=new HashSet<>(combined.typeRefs);
     for(var entry:pins.entrySet())
-      if(entry.getValue().containsKey("definitionSha256"))
+      if(entry.getValue().containsKey("definitionSha256") && !entry.getValue().containsKey("valueMapRef"))
         checkClosure(entry.getKey(),pins,new HashSet<>(),new int[]{0},mappedTypes);
     if(executionSet!=null)for(var entry:pins.entrySet()){
       String ref=entry.getKey();
       if(!executionSet.equals(entry.getValue().get("publicationSetId")) && !mappedTypes.contains(ref) && !mapPins.contains(ref))
         throw DatatypeResolver.unresolved();
     }
-    combined=new ValueCompositions(expressions,profiles,ref->definition(pins,ref));
+    combined=new ValueCompositions(expressions,profiles,ref->definition(pins,ref),
+        ref->PublishedValueMaps.vocabularyId(text(pins.get(mapCoordinates.get(ref)),"targetVocabulary")));
     Map<String,String> targetLabels=new HashMap<>();
     for(Object raw:list(config.get("dataAccessPolicies"),1,ManagedFileLimits.MAX_COLUMNS)){
       var policy=map(raw);
@@ -150,9 +142,27 @@ final class PublishedDatatypes {
     config.put("semanticReferenceBindings",List.copyOf(pins.values()));
   }
 
+  private static Map<String,Object> resolve(DatatypeResolver registry,Map<String,Object> pin,boolean expectedMap){
+    Map<String,Object> actual;
+    try{
+      actual=registry.resolve(text(pin,"semanticId"),text(pin,"revisionId"),text(pin,"publicationSetId"));
+    }catch(DomainFailure failure){
+      if(expectedMap && "ONB_DATATYPE_UNRESOLVED".equals(failure.code()))throw DatatypeResolver.unresolvedValueMap();
+      throw failure;
+    }
+    if(actual==null || !(actual.get("artifact_type") instanceof String kind) || kind.isBlank()
+        || !pin.get("semanticId").equals(actual.get("semantic_id"))
+        || !pin.get("semanticVersion").equals(actual.get("semantic_version"))
+        || !pin.get("publicationSetId").equals(actual.get("publication_set_id"))
+        || !pin.get("revisionId").equals(actual.get("revision_id")))
+      throw expectedMap?DatatypeResolver.unresolvedValueMap():DatatypeResolver.unresolved();
+    return actual;
+  }
+
   private static Map<?,?> definition(Map<String,Map<String,Object>> pins,String ref){
     var pin=pins.get(ref);
-    if(pin==null || !pin.containsKey("definitionSha256") || !(pin.get("definition") instanceof Map<?,?> definition))throw DatatypeResolver.unresolved();
+    if(pin==null || pin.containsKey("valueMapRef") || !pin.containsKey("definitionSha256")
+        || !(pin.get("definition") instanceof Map<?,?> definition))throw DatatypeResolver.unresolved();
     return definition;
   }
   private static void checkClosure(String ref,Map<String,Map<String,Object>> pins,Set<String> path,int[] leaves,Set<String> referenced){

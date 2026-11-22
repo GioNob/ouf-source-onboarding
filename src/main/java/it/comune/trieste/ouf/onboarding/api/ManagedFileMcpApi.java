@@ -109,7 +109,7 @@ public class ManagedFileMcpApi {
   }
   @PostMapping("/create") public Map<String,Object> create(@RequestBody byte[] raw,HttpServletRequest request){
     if(raw.length>ManagedFileLimits.MAX_MAPPING_ENVELOPE_BYTES)throw new IllegalArgumentException("managed mapping envelope too large");
-    String cap="ouf.managed-source.onboarding.create";
+    String cap=PermissionDelegationVerifier.MANAGED_CREATE_CAPABILITY;
     var delegated=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),cap,raw);
     try {
       JsonNode envelope=json.readTree(raw),args=envelope.required("Arguments");
