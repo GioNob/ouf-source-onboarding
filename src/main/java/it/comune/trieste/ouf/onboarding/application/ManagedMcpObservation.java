@@ -20,12 +20,12 @@ public final class ManagedMcpObservation {
     DEPENDENCY_RECHECK_REQUIRED, READINESS_BUDGET_EXHAUSTED, READINESS_BLOCKED,
     PUBLICATION_ACTIVE, PUBLICATION_SUPERSEDED, PUBLICATION_REVOKED,
     REVIEW_REJECTED, REVIEW_CHANGES_REQUESTED, CANDIDATE_WITHDRAWN,
-    REVISION_COMMAND_ABSENT, CURRENT_REVIEW_REQUIRED, OWNER_ERROR
+    REVISION_COMMAND_ABSENT, CURRENT_REVIEW_REQUIRED, OWNER_ERROR, ONB_PUBLICATION_ENVELOPE_TOO_LARGE
   }
 
   public enum Action {
     READ_AGAIN, READ_DISTINCT_VALUES, PREPARE_REVIEW, WAIT_HUMAN_REVIEW, RENEW_REVIEW,
-    HUMAN_ACTIVATE, HUMAN_RECHECK, HUMAN_GRANT_BUDGET, CREATE_REVISION, REDRAFT_SAME_FILE, NONE
+    HUMAN_ACTIVATE, HUMAN_RECHECK, HUMAN_GRANT_BUDGET, CREATE_REVISION, REDRAFT_SAME_FILE, WITHDRAW_CANDIDATE, NONE
   }
 
   public static Map<String,Object> with(Map<String,Object> body, State state, Reason reason, Action... actions) {
@@ -92,6 +92,8 @@ public final class ManagedMcpObservation {
 
   public static Map<String,Object> version(Map<String,Object> body, boolean revisionAllowed) {
     State state = State.valueOf((String) body.get("state"));
+    if (body.containsKey("publicationEnvelopeBlock"))
+      return with(body, state, Reason.ONB_PUBLICATION_ENVELOPE_TOO_LARGE, Action.WITHDRAW_CANDIDATE);
     Action revision = revisionAllowed ? Action.CREATE_REVISION : Action.NONE;
     return switch (state) {
       case DRAFT -> with(body, state, Reason.DRAFT_READY, Action.PREPARE_REVIEW);

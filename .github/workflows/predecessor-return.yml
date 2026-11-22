@@ -8,7 +8,7 @@ on:
       predecessor:
         description: Deployed predecessor commit (abbreviated or full SHA)
         type: string
-        default: '9eeff596'
+        default: 'a54de876'
         required: true
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        predecessor: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.predecessor) || '["9eeff596","b3f33586"]') }}
+        predecessor: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.predecessor) || '["a54de876","9eeff596"]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     services:

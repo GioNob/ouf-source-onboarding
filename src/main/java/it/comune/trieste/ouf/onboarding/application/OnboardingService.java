@@ -17,11 +17,12 @@ public class OnboardingService {
   private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ConfigurationValidator validator; private final PublishedBundleCompiler bundles;private final RuntimeProjectionService projections;private final SchemaSurveillanceService surveillance;private final UdpIdentityActivationVerifier identityVerifier; private final Duration challengeTtl;
   private final DatatypeResolver datatypeResolver;
   private final ObjectProvider<ManagedFileService> managedFiles;
+  private final RuntimePublicationEnvelope publicationEnvelopes;
   public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,PublishedBundleCompiler bundles,RuntimeProjectionService projections,SchemaSurveillanceService surveillance,UdpIdentityActivationVerifier identityVerifier,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl,
-      DatatypeResolver datatypeResolver,ObjectProvider<ManagedFileService> managedFiles){
+      DatatypeResolver datatypeResolver,ObjectProvider<ManagedFileService> managedFiles,RuntimePublicationEnvelope publicationEnvelopes){
     this.datatypeResolver=datatypeResolver;this.managedFiles=managedFiles;this.db=db;this.json=json;this.hashes=hashes;
     this.validator=validator;this.bundles=bundles;this.projections=projections;this.surveillance=surveillance;
-    this.identityVerifier=identityVerifier;this.challengeTtl=challengeTtl;
+    this.identityVerifier=identityVerifier;this.challengeTtl=challengeTtl;this.publicationEnvelopes=publicationEnvelopes;
   }
 
   @Transactional public Map<String,Object> createSource(String id,String name,String kind,String mode,String owner,Map<String,Object> metadata,Actor actor,String correlation){
@@ -143,6 +144,7 @@ public class OnboardingService {
     int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=clock_timestamp() where challenge_id=:c and "+OPEN_REVIEW_CHALLENGE.formatted("clock_timestamp()"))
       .param("c",challengeId).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).update();
     if(challenge!=1)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");
+    previewPublication(v).requireFits();
     int changed=db.sql("update ouf_onboarding.onboarding_version set state='APPROVED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and source_id=:s and state='IN_REVIEW'")
       .param("v",versionId).param("s",sourceId).update();if(changed!=1)throw invalid("Version must be IN_REVIEW");
     db.sql("insert into ouf_onboarding.approval_decision(decision_id,challenge_id,onboarding_version_id,actor_subject,decision,target_hash,authentication_context_ref) values(:d,:c,:v,:a,'APPROVE',:h,:x)")
@@ -168,8 +170,12 @@ public class OnboardingService {
     }
     surveillance.assertActivationAllowed(sourceId);
     Map<String,Object> v=version(sourceId,versionId);if(!"APPROVED".equals(v.get("state")))throw invalid("Version must be APPROVED");
+    var bundle=compilePublication(v);
+    UUID publicationId=UUID.randomUUID();String checksum=(String)bundle.get("checksum");
+    String storedBundle=storedPublication(bundle);
+    publicationEnvelopes.measure(publicationId,sourceId,versionId,v.get("version"),checksum,storedBundle).requireFits();
     boolean compatible=db.sql("select compatible from ouf_onboarding.consumer_compatibility_attestation where onboarding_version_id=:v and consumer='INGESTION_RUNTIME' and configuration_hash=:h order by created_at desc,attestation_id desc limit 1").param("v",versionId).param("h",v.get("configuration_hash")).query(Boolean.class).optional().orElse(false);if(!compatible)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_INGESTION_COMPAT_REQUIRED","Ingestion Runtime must accept the frozen configuration before activation");
-    @SuppressWarnings("unchecked") Map<String,Object> configuration=(Map<String,Object>)v.get("configuration");ResolutionActivationGate.requireExecutable(configuration,sourceId,String.valueOf(v.get("configuration_hash")),identityVerifier);Map<String,Object> bundle=bundles.compile(sourceId,versionId,v.get("version"),String.valueOf(v.get("configuration_hash")),configuration);String checksum=String.valueOf(bundle.get("checksum"));
+    @SuppressWarnings("unchecked") Map<String,Object> configuration=(Map<String,Object>)v.get("configuration");ResolutionActivationGate.requireExecutable(configuration,sourceId,String.valueOf(v.get("configuration_hash")),identityVerifier);
     if(!revision.isEmpty()&&revision.getFirst().get("replacement_profile_id")!=null){
       var eligible=db.sql("""
           select a.asset_id from ouf_onboarding.file_profile p
@@ -185,10 +191,31 @@ public class OnboardingService {
     }
     db.sql("update ouf_onboarding.published_configuration set active=false where source_id=:s and active=true").param("s",sourceId).update();
     db.sql("update ouf_onboarding.onboarding_version set state='SUPERSEDED',lock_version=lock_version+1,updated_at=transaction_timestamp() where source_id=:s and state='ACTIVE'").param("s",sourceId).update();
-    UUID publicationId=UUID.randomUUID();db.sql("insert into ouf_onboarding.published_configuration(publication_id,source_id,onboarding_version_id,bundle_version,bundle,checksum,active,effective_from) values(:p,:s,:v,:n,cast(:b as jsonb),:h,true,transaction_timestamp())")
-      .param("p",publicationId).param("s",sourceId).param("v",versionId).param("n",v.get("version")).param("b",write(bundle)).param("h",checksum).update();projections.publish(publicationId,bundle);
+    db.sql("insert into ouf_onboarding.published_configuration(publication_id,source_id,onboarding_version_id,bundle_version,bundle,checksum,active,effective_from) values(:p,:s,:v,:n,cast(:b as jsonb),:h,true,transaction_timestamp())")
+      .param("p",publicationId).param("s",sourceId).param("v",versionId).param("n",v.get("version")).param("b",storedBundle).param("h",checksum).update();projections.publish(publicationId,bundle);
     db.sql("update ouf_onboarding.onboarding_version set state='ACTIVE',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and state='APPROVED'").param("v",versionId).update();
     audit(sourceId,versionId,correlation,actor,"VERSION_ACTIVATED",Map.of("checksum",checksum));return activeBundle(sourceId);
+  }
+  RuntimePublicationEnvelope.Size previewPublication(Map<String,Object> version){
+    var bundle=compilePublication(version);
+    // UUIDs and the bundle checksum have fixed-width JSON representations.
+    return publicationEnvelopes.measure(new UUID(0,0),(String)version.get("source_id"),
+        (UUID)version.get("onboarding_version_id"),version.get("version"),bundle.get("checksum"),storedPublication(bundle));
+  }
+
+  void auditEnvelopeWithdrawal(String source,UUID version,Actor actor,String correlation,RuntimePublicationEnvelope.Size size){
+    audit(source,version,correlation,actor,"PUBLICATION_ENVELOPE_WITHDRAWN",
+        Map.of("code",RuntimePublicationEnvelope.TOO_LARGE,"bytes",size.bytes(),"limitBytes",size.limitBytes()));
+  }
+
+  @SuppressWarnings("unchecked") private Map<String,Object> compilePublication(Map<String,Object> version){
+    return bundles.compile((String)version.get("source_id"),(UUID)version.get("onboarding_version_id"),
+        version.get("version"),(String)version.get("configuration_hash"),(Map<String,Object>)version.get("configuration"));
+  }
+
+  private String storedPublication(Map<String,Object> bundle){
+    // The runtime reads JSONB as text. Measure after the same PostgreSQL normalization used by storage.
+    return db.sql("select cast(:bundle as jsonb)::text").param("bundle",write(bundle)).query(String.class).single();
   }
   @Transactional public Map<String,Object> attestIngestionCompatibility(String sourceId,UUID versionId,boolean compatible,String detail,Actor actor,String correlation){
     if(!"SERVICE".equals(actor.type())||!actor.capabilities().contains("ouf.ingestion.configuration.attest"))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_INGESTION_ATTESTATION_AUTHORITY_REQUIRED","Compatibility attestation requires the Authorization-owned Ingestion Runtime capability");Map<String,Object> v=version(sourceId,versionId);if(!Set.of("IN_REVIEW","APPROVED").contains(String.valueOf(v.get("state"))))throw invalid("Compatibility may be attested only for a frozen version");UUID id=UUID.randomUUID();db.sql("insert into ouf_onboarding.consumer_compatibility_attestation(attestation_id,onboarding_version_id,consumer,configuration_hash,compatible,detail,actor_subject) values(:i,:v,'INGESTION_RUNTIME',:h,:c,:d,:a)").param("i",id).param("v",versionId).param("h",v.get("configuration_hash")).param("c",compatible).param("d",detail).param("a",actor.subject()).update();audit(sourceId,versionId,correlation,actor,"INGESTION_COMPAT_ATTESTED",Map.of("compatible",compatible));return db.sql("select attestation_id,onboarding_version_id,consumer,configuration_hash,compatible,detail,actor_subject,created_at from ouf_onboarding.consumer_compatibility_attestation where attestation_id=:i").param("i",id).query().singleRow();

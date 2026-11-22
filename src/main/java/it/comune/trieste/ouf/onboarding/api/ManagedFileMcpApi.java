@@ -135,7 +135,7 @@ public class ManagedFileMcpApi {
       if(draft.assetId()==null||draft.profileId()==null||draft.sourceId()==null||draft.sourceId().isBlank()
           ||draft.name()==null||draft.name().isBlank()||draft.owner()==null||draft.owner().isBlank()
           ||draft.targetClassIri()==null||draft.targetClassIri().isBlank()
-          ||draft.semanticRefs()==null||draft.semanticRefs().isEmpty()||draft.semanticRefs().size()>32
+          ||draft.semanticRefs()==null||draft.semanticRefs().isEmpty()
           ||draft.sourceObjectKeyFields()==null||draft.fields()==null||draft.fields().isEmpty()||draft.fields().size()>ManagedFileLimits.MAX_COLUMNS)
           throw new IllegalArgumentException("explicit field and identity decisions required");
       var actor=new OnboardingService.Actor(delegated.principal().subjectId(),"HUMAN_USER",Set.of(cap));

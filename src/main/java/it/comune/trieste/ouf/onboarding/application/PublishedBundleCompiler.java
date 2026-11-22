@@ -2,12 +2,15 @@ package it.comune.trieste.ouf.onboarding.application;
 
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
 import java.util.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 @Component
 public class PublishedBundleCompiler {
+  private static final DateTimeFormatter PUBLICATION_TIME = new DateTimeFormatterBuilder().appendInstant(9).toFormatter();
   private final CanonicalHashAdapter hashes;
   public PublishedBundleCompiler(it.comune.trieste.ouf.onboarding.domain.CanonicalHash hashes){this.hashes=new CanonicalHashAdapter(hashes);}
 
@@ -28,7 +31,9 @@ public class PublishedBundleCompiler {
     Map<String,Object> sourceType=object(semantic,"sourceType");String typeCode=text(sourceType,"typeCode");
     String schemaRef=Objects.toString(template.get("schemaRef"),"onboarding://sources/"+sourceId+"/schemas/"+typeCode);
     Map<String,Object> objectType=new LinkedHashMap<>();objectType.put("typeCode",typeCode);objectType.put("schemaRef",schemaRef);objectType.put("semanticMappingRef","onboarding://semantic-mappings/"+text(semantic,"mappingId"));if(configuration.get("relationshipMappings") instanceof List<?> relationships)objectType.put("relationshipMappingRefs",relationships.stream().filter(Map.class::isInstance).map(Map.class::cast).map(m->String.valueOf(m.get("mappingId"))).toList());out.put("objectTypes",List.of(objectType));
-    out.put("createdFromOnboardingVersion",versionId.toString());out.put("effectiveFrom",Instant.now().toString());out.put("activatedAt",Instant.now().toString());
+    // Preview and publication use the same timestamp width when measuring the runtime body.
+    String now=PUBLICATION_TIME.format(Instant.now());
+    out.put("createdFromOnboardingVersion",versionId.toString());out.put("effectiveFrom",now);out.put("activatedAt",now);
     out.put("configurationHash",configurationHash);out.put("status","ACTIVE");
     out.put("checksum",hashes.of(out));validate(out);return Collections.unmodifiableMap(out);
   }

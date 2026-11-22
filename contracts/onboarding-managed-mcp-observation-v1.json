@@ -35,6 +35,14 @@
     "observationVersion": {
       "$ref": "#/$defs/observationVersion"
     },
+    "publicationEnvelopeBlock": {
+      "type": "object",
+      "required": ["bytes", "limitBytes"],
+      "properties": {
+        "bytes": {"type": "integer", "minimum": 1},
+        "limitBytes": {"type": "integer", "minimum": 1}
+      }
+    },
     "unchanged": {
       "const": true,
       "description": "Risposta HTTP 200 compatta a un review-read con validator identico."
@@ -136,7 +144,8 @@
         "CANDIDATE_WITHDRAWN",
         "REVISION_COMMAND_ABSENT",
         "CURRENT_REVIEW_REQUIRED",
-        "OWNER_ERROR"
+        "OWNER_ERROR",
+        "ONB_PUBLICATION_ENVELOPE_TOO_LARGE"
       ],
       "x-ouf-semantics": {
         "PROFILE_PENDING": "Il job può avanzare.",
@@ -167,7 +176,8 @@
         "CANDIDATE_WITHDRAWN": "Ritiro registrato.",
         "REVISION_COMMAND_ABSENT": "Il comando non risulta registrato per il riferimento interrogato.",
         "CURRENT_REVIEW_REQUIRED": "Il replay di create restituisce l’identità corrente. Leggere lo stato di revisione per i dettagli.",
-        "OWNER_ERROR": "Errore applicativo. Usare anche il campo code preesistente."
+        "OWNER_ERROR": "Errore applicativo. Usare anche il campo code preesistente.",
+        "ONB_PUBLICATION_ENVELOPE_TOO_LARGE": "La busta serializzata eccede il limite di lettura. Ritirare la proposta e prepararne una più piccola."
       }
     },
     "action": {
@@ -184,6 +194,7 @@
         "HUMAN_GRANT_BUDGET",
         "CREATE_REVISION",
         "REDRAFT_SAME_FILE",
+        "WITHDRAW_CANDIDATE",
         "NONE"
       ],
       "x-ouf-semantics": {
@@ -197,6 +208,7 @@
         "HUMAN_GRANT_BUDGET": "La scheda può ammettere una decisione HUMAN su un nuovo budget finito.",
         "CREATE_REVISION": "Il padre è eleggibile per revision.prepare. Un padre rifiutato richiede un nuovo riferimento a file/profilo.",
         "REDRAFT_SAME_FILE": "La richiesta di revisione può ripartire da source.onboarding.create per la stessa fonte, asset e profilo, con una nuova chiave e decisioni di mapping esplicite.",
+        "WITHDRAW_CANDIDATE": "Ritirare la proposta inedita via source.onboarding.review.prepare con candidateAction WITHDRAW, versione corrente e nuova chiave.",
         "NONE": "Nessuna azione esposta per il risultato corrente. Compare da solo."
       }
     },

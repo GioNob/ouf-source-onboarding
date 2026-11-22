@@ -2,6 +2,45 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {chromium} = require('playwright');
 
+test('task51e-04 · la THS spiega il blocco per dimensione a 375 px', async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const page = await browser.newPage({viewport:{width:375,height:844}});
+    const id = '00000000-0000-4000-8000-000000000002';
+    const card = {challenge_id:id, onboarding_version_id:id, source_id:'luoghi', source_name:'Luoghi civici', version:2,
+      configuration_hash:'sha256:'+'a'.repeat(64), status:'CONFIRMED', onboardingState:'APPROVED', lockVersion:3,
+      progress:{workflowState:'APPROVED', reasonCode:'ONB_PUBLICATION_ENVELOPE_TOO_LARGE',
+        allowedActions:['WITHDRAW_CANDIDATE'], publicationEnvelopeBlock:{bytes:2400000,limitBytes:2097152},
+        activationProgress:{humanActivationAllowed:false,humanRecheckAllowed:false,humanBudgetGrantAvailable:false}}};
+    const posts = [], errors = [];
+    page.on('pageerror', error=>errors.push(error.message));
+    await page.route('**/*', route=>{
+      const url = new URL(route.request().url());
+      assert.equal(url.hostname,'ths.test');
+      if (route.request().method() === 'POST') posts.push(url.pathname);
+      if (url.pathname.includes('/api/')) return route.fulfill({json:{card,csrfHeader:'X-CSRF-TOKEN',csrfToken:'fixture'}});
+      const asset=url.pathname.endsWith('review.js')?'workflow-review.js':url.pathname.endsWith('review.css')?'workflow-review.css':'workflow-review.html';
+      return route.fulfill({body:require('./ths-asset.cjs')(asset),contentType:asset.endsWith('.js')?'text/javascript':asset.endsWith('.css')?'text/css':'text/html'});
+    });
+    await page.goto('https://ths.test/trusted-human/onboarding/?challenge='+id);
+    const heading = page.getByRole('heading',{name:'Pubblicazione troppo grande'});
+    await heading.waitFor();
+    const message = await heading.locator('..').innerText();
+    assert.match(message,/2\.400\.000 byte.*2\.097\.152 byte/);
+    assert.match(message,/non può essere attivata/);
+    assert.match(message,/chiedi all’agente di ritirare questa proposta e preparare una revisione più piccola/);
+    for (const button of ['complete','resume','budget']) assert.ok(await page.locator('#'+button).isDisabled(),button);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+    card.onboardingState='IN_REVIEW'; card.status='CREATED'; card.expires_at=new Date(Date.now()+60_000).toISOString();
+    await page.reload();
+    await page.getByText(/Scegli “Rifiuta” per chiudere questa proposta/).waitFor();
+    assert.ok(await page.locator('#approve').isDisabled());
+    assert.ok(await page.locator('#reject').isEnabled());
+    assert.deepEqual(posts,[]);
+    assert.deepEqual(errors,[]);
+  } finally { await browser.close(); }
+});
+
 test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisione dal rifiuto', async () => {
   const browser = await chromium.launch({headless:true});
   try {

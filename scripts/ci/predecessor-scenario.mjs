@@ -206,7 +206,7 @@ export async function writeCandidate(fixture, {legacyReview, parent, file}) {
   return {review, child, readiness, typed, mapping};
 }
 
-export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child, readiness, typed, mapping}) {
+export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child, readiness, typed, mapping}, predecessorHasDistinctValues) {
   assert.deepEqual((await version(fixture, typed)).configuration.semanticMapping, mapping);
   const original = await version(fixture, legacy);
   assert.equal(original.configuration_hash, legacyReview.configurationHash);
@@ -218,7 +218,7 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.equal(rejected.state, 'REJECTED');
   assert.equal(rejected.configuration_hash, review.configurationHash);
   const {card} = await openCard(fixture, review);
-  // The V43 predecessors (b3f33586 and 9eeff596) project a rejection with review notes as CHANGES_REQUESTED,
+  // Both predecessors project a rejection with review notes as CHANGES_REQUESTED,
   // both in the progress and in the card state derived from it (the version row stays REJECTED, checked above).
   assert.equal(card.onboardingState, 'CHANGES_REQUESTED');
   assert.equal(card.progress.state, 'CHANGES_REQUESTED');
@@ -227,10 +227,10 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.equal(row.parent_version_id, parent.onboardingVersionId);
   assert.equal(row.state, 'DRAFT');
   // Reconcile a candidate command, then exercise a new predecessor write and its identical retry.
-  // The candidate adds the D-085 observation fields; the predecessor replays the same command with its V43 shape.
+  // The older V43 predecessor replays the command without the additive D-085 observation fields.
   const additive = new Set(['workflowState', 'reasonCode', 'allowedActions', 'lockVersion']);
   assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'),
-    Object.fromEntries(Object.entries(child).filter(([key]) => !additive.has(key))));
+    predecessorHasDistinctValues ? child : Object.fromEntries(Object.entries(child).filter(([key]) => !additive.has(key))));
   const prepared = await prepare(fixture, child, 'return-review');
   assert.equal(prepared.state, 'IN_REVIEW');
   assert.equal(prepared.challengeStatus, 'CREATED');

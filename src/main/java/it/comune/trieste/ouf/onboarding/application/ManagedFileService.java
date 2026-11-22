@@ -460,10 +460,10 @@ public class ManagedFileService {
         select v.onboarding_version_id from ouf_onboarding.onboarding_version v
         join ouf_onboarding.source s using(source_id)
         join ouf_onboarding.managed_onboarding_review r using(onboarding_version_id,source_id)
-        join ouf_onboarding.approval_decision d on d.challenge_id=r.challenge_id and d.target_hash=v.configuration_hash
         left join ouf_onboarding.source_property_revision base on base.onboarding_version_id=v.onboarding_version_id
         left join ouf_onboarding.onboarding_version anchor on anchor.onboarding_version_id=base.parent_version_id
-        where v.source_id=:s and v.state='REJECTED' and d.decision='REJECT' and s.status<>'DISABLED'
+        left join ouf_onboarding.managed_candidate_recovery w on w.candidate_id=v.onboarding_version_id and w.operation='WITHDRAW'
+        where v.source_id=:s and v.state='REJECTED' and s.status<>'DISABLED'
           and r.tenant_id=:tenant and r.subject_id=:subject and s.owner_ref=:owner and s.name=:name
           and (s.metadata->>'managedFileAssetId'=:asset or base.replacement_profile_id=cast(:profile as uuid)
             or (base.replacement_profile_id is null and anchor.configuration #>> '{extractionProfile,selection,assetId}'=:asset
@@ -477,7 +477,10 @@ public class ManagedFileService {
             and (other.version>v.version or other.state in ('DRAFT','IN_REVIEW','APPROVED','REVOKED')
               or (other.state='ACTIVE' and other.onboarding_version_id is distinct from base.parent_version_id)))
           and (base.parent_state_at_prepare='ACTIVE' or not exists(select 1 from ouf_onboarding.published_configuration where source_id=:s))
-          and not exists(select 1 from ouf_onboarding.managed_candidate_recovery w where w.candidate_id=v.onboarding_version_id and w.operation='WITHDRAW')
+          and ((w.candidate_id is null and exists(select 1 from ouf_onboarding.approval_decision d
+                  where d.challenge_id=r.challenge_id and d.target_hash=v.configuration_hash and d.decision='REJECT'))
+            or (w.candidate_id is not null and exists(select 1 from ouf_onboarding.audit_event e
+                  where e.onboarding_version_id=v.onboarding_version_id and e.event_type='PUBLICATION_ENVELOPE_WITHDRAWN')))
         """).param("s",source).param("asset",asset).param("profile",profile)
         .param("name",name).param("owner",owner).param("tenant",tenant).param("subject",subject).query(UUID.class).optional().orElse(null);
   }

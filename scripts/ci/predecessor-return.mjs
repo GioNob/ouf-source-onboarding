@@ -97,7 +97,9 @@ try {
   assert.equal(sql("select to_regclass('ouf_onboarding.flyway_schema_history') is null"), 't');
   const old = run(previous);
   await ready(old, 'predecessor on empty database');
-  const baseline = history('43');
+  const baseline = history();
+  const predecessorHasDistinctValues = baseline.at(-1).version === '45';
+  assert.ok(predecessorHasDistinctValues || baseline.at(-1).version === '43');
   // Seed only the isolated IAM policy; the runtime writes every onboarding row through HTTP.
   const bundle = policy(), payload = JSON.stringify(bundle);
   assert.ok(!payload.includes("'"));
@@ -114,8 +116,8 @@ try {
   const next = run(candidate);
   await ready(next, 'candidate on populated database');
   const candidateHistory = history('45');
-  assert.deepEqual(candidateHistory.slice(0, -2), baseline, 'candidate must retain the exact deployed migration history');
-  assert.deepEqual(candidateHistory.slice(-2).map(row => row.script),
+  assert.deepEqual(candidateHistory.slice(0, baseline.length), baseline, 'candidate must retain the exact deployed migration history');
+  assert.deepEqual(candidateHistory.slice(baseline.length).map(row => row.script), predecessorHasDistinctValues ? [] :
     ['V44__managed_profile_distinct_values.sql', 'V45__managed_value_map_preparation.sql']);
   const result = await writeCandidate(fixture, seed);
   function distinctProfile(profileId) {
@@ -143,9 +145,11 @@ try {
   docker('start', old);
   assert.equal(docker('inspect', '-f', '{{.Image}}', old), previous);
   await ready(old, 'predecessor return on candidate data');
-  const returnedProfile = await verifyReturn(fixture, seed, result);
+  const returnedProfile = await verifyReturn(fixture, seed, result, predecessorHasDistinctValues);
   assert.equal(distinctProfile(result.typed.profileId), valueEvidence);
-  assert.equal(distinctProfile(returnedProfile.profileId), 'NULL');
+  const returnedValues = distinctProfile(returnedProfile.profileId);
+  if (predecessorHasDistinctValues) assert.deepEqual(JSON.parse(returnedValues), JSON.parse(valueEvidence));
+  else assert.equal(returnedValues, 'NULL');
   assert.equal(sql(`select parent_version_id from ouf_onboarding.onboarding_version where onboarding_version_id='${result.child.onboardingVersionId}'`),
     seed.parent.onboardingVersionId, 'child draft keeps its parent link after the return');
   assert.deepEqual(history('45'), candidateHistory);
