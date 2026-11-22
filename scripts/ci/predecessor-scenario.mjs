@@ -195,7 +195,8 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.equal(rejected.configuration_hash, review.configurationHash);
   const {card} = await openCard(fixture, review);
   assert.equal(card.onboardingState, 'REJECTED');
-  assert.equal(card.progress.state, 'REJECTED');
+  // The predecessor in production (b3f33586, V43) projects a rejection with review notes as CHANGES_REQUESTED.
+  assert.equal(card.progress.state, 'CHANGES_REQUESTED');
   assert.equal(card.progress.challengeStatus, 'CANCELLED');
   const row = await version(fixture, child);
   assert.equal(row.parent_version_id, parent.onboardingVersionId);
