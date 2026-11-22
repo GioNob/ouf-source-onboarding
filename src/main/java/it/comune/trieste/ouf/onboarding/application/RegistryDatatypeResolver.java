@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.onboarding.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import static it.comune.trieste.ouf.onboarding.application.DatatypeResolver.unresolved;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import org.springframework.http.HttpStatus;
@@ -56,8 +57,7 @@ final class RegistryDatatypeResolver implements DatatypeResolver {
         int status=response.getStatusCode().value();
         if(Set.of(408,429,502,503,504).contains(status)){
           int retryAfter=ManagedActivationCoordinator.retryAfter(Objects.toString(response.getHeaders().getFirst("Retry-After"),""));
-          throw new DomainFailure(HttpStatus.SERVICE_UNAVAILABLE,"ONB_DATATYPE_LOOKUP_UNAVAILABLE","Registry read temporarily unavailable",
-              Map.of("retryAfterSeconds",retryAfter));
+          throw unavailable(retryAfter);
         }
         if(status!=200)throw unresolved();
         // references:resolve can include the Registry's bounded RDF snapshot in addition to the definition.
@@ -65,8 +65,19 @@ final class RegistryDatatypeResolver implements DatatypeResolver {
         if(response.getHeaders().getContentLength()>limit)throw unresolved();
         byte[] body=response.getBody().readNBytes(limit+1);
         if(body.length>limit)throw unresolved();
-        return json.readValue(body,Map.class);
+        try{return json.readValue(body,Map.class);}
+        catch(JsonProcessingException malformed){throw unresolved();}
       });
+    }catch(ResourceAccessException failure){
+      for(Throwable cause=failure;cause!=null;cause=cause.getCause())
+        if(cause instanceof ConnectException || cause instanceof SocketTimeoutException
+            || cause instanceof java.net.http.HttpTimeoutException)throw unavailable(0);
+      throw unresolved();
     }catch(RestClientException|IllegalArgumentException failure){throw unresolved();}
+  }
+
+  private static DomainFailure unavailable(int retryAfter){
+    return new DomainFailure(HttpStatus.SERVICE_UNAVAILABLE,"ONB_DATATYPE_LOOKUP_UNAVAILABLE",
+        "Registry read temporarily unavailable",Map.of("retryAfterSeconds",retryAfter));
   }
 }

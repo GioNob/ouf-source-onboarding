@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.onboarding.application;
 import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.util.*;
+import java.util.function.BiConsumer;
 import org.springframework.http.HttpStatus;
 import static it.comune.trieste.ouf.onboarding.application.ValueCompositions.*;
 
@@ -23,6 +24,31 @@ final class PublishedDatatypes {
         .anyMatch(p->p.containsKey("transformParams") || p.get("transform") instanceof String reader && !legacy.contains(reader));
   }
   static void prepare(Map<String,Object> config,Map<String,String> profiles,DatatypeResolver registry,CanonicalHash hashes){
+    prepare(config,profiles,registry,hashes,(ref,digest)->{});
+  }
+
+  /** Exact map selection is independent of the order of the bindings and the command key. */
+  static List<List<Object>> valueMapSelection(Map<String,Object> config){
+    var mapping=ManagedReviewSnapshot.child(config,"semanticMapping");
+    var extraction=ManagedReviewSnapshot.child(config,"extractionProfile");
+    var bindings=ManagedReviewSnapshot.list(config.get("semanticReferenceBindings"));
+    if(bindings.isEmpty() || !requiresPreparation(mapping,extraction,bindings))return List.of();
+    Map<String,String> fields=new HashMap<>();
+    ManagedReviewSnapshot.list(ManagedReviewSnapshot.child(extraction,"projection").get("FILE"))
+        .forEach(field->fields.put((String)field,null));
+    var expressions=mapping.containsKey("compositions")?mapping.get("compositions"):List.of();
+    var combined=new ValueCompositions(expressions,fields,null);
+    var refs=valueMapRefs(mapping,combined);
+    return bindings.stream().map(ManagedReviewSnapshot::object)
+        .filter(pin->pin.containsKey("valueMapRef") || refs.contains(pin.get("semanticId"))
+            || refs.contains(pin.get("semanticId")+"@"+pin.get("publicationSetId")))
+        .map(pin->Arrays.asList(pin.get("semanticId"),pin.get("publicationSetId"),pin.get("revisionId"),pin.get("semanticVersion")))
+        .sorted(Comparator.comparing((List<Object> pin)->String.valueOf(pin.get(0)))
+            .thenComparing(pin->String.valueOf(pin.get(1)))).toList();
+  }
+
+  static void prepare(Map<String,Object> config,Map<String,String> profiles,DatatypeResolver registry,CanonicalHash hashes,
+      BiConsumer<String,String> verifiedValueMap){
     var mapping=map(config.get("semanticMapping"));
     var refs=list(mapping.get("semanticRefs"),1,32);
     Map<String,Map<String,Object>> pins=new LinkedHashMap<>();
@@ -52,15 +78,8 @@ final class PublishedDatatypes {
     require(versions.size()==refs.size() && versions.containsAll(refs));
     Object expressions=mapping.containsKey("compositions")?mapping.get("compositions"):List.of();
     var combined=new ValueCompositions(expressions,profiles,null);
-    var mapRefs=new LinkedHashSet<>(combined.valueMapRefs);
-    for(Object raw:list(mapping.get("propertyMappings"),0,ManagedFileLimits.MAX_COLUMNS)){
-      var property=map(raw);
-      var reader=ValueReader.named(text(property,"transform"));
-      var params=reader.mappingParameters(property);
-      if(reader==ValueReader.VALUE_MAP_V1)mapRefs.add((String)params.get("valueMapRef"));
-    }
     Map<String,String> mapCoordinates=new HashMap<>();
-    for(String ref:mapRefs)mapCoordinates.put(ref,PublishedValueMaps.coordinate(ref,pins));
+    for(String ref:valueMapRefs(mapping,combined))mapCoordinates.put(ref,PublishedValueMaps.coordinate(ref,pins));
     var mapPins=new HashSet<>(mapCoordinates.values());
     mapPins.addAll(retainedVocabularies.keySet());
     mapPins.addAll(retainedTargets.keySet());
@@ -96,6 +115,7 @@ final class PublishedDatatypes {
       if((retainedDefinitions.containsKey(ref) && !Objects.equals(retainedDefinitions.get(ref),pin.get("definition")))
           || (retainedDigests.containsKey(ref) && !Objects.equals(retainedDigests.get(ref),pin.get("definitionSha256"))))
         throw valueMap?DatatypeResolver.unresolvedValueMap():DatatypeResolver.unresolved();
+      if(valueMap)verifiedValueMap.accept(ref,text(pin,"definitionSha256"));
       if(combined.labels.containsKey(pin.get("semanticId")) && !"PROPERTY".equals(kind))throw DatatypeResolver.unresolved();
     }
     var mappedTypes=new HashSet<>(combined.typeRefs);
@@ -145,6 +165,17 @@ final class PublishedDatatypes {
       }
     }
     config.put("semanticReferenceBindings",List.copyOf(pins.values()));
+  }
+
+  private static Set<String> valueMapRefs(Map<?,?> mapping,ValueCompositions combined){
+    var refs=new LinkedHashSet<>(combined.valueMapRefs);
+    for(Object raw:list(mapping.get("propertyMappings"),0,ManagedFileLimits.MAX_COLUMNS)){
+      var property=map(raw);
+      var reader=ValueReader.named(text(property,"transform"));
+      var params=reader.mappingParameters(property);
+      if(reader==ValueReader.VALUE_MAP_V1)refs.add((String)params.get("valueMapRef"));
+    }
+    return refs;
   }
 
   private static Map<String,Object> resolve(DatatypeResolver registry,Map<String,Object> pin,boolean expectedMap){

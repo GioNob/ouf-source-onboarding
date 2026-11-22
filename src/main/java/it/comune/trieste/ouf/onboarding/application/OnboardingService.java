@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.domain.*;
 import java.time.*;
 import java.util.*;
+import java.util.function.BiConsumer;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -79,6 +80,18 @@ public class OnboardingService {
     }else if(ManagedReviewSnapshot.list(prior).stream().map(ManagedReviewSnapshot::object).anyMatch(PublishedDatatypes::hasPinnedEvidence)){
       throw DatatypeResolver.unresolved();
     }
+    return freezeVerifiedDraft(sourceId,id,expected,current,actor,correlation);
+  }
+
+  Map<String,Object> verifyValueMapDraft(String sourceId,Map<String,Object> draft,BiConsumer<String,String> observed){
+    var verified=new LinkedHashMap<>(draft);
+    var profiles=managedFiles.getObject().projectedTypes(sourceId,ManagedReviewSnapshot.child(draft,"extractionProfile"));
+    PublishedDatatypes.prepare(verified,profiles,datatypeResolver,hashes,observed);
+    return verified;
+  }
+
+  /** Caller has verified the bindings and persists the matching draft in the same transaction. */
+  Map<String,Object> freezeVerifiedDraft(String sourceId,UUID id,long expected,Map<String,Object> current,Actor actor,String correlation){
     Map<String,Object> validation=validate(sourceId,id,actor,correlation);if(!"PASS".equals(validation.get("result")))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALIDATION_FAILED","Configuration contains blocking validation errors");String hash=hashes.of(current.get("configuration"));
     if(db.sql("""
         select exists(select 1 from ouf_onboarding.managed_candidate_recovery w
@@ -122,10 +135,12 @@ public class OnboardingService {
     ConfigurationValidator.spatial(configuration).ifPresent(profile->{response.put("spatialDecision",profile);response.put("spatialDecisionFindings",validator.validate(sourceId,configuration).findings().stream().filter(f->f.path().startsWith("/extractionProfile/runtime/udp/spatial")).toList());});return response;
   }
 
+  static final String OPEN_REVIEW_CHALLENGE = "onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>%s and configuration_hash=:h";
+
   @Transactional public Map<String,Object> confirm(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){
     if(!"HUMAN_USER".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_HUMAN_APPROVAL_REQUIRED","Approval requires a HUMAN_USER identity");
     Map<String,Object> v=lockChallengeVersion(sourceId,versionId);
-    int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=clock_timestamp() where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>clock_timestamp() and configuration_hash=:h")
+    int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=clock_timestamp() where challenge_id=:c and "+OPEN_REVIEW_CHALLENGE.formatted("clock_timestamp()"))
       .param("c",challengeId).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).update();
     if(challenge!=1)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");
     int changed=db.sql("update ouf_onboarding.onboarding_version set state='APPROVED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and source_id=:s and state='IN_REVIEW'")
@@ -222,9 +237,9 @@ public class OnboardingService {
     var version=lockChallengeVersion(sourceId,versionId);
     int closed=db.sql("""
         update ouf_onboarding.approval_challenge set status='CANCELLED'
-        where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED'
-          and expires_at>clock_timestamp() and configuration_hash=:h
-        """).param("c",challengeId).param("s",sourceId).param("v",versionId).param("h",version.get("configuration_hash")).update();
+        where challenge_id=:c and
+        """+OPEN_REVIEW_CHALLENGE.formatted("clock_timestamp()"))
+        .param("c",challengeId).param("s",sourceId).param("v",versionId).param("h",version.get("configuration_hash")).update();
     if(closed!=1||!"IN_REVIEW".equals(version.get("state")))throw new DomainFailure(HttpStatus.CONFLICT,
         "ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");
     db.sql("update ouf_onboarding.onboarding_version set state='REJECTED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v")

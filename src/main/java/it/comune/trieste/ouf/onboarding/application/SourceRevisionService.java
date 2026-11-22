@@ -77,7 +77,7 @@ public class SourceRevisionService {
     out.put("sourceId",source);out.put("onboardingVersionId",version);out.put("state",current.get("state"));
     out.put("lockVersion",current.get("lock_version"));out.put("configurationHash",current.get("configuration_hash"));
     out.put("propertyRules",properties(configuration(current)));
-    out.put("publicationEffects",effects());return out;
+    out.put("publicationEffects",effects());return ManagedMcpObservation.version(out, revisionEligible(db,current));
   }
   @Transactional(timeout=8) public Map<String,Object> prepare(PrincipalContext p,Prepare r,String correlation){
     if(r==null)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
@@ -103,18 +103,11 @@ public class SourceRevisionService {
     lock(r.sourceId());
     db.sql("select source_id from ouf_onboarding.source where source_id=:s for update").param("s",r.sourceId()).query(String.class).single();
     var parent=onboarding.version(r.sourceId(),r.parentVersionId());
-    boolean initialRejection="REJECTED".equals(parent.get("state"))&&r.assetRef()!=null
-        &&db.sql("""
-            select not exists(select 1 from ouf_onboarding.published_configuration where source_id=:s)
-              and not exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s
-                and (version>:n or state in ('ACTIVE','REVOKED')))
-            """).param("s",r.sourceId()).param("n",parent.get("version")).query(Boolean.class).single();
-    if((!"ACTIVE".equals(parent.get("state"))&&!initialRejection)||((Number)parent.get("lock_version")).longValue()!=r.expectedVersion()
+    if(!revisionParent(db,parent,r.assetRef()!=null)||((Number)parent.get("lock_version")).longValue()!=r.expectedVersion()
         ||!r.configurationHash().equals(parent.get("configuration_hash"))
         ||!r.configurationHash().equals(hashes.of(parent.get("configuration"))))
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVISION_PARENT_DRIFT");
-    if(db.sql("select count(*) from ouf_onboarding.onboarding_version where source_id=:s and state in ('DRAFT','IN_REVIEW','APPROVED')")
-        .param("s",r.sourceId()).query(Long.class).single()!=0)
+    if(revisionOpen(db,r.sourceId()))
       throw fail(HttpStatus.CONFLICT,"ONB_REVISION_OPEN_VERSION_EXISTS");
     var actor=new OnboardingService.Actor(p.subjectId(),"HUMAN_USER",Set.of(PREPARE));
     var draft=onboarding.cloneVersion(r.sourceId(),r.parentVersionId(),actor,correlation);
@@ -190,13 +183,33 @@ public class SourceRevisionService {
       db.sql("update ouf_onboarding.managed_file_asset set source_id=:s where asset_id=:a and source_id is null")
           .param("s",source).param("a",ref.assetId()).update();
   }
+  private static boolean revisionParent(JdbcClient db,Map<String,Object> parent,boolean replacementAsset) {
+    if ("ACTIVE".equals(parent.get("state"))) return true;
+    return replacementAsset && "REJECTED".equals(parent.get("state")) && db.sql("""
+        select not exists(select 1 from ouf_onboarding.published_configuration where source_id=:s)
+          and not exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s
+            and (version>:n or state in ('ACTIVE','REVOKED')))
+        """).param("s",parent.get("source_id")).param("n",parent.get("version")).query(Boolean.class).single();
+  }
+
+  private static boolean revisionOpen(JdbcClient db,Object source) {
+    return db.sql("select exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s and state in ('DRAFT','IN_REVIEW','APPROVED'))")
+        .param("s",source).query(Boolean.class).single();
+  }
+
+  static boolean revisionEligible(JdbcClient db,Map<String,Object> parent) {
+    return revisionParent(db,parent,true) && !revisionOpen(db,parent.get("source_id"));
+  }
+
   /** Lost-response reconciliation is keyed by the original command, never by an unknown new version ID. */
   @Transactional public Map<String,Object> readCommand(PrincipalContext p,String source,UUID parent,String key){
     authorize(p,READ,"READ",source,parent);
     if(key==null||!key.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
     var rows=db.sql("select * from ouf_onboarding.source_property_revision where tenant_id=:t and subject_id=:u and command_key=:k and source_id=:s and parent_version_id=:p")
         .param("t",p.tenantId()).param("u",p.subjectId()).param("k",key).param("s",source).param("p",parent).query().listOfRows();
-    if(rows.isEmpty())return Map.of("sourceId",source,"parentVersionId",parent,"commandKey",key,"commandState","ABSENT","newCommandAuthorized",false);
+    if(rows.isEmpty())return ManagedMcpObservation.with(
+        Map.of("sourceId",source,"parentVersionId",parent,"commandKey",key,"commandState","ABSENT","newCommandAuthorized",false),
+        ManagedMcpObservation.State.COMMAND_ABSENT,ManagedMcpObservation.Reason.REVISION_COMMAND_ABSENT);
     var row=rows.getFirst();return receipt(onboarding.version(source,(UUID)row.get("onboarding_version_id")),row);
   }
   private void lock(String value){db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:s,0))) locked").param("s",value).query(Integer.class).single();}

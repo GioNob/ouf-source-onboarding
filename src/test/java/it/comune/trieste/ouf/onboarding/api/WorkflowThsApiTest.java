@@ -80,6 +80,30 @@ class WorkflowThsApiTest {
       assertThatThrownBy(()->api.card("semantic",id,request)).hasMessageContaining("THS_SESSION_REQUIRED");
     }finally{SecurityContextHolder.clearContext();server.stop(0);}
   }
+
+  @Test void semanticCardPropagatesOwnerDenialForAnotherTenant() throws Exception {
+    var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    var challenge = UUID.randomUUID();
+    var bearer = new AtomicReference<String>();
+    server.createContext("/api/trusted-human/v1/semantic-approval-challenges/" + challenge, exchange -> {
+      bearer.set(exchange.getRequestHeaders().getFirst("Authorization"));
+      exchange.sendResponseHeaders(403, -1);
+      exchange.close();
+    });
+    server.start();
+    try {
+      var clients = mock(OAuth2AuthorizedClientService.class);
+      var request = session(clients);
+      var api = new WorkflowThsApi(clients, new ObjectMapper(), "http://127.0.0.1:" + server.getAddress().getPort());
+      var response = api.card("semantic", challenge, request);
+      assertThat(response.getStatusCode().value()).isEqualTo(403);
+      assertThat(bearer.get()).isEqualTo("Bearer private-human-token");
+    } finally {
+      SecurityContextHolder.clearContext();
+      server.stop(0);
+    }
+  }
+
   @Test void onboardingReadsPinnedPublishedTermsWithHumanTokenAndRechecksBeforeConfirm()throws Exception{
     var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
     var json=new ObjectMapper();

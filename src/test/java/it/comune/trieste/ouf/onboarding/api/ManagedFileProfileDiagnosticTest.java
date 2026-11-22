@@ -23,7 +23,8 @@ class ManagedFileProfileDiagnosticTest {
   when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.preview",raw)).thenReturn(new PermissionDelegationVerifier.Delegated(p,"idem"));
   when(files.profileJob(asset,job)).thenReturn(Map.of("jobId",job,"status","FAILED","errorCode","ONB_FILE_PROFILE_FAILED","last_error","Gateway object read failed with status 401","staging_ref","object://PRIVATE_CANARY","claimed_by","PRIVATE_WORKER"));
   var out=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class)).preview(raw,request);
-  assertThat(out).containsOnlyKeys("jobId","status","resultRef","errorCode","diagnosticCategory").containsEntry("diagnosticCategory","OBJECT_READ_AUTHENTICATION_REQUIRED");
+  assertThat(out).containsOnlyKeys("jobId","status","resultRef","errorCode","diagnosticCategory",
+      "workflowState","reasonCode","allowedActions").containsEntry("diagnosticCategory","OBJECT_READ_AUTHENTICATION_REQUIRED");
   assertThat(out.toString()).doesNotContain("PRIVATE_CANARY","PRIVATE_WORKER","Gateway object read");
   var order=inOrder(files);order.verify(files).requireOwner(asset,"human:alice");order.verify(files).profileJob(asset,job);
   doThrow(new SecurityException("owner denied")).when(files).requireOwner(asset,"human:alice");

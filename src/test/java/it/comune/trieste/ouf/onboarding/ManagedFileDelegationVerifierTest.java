@@ -85,10 +85,14 @@ class ManagedFileDelegationVerifierTest {
   }
 
   private static String sign(ObjectMapper json,byte[] key,String path,String cap,byte[] body)throws Exception{
+    return sign(json,key,path,cap,body,"tenant-a","human:alice");
+  }
+
+  static String sign(ObjectMapper json,byte[] key,String path,String cap,byte[] body,String tenant,String subject)throws Exception{
     long now=Instant.now().getEpochSecond();
     var payload=new PermissionDelegationVerifier.Receipt(1,"managed-file-owner","POST",path,
         HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body)),cap,now,now+25,
-        "https://iam.example/realm","ouf-gateway","ouf-mcp-server","human:alice","tenant-a","1","",cap,"profile-once");
+        "https://iam.example/realm","ouf-gateway","ouf-mcp-server",subject,tenant,"1","",cap,"profile-once");
     String encoded=Base64.getUrlEncoder().withoutPadding().encodeToString(json.writeValueAsBytes(payload));
     Mac hmac=Mac.getInstance("HmacSHA256");hmac.init(new SecretKeySpec(key,"HmacSHA256"));
     String signature=Base64.getUrlEncoder().withoutPadding().encodeToString(hmac.doFinal(("ouf-managed-file-owner-v1."+encoded).getBytes(StandardCharsets.US_ASCII)));

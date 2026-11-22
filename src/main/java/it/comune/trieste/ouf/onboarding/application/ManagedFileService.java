@@ -41,6 +41,21 @@ public class ManagedFileService {
     return db.sql("select 1 from ouf_onboarding.managed_file_asset a where a.asset_id=:asset and "+TENANT_OWNER_PREDICATE)
         .param("asset",asset).param("tenant",tenant).param("subject",subject).query(Integer.class).optional().isPresent();
   }
+  public void requireManagedSourceOwner(String sourceId,String tenant,String subject){
+    boolean proven=db.sql("""
+        select 1 from ouf_onboarding.source s
+        join ouf_onboarding.managed_file_asset a on a.asset_id=case
+          when s.metadata->>'managedFileAssetId' ~ '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+          then (s.metadata->>'managedFileAssetId')::uuid end
+        where s.source_id=:source and a.source_id=s.source_id
+          and s.source_kind='INTERNAL_MANAGED' and s.acquisition_mode='MANAGED'
+          and (not(jsonb_exists(s.metadata,'managedTenantId')) or s.metadata->>'managedTenantId'=:tenant)
+          and
+        """+TENANT_OWNER_PREDICATE)
+        .param("source",sourceId).param("tenant",tenant).param("subject",subject).query(Integer.class).optional().isPresent();
+    if(!proven)throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_THS_LINK_SOURCE_SCOPE_UNPROVEN",
+        "Managed source owner scope is not proven");
+  }
   /** Only durable tenant+subject proofs; legacy unbound assets are not inferred. */
   public Map<String,Object> ownedAssets(String tenant,String subject,int limit,UUID after){
     if(tenant==null||tenant.isBlank()||subject==null||subject.isBlank()||limit<1||limit>50)throw invalid("ONB_FILE_ASSET_QUERY_INVALID","Bounded authenticated owner query required");
@@ -88,7 +103,8 @@ public class ManagedFileService {
   }
   private static final long MAX_PROFILE_BYTES=10L*1024*1024;
   private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ManagedFileProfiler profiler; private final TransactionTemplate tx; private final OnboardingService onboarding; private final ManagedProfileJobs profileJobs;
-  public ManagedFileService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ManagedFileProfiler profiler,TransactionTemplate tx,OnboardingService onboarding,ManagedProfileJobs profileJobs){this.db=db;this.json=json;this.hashes=hashes;this.profiler=profiler;this.tx=tx;this.onboarding=onboarding;this.profileJobs=profileJobs;}
+  private final ManagedPreviewPaging previewPaging;
+  public ManagedFileService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ManagedFileProfiler profiler,TransactionTemplate tx,OnboardingService onboarding,ManagedProfileJobs profileJobs,ManagedPreviewPaging previewPaging){this.db=db;this.json=json;this.hashes=hashes;this.profiler=profiler;this.tx=tx;this.onboarding=onboarding;this.profileJobs=profileJobs;this.previewPaging=previewPaging;}
   public Map<String,Object> register(String sourceId,String stagingRef,String contentHash,String mediaType,long size,String uploadedBy,String retentionRef){
     return registerBound(sourceId,stagingRef,contentHash,mediaType,size,uploadedBy,retentionRef,null,null);
   }
@@ -246,7 +262,6 @@ public class ManagedFileService {
   public Map<String,Object> asset(UUID id){return db.sql("select asset_id,display_name,source_id,staging_ref,content_hash,media_type,size_bytes,uploaded_by,retention_ref,status,created_at from ouf_onboarding.managed_file_asset where asset_id=:i").param("i",id).query().listOfRows().stream().findFirst().orElseThrow(()->new DomainFailure(HttpStatus.NOT_FOUND,"ONB_FILE_ASSET_NOT_FOUND","Managed file asset not found"));}
   public Map<String,Object> fileProfile(UUID asset,UUID profile){return jsonRow(db.sql("select profile_id,asset_id,version,format,metadata::text metadata,inferred_schema::text inferred_schema,candidate_keys::text candidate_keys,sample_ref,redacted_sample::text redacted_sample,created_at from ouf_onboarding.file_profile where asset_id=:a and profile_id=:p").param("a",asset).param("p",profile).query().listOfRows().stream().findFirst().orElseThrow(()->new DomainFailure(HttpStatus.NOT_FOUND,"ONB_FILE_PROFILE_NOT_FOUND","File profile not found")),"metadata","inferred_schema","candidate_keys","redacted_sample");}
 
-  private static final int MAX_PROFILE_PREVIEW_BYTES=1_048_576;
   private Map<String,Map<String,List<String>>> distinctCellValues(UUID assetId,UUID profileId){
     var retained=db.sql("select distinct_cell_values from ouf_onboarding.file_profile where asset_id=:a and profile_id=:p and distinct_cell_values is not null")
         .param("a",assetId).param("p",profileId).query(String.class).optional();
@@ -254,71 +269,31 @@ public class ManagedFileService {
     try{return json.readValue(retained.get(),new TypeReference<>(){});}
     catch(JsonProcessingException failure){throw new IllegalStateException("managed profile distinct values are unreadable");}
   }
-  private static Map<Object,Object> profileColumn(Map<?,?> column,Map<?,?> values){
-    var result=new LinkedHashMap<Object,Object>(column);
-    result.put("distinctCount",result.remove("distinctValues"));
-    if(values.containsKey(column.get("name")))result.put("distinctValues",values.get(column.get("name")));
-    return result;
-  }
-  private int previewBytes(Object value){
-    try{return json.writeValueAsBytes(value).length;}
-    catch(JsonProcessingException failure){throw new IllegalStateException("managed profile serialization failed");}
+  public Map<String,Object> previewProfile(UUID assetId,UUID profileId,String tenant,String subject){
+    return previewProfile(assetId,profileId,tenant,subject,null);
   }
 
-  /** Result of source.file.profile, read with a fresh delegated preview receipt. */
-  public Map<String,Object> previewProfile(UUID assetId,UUID profileId,String tenant,String subject){
-    Map<String,Object> out=preview(assetId,profileId);
+  /** Fit the profile against the actual response envelope, including a job summary when supplied. */
+  public Map<String,Object> previewProfile(UUID assetId,UUID profileId,String tenant,String subject,Map<String,Object> job){
+    Map<String,Object> retained=preview(assetId,profileId);
     // Legacy subject-owned previews may have no tenant proof. Their counts and samples remain available.
     Map<String,Map<String,List<String>>> distinct=tenantOwnerProven(assetId,tenant,subject)?distinctCellValues(assetId,profileId):Map.of();
-    var schema=ManagedReviewSnapshot.list(out.get("columns"));
-    var values=distinct.getOrDefault(ManagedFileProfiler.FLAT_PROFILE,Map.of());
-    out.put("columns",profileColumns(schema,values));
-    if(Set.of("CSV","XLSX").contains(out.get("format")) && !values.isEmpty() && previewBytes(out)>MAX_PROFILE_PREVIEW_BYTES)
-      out.put("columns",profileColumns(schema,Map.of())); // Fetch the lists via the existing COLUMNS view.
-    var metadata=ManagedReviewSnapshot.object(out.get("metadata"));
-    if(metadata.get("layers") instanceof List<?> layers){
-      var projected=new LinkedHashMap<Object,Object>(metadata);
-      projected.put("layers",layers.stream().map(raw->{
-        var layer=new LinkedHashMap<Object,Object>(ManagedReviewSnapshot.object(raw));
-        var layerValues=distinct.getOrDefault(layer.get("layer"),Map.of());
-        layer.put("columns",profileColumns(ManagedReviewSnapshot.list(layer.get("columns")),layerValues));
-        return layer;
-      }).toList());
-      out.put("metadata",projected);
-    }
-    return out;
-  }
-  private static List<Map<Object,Object>> profileColumns(List<?> schema,Map<?,?> values){
-    return schema.stream().map(ManagedReviewSnapshot::object).map(column->profileColumn(column,values)).toList();
+    return previewPaging.profile(retained,job,distinct,tenant,subject);
   }
 
   /** Immutable pages share the retained schema hash and exclude preview sample rows. */
-  public Map<String,Object> previewColumns(UUID assetId,UUID profileId,int offset,int limit){
+  public Map<String,Object> previewColumns(UUID assetId,UUID profileId,String tenant,String subject,
+      String layer,int offset,int limit,String cursor){
+    requireTenantOwner(assetId,tenant,subject);
     if(offset<0||limit<1||limit>ManagedFileLimits.COLUMN_PAGE_SIZE)throw invalid("ONB_PROFILE_PAGE_INVALID","Invalid column page bounds");
-    Map<String,Object> profile=fileProfile(assetId,profileId);
-    if(!Set.of("CSV","XLSX").contains(profile.get("format")))throw invalid("ONB_PROFILE_PAGE_FORMAT_UNSUPPORTED","Tabular profile required");
-    @SuppressWarnings("unchecked") List<Map<String,Object>> columns=(List<Map<String,Object>>)profile.get("inferred_schema");
-    if(columns.isEmpty()||columns.size()>ManagedFileLimits.MAX_COLUMNS||offset>=columns.size())throw invalid("ONB_PROFILE_PAGE_INVALID","Invalid retained profile or offset");
-    var values=distinctCellValues(assetId,profileId).getOrDefault(ManagedFileProfiler.FLAT_PROFILE,Map.of());
-    var out=new LinkedHashMap<String,Object>();
-    out.put("assetId",assetId);out.put("profileId",profileId);out.put("profileVersion",profile.get("version"));
-    out.put("format",profile.get("format"));out.put("view","COLUMNS");out.put("columnCount",columns.size());
-    out.put("schemaHash",hashes.of(columns));out.put("offset",offset);
-    var page=new ArrayList<Map<Object,Object>>();
-    out.put("columns",page);out.put("hasMore",true);
-    out.put("nextOffset",columns.size());out.put("limitsProfile",ManagedFileLimits.PROFILE);
-    int bytes=previewBytes(out)+1; // Reserve the extra byte needed by `false`.
-    int end=offset;
-    for(;end<Math.min(columns.size(),offset+limit);end++){
-      var column=profileColumn(columns.get(end),values);
-      bytes+=previewBytes(column)+(page.isEmpty()?0:1);
-      if(bytes>MAX_PROFILE_PREVIEW_BYTES)break;
-      page.add(column);
+    Map<String,Object> retained;
+    try{
+      retained=preview(assetId,profileId);
+    }catch(DomainFailure failure){
+      if(cursor!=null&&"ONB_FILE_PROFILE_NOT_FOUND".equals(failure.code()))throw DistinctValuesCursors.invalid();
+      throw failure;
     }
-    if(page.isEmpty())throw invalid("ONB_PROFILE_PAGE_INVALID","A column exceeds the preview response limit");
-    out.put("hasMore",end<columns.size());
-    out.put("nextOffset",end<columns.size()?end:null);
-    return out;
+    return previewPaging.columns(retained,distinctCellValues(assetId,profileId),tenant,subject,layer,offset,limit,cursor);
   }
   public Map<String,Object> preview(UUID assetId,UUID profileId){Map<String,Object> profile=fileProfile(assetId,profileId);@SuppressWarnings("unchecked") List<String> candidates=(List<String>)profile.get("candidate_keys");@SuppressWarnings("unchecked") List<Map<String,Object>> columns=(List<Map<String,Object>>)profile.get("inferred_schema");Map<String,Object> identity=candidates.isEmpty()?Map.of("strategy","MANAGED_DETERMINISTIC","sourceFields",List.of("$managedRowOrdinal"),"normalizationRuleRef","normalization://managed-file/asset-row-ordinal-v1","stabilityLimit","Identity is unique per row inside the immutable asset and changes if rows are reordered"):Map.of("strategy","NATIVE_KEY","sourceFields",List.of(candidates.get(0)),"normalizationRuleRef","normalization://managed-file/native-key-v1","stabilityLimit","Identity remains stable while the proposed key remains stable");Map<String,Object> out=new LinkedHashMap<>();out.put("assetId",assetId);out.put("profileId",profileId);out.put("profileVersion",profile.get("version"));out.put("format",profile.get("format"));out.put("metadata",profile.get("metadata"));out.put("columns",columns);out.put("candidateKeys",candidates);out.put("redactedSample",profile.get("redacted_sample"));out.put("recordModel","ONE_ROW_ONE_SOURCE_OBJECT");out.put("identityProposal",Set.of("GEOPACKAGE","ACCESS","SHAPEFILE").contains(profile.get("format"))?Map.of("status","LAYER_AND_STABLE_KEYS_REQUIRED"):identity);out.put("proposalStatus","PENDING_HUMAN_REVIEW");return out;}
   public Map<String,Object> onboard(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,List<String> semanticRefs,List<String> sourceObjectKeyFields,OnboardingService.Actor actor,String correlation){
@@ -363,7 +338,7 @@ public class ManagedFileService {
   }
   private Map<String,Object> draftIdentity(UUID asset,UUID profile,String source,UUID version){
     Map<String,Object> current=onboarding.version(source,version);
-    return Map.of("assetId",asset,"profileId",profile,"sourceId",source,"onboardingVersionId",version,"state",current.get("state"));
+    return Map.of("assetId",asset,"profileId",profile,"sourceId",source,"onboardingVersionId",version,"state",current.get("state"),"lockVersion",current.get("lock_version"));
   }
   public Map<String,Object> onboard(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,List<String> semanticRefs,List<String> sourceObjectKeyFields,List<FieldDecision> fieldDecisions,String selectedLayer,OnboardingService.Actor actor,String correlation){
     return onboard(assetId,profileId,sourceId,name,owner,targetClassIri,semanticRefs,sourceObjectKeyFields,fieldDecisions,selectedLayer,actor,correlation,null);
@@ -450,6 +425,36 @@ public class ManagedFileService {
     var metadata=(Map<?,?>)onboarding.source(source).get("metadata");
     if(!(metadata.get("managedFileAssetId") instanceof String origin))return null;
     requireTenantOwner(UUID.fromString(origin),tenant,actor.subject());
+    return matchingRedraftParent(asset.get("asset_id").toString(),profile.toString(),source,name,owner,tenant,actor.subject());
+  }
+
+  boolean sameFileRedraftAllowed(UUID version,String source,String tenant,String subject){
+    var selection=db.sql("""
+        select v.configuration #>> '{extractionProfile,selection,assetId}' asset_id,
+          v.configuration #>> '{extractionProfile,selection,fileProfileId}' profile_id,
+          s.metadata->>'managedFileAssetId' origin_id,s.name,s.owner_ref
+        from ouf_onboarding.onboarding_version v join ouf_onboarding.source s using(source_id)
+        where v.onboarding_version_id=:v and v.source_id=:s
+        """).param("v",version).param("s",source).query().singleRow();
+    if(!(selection.get("asset_id") instanceof String selected)||!(selection.get("profile_id") instanceof String profile)
+        ||!(selection.get("origin_id") instanceof String origin))return false;
+    UUID assetId,originId;
+    try{
+      assetId=UUID.fromString(selected);
+      originId=UUID.fromString(origin);
+      UUID.fromString(profile);
+    }catch(IllegalArgumentException malformedSelection){return false;}
+    boolean profileAvailable=db.sql("""
+        select exists(select 1 from ouf_onboarding.managed_file_asset a
+          join ouf_onboarding.file_profile f using(asset_id)
+          where a.asset_id=:asset and a.source_id=:source and a.status='PROFILED' and f.profile_id::text=:profile)
+        """).param("asset",assetId).param("source",source).param("profile",profile).query(Boolean.class).single();
+    return profileAvailable&&tenantOwnerProven(assetId,tenant,subject)&&tenantOwnerProven(originId,tenant,subject)
+        &&version.equals(matchingRedraftParent(selected,profile,source,(String)selection.get("name"),
+            (String)selection.get("owner_ref"),tenant,subject));
+  }
+
+  private UUID matchingRedraftParent(String asset,String profile,String source,String name,String owner,String tenant,String subject){
     // Preserve the publication base of an existing revision; the refused plan is the new draft's parent.
     return db.sql("""
         select v.onboarding_version_id from ouf_onboarding.onboarding_version v
@@ -473,8 +478,8 @@ public class ManagedFileService {
               or (other.state='ACTIVE' and other.onboarding_version_id is distinct from base.parent_version_id)))
           and (base.parent_state_at_prepare='ACTIVE' or not exists(select 1 from ouf_onboarding.published_configuration where source_id=:s))
           and not exists(select 1 from ouf_onboarding.managed_candidate_recovery w where w.candidate_id=v.onboarding_version_id and w.operation='WITHDRAW')
-        """).param("s",source).param("asset",asset.get("asset_id").toString()).param("profile",profile.toString())
-        .param("name",name).param("owner",owner).param("tenant",tenant).param("subject",actor.subject()).query(UUID.class).optional().orElse(null);
+        """).param("s",source).param("asset",asset).param("profile",profile)
+        .param("name",name).param("owner",owner).param("tenant",tenant).param("subject",subject).query(UUID.class).optional().orElse(null);
   }
   @SuppressWarnings("unchecked") Map<String,Object> selectedProfile(Map<String,Object> profile,String layer){
     if(!Set.of("GEOPACKAGE","ACCESS","SHAPEFILE").contains(profile.get("format"))){if(layer!=null)throw invalid("ONB_LAYER_UNEXPECTED","Layer/table applies to multi-table datasets only");return profile;}
