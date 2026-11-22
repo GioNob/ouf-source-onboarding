@@ -14,6 +14,10 @@ public final class CanonicalHash {
     try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(mapper.writeValueAsString(value).getBytes(StandardCharsets.UTF_8)));}
     catch(Exception e){throw new IllegalStateException("canonical hash failure",e);}
   }
+  public String ofDefinition(java.util.Map<?,?> definition){
+    try{return ofBytes(mapper.writer().without(SerializationFeature.INDENT_OUTPUT).writeValueAsBytes(definition));}
+    catch(com.fasterxml.jackson.core.JsonProcessingException e){throw new IllegalStateException("canonical definition hash failure",e);}
+  }
   public String ofBytes(byte[] value){
     try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));}
     catch(Exception e){throw new IllegalStateException("byte hash failure",e);}

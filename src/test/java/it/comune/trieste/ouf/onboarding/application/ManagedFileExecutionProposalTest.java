@@ -200,6 +200,48 @@ class ManagedFileExecutionProposalTest {
     }
   }
 
+  @Test @SuppressWarnings("unchecked") void d084_07_composedPropertiesRequireTheirPinLabelAndTypedIdentity(){
+    var c=config();var proposal=proposal();var semantic=object(c,"semanticMapping");
+    var rule=Map.of("kind","CONSTRUCTOR","constructorId","LIST_SPLIT_V1","targetPropertyIri",CAP,"dataAccessLabel","RESTRICTED",
+        "inputs",List.of(Map.of("role","value","fieldName","cap","reader","IDENTITY")),
+        "params",Map.of("itemReader","INTEGER_V1","separator",","));
+    semantic.put("compositions",List.of(rule));
+    ((List<?>)semantic.get("propertyMappings")).removeLast();
+    var properties=(List<Map<String,Object>>)object(proposal.udp(),"materialization").get("properties");
+    properties.getLast().put("datatype","list");
+    var signals=(List<Map<String,Object>>)object(object(proposal.udp(),"resolution"),"governedIdentity").get("signals");
+    signals.getLast().put("comparator","JSON_V1");
+    assertThatThrownBy(()->compile(c,proposal)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    semantic.put("semanticRefs",List.of(ONTOLOGY+"@1",CAP+"@1"));
+    var pinned=new ManagedFileExecutionProposal.Proposal(List.of(proposal.semanticBindings().getFirst(),
+        new ManagedFileExecutionProposal.SemanticBinding(CAP,"1",UUID.randomUUID().toString(),PUBLICATION)),PUBLICATION,proposal.udp(),proposal.limits());
+    assertThat(compile(c,pinned)).containsEntry("semanticMapping",semantic);
+    signals.getLast().put("comparator","TEXT_V1");
+    assertThatThrownBy(()->compile(c,pinned)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    signals.getLast().put("comparator","JSON_V1");properties.getLast().put("accessLabel","OPEN");
+    assertThatThrownBy(()->compile(c,pinned)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+  }
+
+  @Test @SuppressWarnings("unchecked") void d084_09_revisionUsesPublishedDestinationsAndRecomputesIdentity(){
+    var compiled=compile(config(),proposal());
+    var revised=SourceRevisionService.revise(compiled,List.of(new SourceRevisionService.Change(CAP,CAP,null,"WKT_V1",Map.of("crs","EPSG:32633"))));
+    var mapping=object(revised,"semanticMapping");
+    var properties=(List<Map<String,Object>>)mapping.get("propertyMappings");
+    assertThat(properties.getLast()).containsEntry("transformParams",Map.of("crs","EPSG:32633"));
+    var udp=object(object(object(revised,"extractionProfile"),"runtime"),"udp");
+    var signals=(List<Map<String,Object>>)object(object(udp,"resolution"),"governedIdentity").get("signals");
+    assertThat(signals.getLast()).containsEntry("comparator","JSON_V1");
+    assertThat(((List<?>)object(compiled,"semanticMapping").get("propertyMappings")).getLast()).isNotEqualTo(properties.getLast());
+    var composition=Map.<String,Object>of("kind","CONSTRUCTOR","constructorId","TEXT_JOIN_V1","targetPropertyIri",CAP,
+        "dataAccessLabel","RESTRICTED","inputs",List.of(Map.of("role","part","fieldName","cap","reader","IDENTITY"),
+        Map.of("role","part","fieldName","nome_teatro","reader","TEXT_NFC_TRIM_V1")),"params",Map.of("separator"," "));
+    SourceRevisionService.reviseCompositions(revised,List.of(composition));
+    assertThat(mapping).containsEntry("compositions",List.of(composition));
+    assertThat((List<?>)mapping.get("propertyMappings")).hasSize(1);
+    assertThat(signals.getLast()).containsEntry("comparator","TEXT_V1");
+    assertThat(revised).containsEntry("compositionInputLabels",Map.of("cap","RESTRICTED"));
+  }
+
   private Map<String,Object> compile(Map<String,Object> c,ManagedFileExecutionProposal.Proposal p){return ManagedFileExecutionProposal.compile(c,asset(),"fixture-tenant",p);}
   private Map<String,Object> asset(){return new LinkedHashMap<>(Map.of("asset_id",UUID.fromString(ASSET),"source_id",SOURCE,"staging_ref","staging://fixture/source.csv","content_hash","sha256:fixture","size_bytes",321L));}
   private ManagedFileExecutionProposal.Proposal proposal(){

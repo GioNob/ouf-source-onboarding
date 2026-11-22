@@ -59,6 +59,47 @@ class ManagedOnboardingReviewRuntimeTest {
     var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"review:edicole",proposal);
     return new Governed(mapper,command,reviews.prepare(mapper,command,"prepare"));
   }
+  @MockitoBean DatatypeResolver registryReader;
+  @Test @SuppressWarnings("unchecked") void d084_11_failedLookupLeavesDraftThenFreezesPublishedDefinitionBeforeReview(){
+    String type="urn:fixture:Postal",property="urn:fixture:address",cls="urn:fixture:Place",source="typed",tenant="test-tenant";
+    String set=UUID.randomUUID().toString(),rev=UUID.randomUUID().toString();
+    byte[] csv="name\nEdicola\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.registerOwned(null,"object://fixture/typed.csv",hashes.ofBytes(csv),"text/csv",csv.length,human.subject(),"retention://test",tenant).get("asset_id");
+    UUID profile=(UUID)files.profile(asset,csv,"object://fixture/sample").get("profile_id");
+    var comp=Map.<String,Object>of("kind","STRUCTURED","targetPropertyIri",property,"dataAccessLabel","OPEN","typeRef",type+"@"+set,
+        "components",List.of(Map.of("component","name","fieldName","name","reader","TEXT_NFC_TRIM_V1")));
+    var draft=files.onboardIdempotent(asset,profile,source,"Sede","Comune",cls,List.of(cls+"@1",property+"@1",type+"@1"),List.of("name"),
+        List.of(new ManagedFileService.FieldDecision("name","INCLUDE","OPEN",null,null,null,null,null)),null,human,"create","create",tenant,null,List.of(comp));
+    UUID version=(UUID)draft.get("onboardingVersionId");
+    var signal=Map.of("id",property,"semanticRef",property+"@"+set,"comparator","JSON_V1","excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","urn:assertion");
+    var identity=Map.of("ref","policy","version","1","tenantId",tenant,"sourceId",source,"canonicalClass",cls,"allowAutoNew",false,"maxCandidates",10,
+        "signals",List.of(signal),"sufficientRules",List.of(Map.of("id","rule","signalIds",List.of(property),"assertionRef","urn:rule")));
+    var udp=Map.<String,Object>of("resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1","policyRef","policy","governedIdentity",identity),
+        "materialization",Map.of("policyRef","policy","properties",List.of(Map.of("sourceField",property,"propertyIri",property,"datatype",type,
+            "accessLabel","OPEN","authorityOrder",List.of(source))),"bitemporalProperties",List.of(),"checkpointInterval",1));
+    var bindings=List.of(cls,property,type).stream().map(id->new ManagedFileExecutionProposal.SemanticBinding(id,"1",id.equals(type)?rev:UUID.randomUUID().toString(),set)).toList();
+    var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"typed-review",new ManagedFileExecutionProposal.Proposal(bindings,set,udp,new ManagedFileExecutionProposal.Limits(100,2,100)));
+    var principal=principal(tenant,human.subject());
+    for(var pin:bindings)if(!pin.semanticId().equals(type))
+      when(registryReader.resolve(pin.semanticId(),pin.revisionId(),set)).thenReturn(Map.of("semantic_id",pin.semanticId(),"semantic_version","1",
+          "revision_id",pin.revisionId(),"publication_set_id",set,"artifact_type",pin.semanticId().equals(cls)?"CLASS":"PROPERTY","status","ACTIVE"));
+    when(registryReader.resolve(type,rev,set)).thenReturn(null);
+    assertThatThrownBy(()->reviews.prepare(principal,command,"prepare")).isInstanceOfSatisfying(
+        it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_DATATYPE_UNRESOLVED"));
+    assertThat(onboarding.version(source,version)).containsEntry("state","DRAFT");
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_challenge where onboarding_version_id=:v").param("v",version).query(Long.class).single()).isZero();
+    var definition=Map.of("components",List.of(Map.of("name","name","type","string","required",true,"cardinality","ONE")));
+    when(registryReader.resolve(type,rev,set)).thenReturn(Map.of("semantic_id",type,"semantic_version","1","revision_id",rev,"publication_set_id",set,
+        "artifact_type","DATATYPE","status","ACTIVE","definition",definition,"definitionSha256",hashes.of(definition).substring(7),"label",Map.of("it","Recapito")));
+    var review=reviews.prepare(principal,command,"retry");
+    assertThat(reviews.prepare(principal,command,"replay")).isEqualTo(review);
+    verify(registryReader,times(2)).resolve(type,rev,set);
+    var card=reviews.humanCard(principal,(UUID)review.get("challengeId"));
+    assertThat(hashes.of(card.get("configuration"))).isEqualTo(review.get("configurationHash"));
+    var snapshot=(Map<String,Object>)card.get("reviewSnapshot");
+    assertThat(snapshot).containsEntry("COMPOSITION",Map.of(property,comp));
+    assertThat(((Map<?,?>)((Map<?,?>)snapshot.get("DATATYPE")).get(type+"@"+set)).get("definition")).isEqualTo(definition);
+  }
   @Test void preparedMappingReadsAdoptedBytesAfterAnotherSemanticPublicationBecomesActive(){
     String semanticId="https://example.org/onto/Place";
     var registry=new PublishedSnapshots();

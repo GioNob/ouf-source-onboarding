@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.domain.*;
 import java.time.*;
 import java.util.*;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -13,7 +14,14 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class OnboardingService {
   private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ConfigurationValidator validator; private final PublishedBundleCompiler bundles;private final RuntimeProjectionService projections;private final SchemaSurveillanceService surveillance;private final UdpIdentityActivationVerifier identityVerifier; private final Duration challengeTtl;
-  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,PublishedBundleCompiler bundles,RuntimeProjectionService projections,SchemaSurveillanceService surveillance,UdpIdentityActivationVerifier identityVerifier,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl){this.db=db;this.json=json;this.hashes=hashes;this.validator=validator;this.bundles=bundles;this.projections=projections;this.surveillance=surveillance;this.identityVerifier=identityVerifier;this.challengeTtl=challengeTtl;}
+  private final DatatypeResolver datatypeResolver;
+  private final ObjectProvider<ManagedFileService> managedFiles;
+  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,PublishedBundleCompiler bundles,RuntimeProjectionService projections,SchemaSurveillanceService surveillance,UdpIdentityActivationVerifier identityVerifier,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl,
+      DatatypeResolver datatypeResolver,ObjectProvider<ManagedFileService> managedFiles){
+    this.datatypeResolver=datatypeResolver;this.managedFiles=managedFiles;this.db=db;this.json=json;this.hashes=hashes;
+    this.validator=validator;this.bundles=bundles;this.projections=projections;this.surveillance=surveillance;
+    this.identityVerifier=identityVerifier;this.challengeTtl=challengeTtl;
+  }
 
   @Transactional public Map<String,Object> createSource(String id,String name,String kind,String mode,String owner,Map<String,Object> metadata,Actor actor,String correlation){
     if("INTERNAL_MANAGED".equals(kind)&&!"MANAGED".equals(mode))throw bad("ONB_SOURCE_MODE_INVALID","INTERNAL_MANAGED requires MANAGED acquisition");
@@ -55,7 +63,24 @@ public class OnboardingService {
   }
 
   @Transactional public Map<String,Object> submit(String sourceId,UUID id,long expected,Actor actor,String correlation){
-    Map<String,Object> current=version(sourceId,id);Map<String,Object> validation=validate(sourceId,id,actor,correlation);if(!"PASS".equals(validation.get("result")))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALIDATION_FAILED","Configuration contains blocking validation errors");String hash=hashes.of(current.get("configuration"));
+    Map<String,Object> current=version(sourceId,id);
+    @SuppressWarnings("unchecked") var draft=(Map<String,Object>)current.get("configuration");
+    var semantic=ManagedReviewSnapshot.child(draft,"semanticMapping");
+    var extraction=ManagedReviewSnapshot.child(draft,"extractionProfile");
+    if(PublishedDatatypes.requiresPreparation(semantic,extraction)){
+      if(!"DRAFT".equals(current.get("state"))||((Number)current.get("lock_version")).longValue()!=expected)throw precondition();
+      var profiles=managedFiles.getObject().projectedTypes(sourceId,extraction);
+      Object prior=draft.get("semanticReferenceBindings");
+      PublishedDatatypes.prepare(draft,profiles,datatypeResolver,hashes);
+      if(!Objects.equals(prior,draft.get("semanticReferenceBindings"))){
+        current=patchVersion(sourceId,id,expected,draft,actor,correlation);
+        expected=((Number)current.get("lock_version")).longValue();
+      }
+    }else if(draft.get("semanticReferenceBindings") instanceof List<?> bindings
+        && bindings.stream().anyMatch(b->b instanceof Map<?,?> pin && (pin.containsKey("definition")||pin.containsKey("definitionSha256")))){
+      throw DatatypeResolver.unresolved();
+    }
+    Map<String,Object> validation=validate(sourceId,id,actor,correlation);if(!"PASS".equals(validation.get("result")))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALIDATION_FAILED","Configuration contains blocking validation errors");String hash=hashes.of(current.get("configuration"));
     if(db.sql("""
         select exists(select 1 from ouf_onboarding.managed_candidate_recovery w
           join ouf_onboarding.managed_onboarding_review r on r.onboarding_version_id=w.candidate_id

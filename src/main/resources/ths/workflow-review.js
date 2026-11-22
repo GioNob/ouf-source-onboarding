@@ -68,12 +68,65 @@
   const unavailable = 'non disponibile';
   const accessNames = {OPEN:'pubblico', PERSONAL:'dato personale', SENSITIVE:'dato sensibile', RESTRICTED:'accesso riservato', ANONYMOUS:'dato anonimo'};
   const limitNames = {maxRows:'Righe massime', maxColumns:'Colonne massime', maxCellChars:'Caratteri massimi per cella'};
-  const sectionNames = {FIELD:'Campo', IDENTITY:'Identità', SEMANTIC:'Riferimento semantico', LIMITS:'Limite'};
-  function datatype(transform) {
-    if (transform === 'IDENTITY') return 'testo';
-    if (transform?.startsWith('DECIMAL_')) return 'numero';
-    if (transform?.startsWith('DATE_')) return 'data';
-    return transform || '—';
+  const sectionNames = {FIELD:'Campo', IDENTITY:'Identità', SEMANTIC:'Riferimento semantico', LIMITS:'Limite', COMPOSITION:'Composizione', DATATYPE:'Tipo strutturato'};
+  const typeNames = {string:'testo', integer:'numero intero', decimal:'numero decimale', date:'data', datetime:'data e ora',
+    geometry:'geometria', concept:'concetto di vocabolario', boolean:'valore vero o falso'};
+  const readerRules = {
+    IDENTITY:'Mantiene il testo originale, anche quando è vuoto.',
+    TEXT_NFC_TRIM_V1:'Uniforma i caratteri Unicode in forma NFC e rimuove gli spazi agli estremi.',
+    INTEGER_V1:'Legge un numero intero di sole cifre con segno facoltativo.',
+    INTEGER_GROUP_DOT_V1:'Legge un numero intero con il punto tra i gruppi di tre cifre.',
+    DECIMAL_DOT_V1:'Legge un numero con il punto decimale.',
+    DECIMAL_COMMA_V1:'Legge un numero con la virgola decimale.',
+    DECIMAL_GROUP_DOT_COMMA_V1:'Legge un numero con punti per le migliaia e virgola per i decimali.',
+    DECIMAL_GROUP_COMMA_DOT_V1:'Legge un numero con virgole per le migliaia e punto per i decimali.',
+    BOOLEAN_IT_V1:'Legge come vero sì, si, s, vero, v, true o 1 e come falso no, n, falso, f, false o 0. Ignora maiuscole e spazi esterni.',
+    DATE_ISO_V1:'Legge una data valida nel formato anno-mese-giorno.',
+    DATE_DMY_V1:'Legge una data valida nel formato giorno/mese/anno.',
+    DATE_DMY_DASH_V1:'Legge una data valida nel formato giorno-mese-anno.',
+    DATETIME_ISO_OFFSET_V1:'Legge data e ora ISO con scarto orario esplicito e le riporta al tempo universale UTC. I secondi sono facoltativi, con al massimo nove cifre decimali.',
+    DATETIME_LOCAL_ROME_V1:'Interpreta anno-mese-giorno e ora locale senza scarto nel fuso di Roma. I secondi sono facoltativi. Al cambio di ora rifiuta gli orari inesistenti o ambigui.',
+    GEOJSON_V1:'Legge una geometria GeoJSON in EPSG:4326.',
+    WKT_V1:'Legge una geometria WKT nel sistema di coordinate dichiarato',
+    VALUE_MAP_V1:'Rimuove gli spazi esterni e cerca il codice esatto nella mappa pubblicata. Un codice sconosciuto produce un errore'
+  };
+  function readerText(reader, params = {}) {
+    if (!reader) return '—';
+    return [readerRules[reader] || reader, params?.crs, params?.valueMapRef].filter(Boolean).join(' · ');
+  }
+  function expressionText(node, definitions) {
+    if (node.fieldName) return node.fieldName + ' · ' + readerText(node.reader,node.transformParams);
+    if (node.constructorId) {
+      const rule = {
+        POINT_FROM_LAT_LON_V1:'Crea un punto EPSG:4326 in ordine longitudine, latitudine. Occorrono entrambe le coordinate, entro ±180° e ±90° rispettivamente. Se entrambe mancano il punto è assente, se ne manca una sola la riga presenta un errore.',
+        TEXT_JOIN_V1:'Unisce in ordine le parti presenti con il separatore ' + JSON.stringify(node.params?.separator) + '. Se mancano tutte, il testo è assente.',
+        LIST_SPLIT_V1:'Divide il testo sul separatore ' + JSON.stringify(node.params?.separator) + ', legge ciascun elemento e scarta quelli assenti. Se non ne resta alcuno, l’elenco è assente. ' + readerText(node.params?.itemReader)
+      }[node.constructorId];
+      return rule + ' ' + node.inputs.map(i => i.role + ' = ' + expressionText(i,definitions)).join(' · ');
+    }
+    const label = definitions[node.typeRef]?.label?.it || node.typeRef;
+    return label + ' · ' + node.components.map(c => c.component + ' ← ' +
+      expressionText(c.structured || (Object.hasOwn(c,'constructor') ? c.constructor : c),definitions)).join(' · ');
+  }
+  function definitionText(pin,definitions) {
+    return [pin.label.it,...pin.definition.components.map(c =>
+      (c.labels?.it || c.name) + ' (' + c.name + ') · ' + (typeNames[c.type] || definitions[c.type]?.label?.it || c.type) +
+      ' · ' + (c.cardinality === 'MANY' ? 'più valori' : 'un valore') + ' · ' + (c.required ? 'obbligatorio' : 'facoltativo') +
+      (c.constraints ? ' · vincoli ' + JSON.stringify(c.constraints) : ''))].join(' — ');
+  }
+  function compositionsView(mapping,bindings,article) {
+    if (!mapping?.compositions?.length) return;
+    const definitions = Object.fromEntries((bindings || []).filter(b => b.definition).map(b => [b.semanticId+'@'+b.publicationSetId,b]));
+    element('h3','Proprietà composte',article);
+    for (const c of mapping.compositions) {
+      element('h4',c.targetPropertyIri + ' · ' + accessNames[c.dataAccessLabel],article);
+      element('p',expressionText(c,definitions),article);
+    }
+    for (const [ref,pin] of Object.entries(definitions)) {
+      element('h4','Tipo strutturato · ' + pin.label.it,article);
+      element('p',definitionText(pin,definitions),article);
+      element('p',ref + ' · ' + pin.definitionSha256,article);
+    }
   }
   const unverified = 'etichetta non verificata dal registro';
   function termFor(card, iri) {
@@ -99,7 +152,7 @@
     return 'Criteri di confronto · ' + JSON.stringify(value);
   }
   function fieldDescription(row) {
-    return [row.included ? 'inclusa' : 'esclusa', row.property, row.transform, row.access, row.sourceKey && 'chiave della fonte', row.signal && 'segnale d’identità',row.authorityOrder?.length && 'ordine delle autorità ' + row.authorityOrder.join(', '), row.reconciliation && 'regole ' + JSON.stringify(row.reconciliation)].filter(Boolean).join(' · ');
+    return [row.included ? 'inclusa' : 'esclusa', row.property, row.transform && readerText(row.transform,row.transformParams), row.access, row.sourceKey && 'chiave della fonte', row.signal && 'segnale d’identità',row.authorityOrder?.length && 'ordine delle autorità ' + row.authorityOrder.join(', '), row.reconciliation && 'regole ' + JSON.stringify(row.reconciliation)].filter(Boolean).join(' · ');
   }
   function semanticReference(card, iri, parent, warnings) {
     sourceLink(parent,iri,iri);
@@ -158,7 +211,8 @@
       const previous = card.previousReview, diff = element('section','',article); diff.className = 'warnings';
       element('h3','Differenze rispetto alla versione ' + previous.version,diff);
       const describe = (section,target,value) => value == null ? 'assente' : section === 'FIELD' ? fieldDescription(value) :
-        section === 'IDENTITY' ? identityText(target,value,label) : section === 'SEMANTIC' ? JSON.stringify(value) : String(value);
+        section === 'COMPOSITION' ? expressionText(value,snap.DATATYPE || {}) + ' · ' + value.dataAccessLabel :
+        section === 'DATATYPE' ? definitionText(value,snap.DATATYPE || {}) : section === 'IDENTITY' ? identityText(target,value,label) : section === 'SEMANTIC' ? JSON.stringify(value) : String(value);
       const changes = previous.changes.map(change => change.section === 'SEMANTIC'
         ? {...change,before:pinnedReference(change.before),after:pinnedReference(change.after)} : change)
         .filter(change => change.section !== 'SEMANTIC' || JSON.stringify(change.before) !== JSON.stringify(change.after));
@@ -190,7 +244,7 @@
       if (row.property) sourceLink(property,row.property,row.property);
       if (row.reconciliation) detail('Regole di riconciliazione della proprietà',row.reconciliation,property);
       if (row.authorityOrder?.length) element('p','Ordine delle autorità · ' + row.authorityOrder.join(', '),property);
-      element('td',datatype(row.transform),tr);
+      element('td',readerText(row.transform,row.transformParams),tr);
       element('td',row.access ? row.access + ' · ' + accessNames[row.access] : 'Non indicato',tr);
       element('td',[row.sourceKey && 'chiave della fonte',row.signal && 'segnale d’identità'].filter(Boolean).join(' · ') || '—',tr);
       if (editable) flag('FIELD',name,element('td','',tr));
@@ -295,7 +349,7 @@
         for (const value of [field, property && termLabel(card,property) + ' · ' + property, transform, labels.get(property) || labels.get(field)]) element('td', value, tr);
         table.append(tr);
       };
-      for (const row of rows) appendField(row.sourceField, row.targetPropertyIri, row.transform);
+      for (const row of rows) appendField(row.sourceField, row.targetPropertyIri, readerText(row.transform,row.transformParams));
       const mapped = new Set(rows.map(row => row.sourceField));
       const projection = config.extractionProfile?.projection?.[mapping.sourceType?.typeCode || 'FILE'] || [];
       for (const field of projection) if (!mapped.has(field)) appendField(field, null, null);
@@ -313,6 +367,9 @@
       if (!excluded.length) element('p', 'La scheda della fonte non elenca campi esclusi.', article);
       for (const item of excluded) element('p', `${item.column} · Nessuna proprietà pubblicata · Accesso: ${item.accessLabel || 'non indicato'}`, article);
       }
+      if (mapping.compositions?.length || mapping.propertyMappings?.some(p => p.transform && p.transform !== 'IDENTITY'))
+        element('p','Con i lettori diversi da IDENTITY, una cella vuota o di soli spazi dà un valore assente. Un componente obbligatorio deve avere un valore.',article);
+      compositionsView(mapping,config.semanticReferenceBindings,article);
       if (card.newColumns?.length) {
         element('h3', 'Decisioni sulle colonne nuove', article);
         const decisions = document.createElement('table'), header = document.createElement('tr');

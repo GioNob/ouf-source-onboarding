@@ -16,6 +16,9 @@ management:
 ouf:
   onboarding:
     approval-challenge-ttl: PT10M
+    semantic:
+      gateway-url: ${OUF_ONB_SEMANTIC_GATEWAY_URL:}
+      token-file: ${OUF_ONB_SEMANTIC_TOKEN_FILE:}
     udp-identity:
       gateway-url: ${OUF_ONB_UDP_IDENTITY_GATEWAY_URL:}
       token-file: ${OUF_ONB_UDP_IDENTITY_TOKEN_FILE:}

@@ -13,7 +13,11 @@ public final class ManagedCsvRevision {
   public record NewColumn(String column,String decision,Mapping mapping) {}
   @JsonInclude(JsonInclude.Include.NON_NULL)
   public record Mapping(String propertyIri,String transform,Map<String,Object> reconciliation,
-                        String accessLabel,List<String> authorityOrder,Comparison comparison) {}
+                        String accessLabel,List<String> authorityOrder,Comparison comparison,Map<String,Object> transformParams) {
+    public Mapping(String propertyIri,String transform,Map<String,Object> reconciliation,String accessLabel,List<String> authorityOrder,Comparison comparison){
+      this(propertyIri,transform,reconciliation,accessLabel,authorityOrder,comparison,null);
+    }
+  }
   public record Comparison(String comparator,String assertionRef) {}
   public static final class Incompatible extends RuntimeException {
     private static final long serialVersionUID=1L;
@@ -72,6 +76,11 @@ public final class ManagedCsvRevision {
       var mapping=(Map<?,?>)item;
       require(mapped.put(text(mapping,"sourceField"),text(mapping,"transform"))==null);
     }
+    Map<String,String> inputs=new HashMap<>();
+    var previousColumns=columns(oldProfile);
+    for(String field:projected)inputs.put(field,previousColumns.get(field));
+    var combined=new ValueCompositions(semantic.getOrDefault("compositions",List.of()),inputs,null);
+    combined.used.forEach(field->mapped.putIfAbsent(field,"IDENTITY"));
     require(!mapped.isEmpty()&&mapped.size()==projected.size()&&mapped.keySet().equals(new HashSet<>(projected)));
     var nextColumns=columns(profile);
     var decisions=newColumns==null?List.<NewColumn>of():newColumns;
@@ -137,6 +146,7 @@ public final class ManagedCsvRevision {
   private static boolean validMapping(Mapping m){
     if(m==null||m.propertyIri()==null||m.propertyIri().length()>2048||m.transform()==null
         ||m.reconciliation()==null||m.reconciliation().isEmpty())return false;
+    try{ValueReader.named(m.transform()).parameters(m.transformParams(),null);}catch(IllegalArgumentException invalid){return false;}
     try{if(!URI.create(m.propertyIri()).isAbsolute())return false;}
     catch(IllegalArgumentException e){return false;}
     if(m.accessLabel()!=null&&!Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED").contains(m.accessLabel()))return false;
@@ -157,6 +167,7 @@ public final class ManagedCsvRevision {
     var materialization=object(udp,"materialization");
     var properties=entries(materialization,"properties");
     var targets=uniqueValues(mappings,"targetPropertyIri");
+    for(var item:entriesOrEmpty(semantic,"compositions"))require(targets.add(text(item,"targetPropertyIri")));
     require(targets.equals(uniqueValues(properties,"propertyIri"))&&targets.equals(uniqueValues(access,"target")));
     var resolution=object(udp,"resolution");
     var governed=resolution.containsKey("governedIdentity")?object(resolution,"governedIdentity"):null;
@@ -170,13 +181,16 @@ public final class ManagedCsvRevision {
           ||comparison.assertionRef()==null||comparison.assertionRef().isBlank())))
         throw new Incompatible(List.of(new Finding("INVALID_NEW_COLUMN_COMPARISON",item.column(),null,null)));
       if(comparison!=null){
+        require(ValueReader.comparator(ManagedFileExecutionProposal.datatype(m.transform())).equals(comparison.comparator()));
         String publication=text(object(runtime,"execution"),"semanticPublicationSetRef");
         signals.add(Map.of("id",iri,"semanticRef",iri+"@"+publication,"comparator",comparison.comparator(),
             "assertionRef",comparison.assertionRef(),"excludesOnDisagreement",false,"uniqueWithinScope",false));
       }
       String label=m.accessLabel()==null?"RESTRICTED":m.accessLabel();
       fields.add(item.column());
-      mappings.add(Map.of("sourceField",item.column(),"targetPropertyIri",iri,"transform",m.transform()));
+      var mapping=new LinkedHashMap<String,Object>(Map.of("sourceField",item.column(),"targetPropertyIri",iri,"transform",m.transform()));
+      if(m.transformParams()!=null)mapping.put("transformParams",m.transformParams());
+      mappings.add(mapping);
       access.add(Map.of("target",iri,"scope","PROPERTY","label",label));
       properties.add(Map.of("sourceField",iri,"propertyIri",iri,"datatype",ManagedFileExecutionProposal.datatype(m.transform()),
           "accessLabel",label,"authorityOrder",m.authorityOrder()==null?List.of():m.authorityOrder(),"reconciliation",m.reconciliation()));
@@ -188,6 +202,9 @@ public final class ManagedCsvRevision {
     if(governed!=null)governed.put("signals",signals);
   }
 
+  private static List<Map<?,?>> entriesOrEmpty(Map<String,Object> parent,String key){
+    return parent.containsKey(key)?entries(parent,key):List.of();
+  }
   private static List<Map<?,?>> entries(Map<String,Object> parent,String key){
     require(parent.get(key) instanceof List<?>);
     List<Map<?,?>> result=new ArrayList<>();
@@ -203,14 +220,8 @@ public final class ManagedCsvRevision {
     return values;
   }
 
-  private static boolean supports(String transform,String type){
-    return switch(transform){
-      case "IDENTITY" -> true; // The adapter preserves lexical CSV cells.
-      case "DECIMAL_DOT_V1","DECIMAL_COMMA_V1" -> type.equals("LONG")||type.equals("DECIMAL");
-      case "DATE_ISO_V1" -> type.equals("DATE");
-      case "DATE_DMY_V1" -> type.equals("STRING"); // Lexical validation belongs to ingestion readiness.
-      default -> false;
-    };
+  static boolean supports(String transform,String type){
+    try{return ValueReader.named(transform).supports(type);}catch(IllegalArgumentException invalid){return false;}
   }
   private static String schemaRef(String asset,String profile){return "profile://managed-files/"+asset+"/profiles/"+profile;}
   private static Map<String,String> columns(Map<String,Object> profile){

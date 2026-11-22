@@ -156,10 +156,21 @@ export async function writeV43(fixture, {parent, file}) {
   assert.equal(row.state, 'DRAFT');
   assert.equal(row.version, 2);
   assert.equal(row.parent_version_id, parent.onboardingVersionId);
-  return {review, child};
+  const typedFile = await profile(fixture, 'value-types');
+  const typed = await command(fixture, 'create', caps.create, {...typedFile, name:'CI value types', owner:'CI',
+    targetClassIri:type, semanticRefs:[type+'@1',property+'@1'], sourceObjectKeyFields:['name'],
+    fields:[{fieldName:'name',extractionDecision:'INCLUDE',dataAccessLabel:'OPEN'},
+      {fieldName:'unused',extractionDecision:'INCLUDE',dataAccessLabel:'OPEN'}],
+    compositions:[{kind:'CONSTRUCTOR',constructorId:'TEXT_JOIN_V1',targetPropertyIri:property,dataAccessLabel:'OPEN',
+      inputs:[{role:'part',fieldName:'name',reader:'TEXT_NFC_TRIM_V1'},{role:'part',fieldName:'unused',reader:'IDENTITY'}],
+      params:{separator:' / '}}]}, 'create-typed');
+  const mapping = (await version(fixture, typed)).configuration.semanticMapping;
+  assert.equal(mapping.compositions[0].inputs[0].reader,'TEXT_NFC_TRIM_V1');
+  return {review, child, typed, mapping};
 }
 
-export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child}) {
+export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child, typed, mapping}, baselineVersion) {
+  assert.deepEqual((await version(fixture, typed)).configuration.semanticMapping, mapping);
   const original = await version(fixture, legacy);
   assert.equal(original.configuration_hash, legacyReview.configurationHash);
   assert.equal(original.state, 'IN_REVIEW');
@@ -167,8 +178,9 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.equal(rejected.state, 'REJECTED');
   assert.equal(rejected.configuration_hash, review.configurationHash);
   const {card} = await openCard(fixture, review);
-  assert.equal(card.onboardingState, 'REJECTED');
-  assert.equal(card.progress.state, 'REJECTED');
+  const outcome = baselineVersion === '42' ? 'REJECTED' : 'CHANGES_REQUESTED';
+  assert.equal(card.onboardingState, outcome);
+  assert.equal(card.progress.state, outcome);
   assert.equal(card.progress.challengeStatus, 'CANCELLED');
   const row = await version(fixture, child);
   // The V42 read API does not project parent_version_id; the link is verified in the database by the caller.

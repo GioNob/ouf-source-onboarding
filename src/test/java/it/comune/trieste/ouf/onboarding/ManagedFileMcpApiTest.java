@@ -73,7 +73,7 @@ class ManagedFileMcpApiTest {
     var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class));api.create(raw,request);
     var actor=org.mockito.ArgumentCaptor.forClass(it.comune.trieste.ouf.onboarding.application.OnboardingService.Actor.class);
     verify(files).onboardIdempotent(eq(asset),eq(profile),eq("cinema"),eq("Cinema"),eq("Comune"),eq("https://example.org/Cinema"),
-        eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"),eq("tenant-a"),isNull());
+        eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"),eq("tenant-a"),isNull(),isNull());
     assertThat(actor.getValue().subject()).isEqualTo("human:alice");
     assertThat(actor.getValue().type()).isEqualTo("HUMAN_USER");
     assertThat(actor.getValue().capabilities()).containsExactly("ouf.managed-source.onboarding.create");
@@ -132,8 +132,15 @@ class ManagedFileMcpApiTest {
     var args=new java.util.LinkedHashMap<String,Object>(Map.of("assetId",UUID.randomUUID(),"profileId",UUID.randomUUID(),"sourceId","sue-test","name","Synthetic SUE","owner","Synthetic","targetClassIri","https://example.org/Entity","semanticRefs",java.util.List.of("synthetic@1"),"sourceObjectKeyFields",java.util.List.of(),"fields",fields));
     Map<String,Object> category=Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept");
     args.put("category",category);
+    fields.set(0,Map.of("fieldName","campo_0","extractionDecision","INCLUDE","dataAccessLabel","OPEN",
+        "targetPropertyIri","urn:wkt","transform","WKT_V1","transformParams",Map.of("crs","EPSG:4326")));
+    var compositions=java.util.List.of(Map.<String,Object>of("kind","CONSTRUCTOR","constructorId","TEXT_JOIN_V1",
+        "targetPropertyIri","urn:joined","dataAccessLabel","OPEN","inputs",java.util.List.of(
+        Map.of("role","part","fieldName","campo_1","reader","IDENTITY"),Map.of("role","part","fieldName","campo_2","reader","IDENTITY")),
+        "params",Map.of("separator"," ")));
+    args.put("compositions",compositions);
     api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request);
-    verify(files).onboardIdempotent(any(),any(),eq("sue-test"),any(),any(),any(),any(),any(),argThat(x->x.size()==1024),isNull(),any(),eq("wide"),eq("wide-command"),eq("tenant-a"),eq(category));
+    verify(files).onboardIdempotent(any(),any(),eq("sue-test"),any(),any(),any(),any(),any(),argThat(x->x.size()==1024 && x.getFirst().transformParams().equals(Map.of("crs","EPSG:4326"))),isNull(),any(),eq("wide"),eq("wide-command"),eq("tenant-a"),eq(category),eq(compositions));
     fields.add(Map.of("fieldName","overflow","extractionDecision","EXCLUDE","dataAccessLabel","OPEN"));
     assertThatThrownBy(()->api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request)).hasMessageContaining("explicit field");
     verifyNoMoreInteractions(files);

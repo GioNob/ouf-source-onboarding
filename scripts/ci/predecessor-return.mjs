@@ -22,7 +22,7 @@ function history(last) {
   const rows = JSON.parse(sql(`select json_agg(row_to_json(h) order by installed_rank)
     from ouf_onboarding.flyway_schema_history h where version is not null`));
   assert.ok(rows.every(r => r.success));
-  assert.equal(rows.at(-1).version, last);
+  if (last) assert.equal(rows.at(-1).version, last);
   return rows;
 }
 
@@ -96,7 +96,9 @@ try {
   assert.equal(sql("select to_regclass('ouf_onboarding.flyway_schema_history') is null"), 't');
   const old = run(previous);
   await ready(old, 'predecessor on empty database');
-  const v42 = history('42');
+  const baseline = history();
+  const baselineVersion = baseline.at(-1).version;
+  assert.ok(['42','43'].includes(baselineVersion));
   // Seed only the isolated IAM policy; the runtime writes every onboarding row through HTTP.
   const bundle = policy(), payload = JSON.stringify(bundle);
   assert.ok(!payload.includes("'"));
@@ -113,7 +115,7 @@ try {
   const next = run(candidate);
   await ready(next, 'candidate on populated database');
   const v43 = history('43');
-  assert.deepEqual(v43.slice(0, -1), v42);
+  assert.deepEqual(baselineVersion === '42' ? v43.slice(0, -1) : v43, baseline);
   assert.equal(v43.at(-1).script, 'V43__managed_review_feedback.sql');
   const result = await writeV43(fixture, seed);
   function candidateEvidence() {
@@ -135,7 +137,7 @@ try {
   docker('start', old);
   assert.equal(docker('inspect', '-f', '{{.Image}}', old), previous);
   await ready(old, 'predecessor return on V43');
-  await verifyReturn(fixture, seed, result);
+  await verifyReturn(fixture, seed, result, baselineVersion);
   assert.equal(sql(`select parent_version_id from ouf_onboarding.onboarding_version where onboarding_version_id='${result.child.onboardingVersionId}'`),
     seed.parent.onboardingVersionId, 'child draft keeps its parent link after the return');
   assert.deepEqual(history('43'), v43);

@@ -8,7 +8,7 @@ on:
       predecessor:
         description: Deployed predecessor commit (abbreviated or full SHA)
         type: string
-        default: '79672b55'
+        default: 'b3f33586'
         required: true
 
 permissions:
@@ -16,6 +16,10 @@ permissions:
 
 jobs:
   predecessor-return:
+    strategy:
+      fail-fast: false
+      matrix:
+        predecessor: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.predecessor) || '["b3f33586","79672b55"]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     services:
@@ -39,7 +43,7 @@ jobs:
           node-version: '22'
       - name: Build both revisions and exercise the return on candidate data
         env:
-          PREDECESSOR: ${{ inputs.predecessor || '79672b55' }}
+          PREDECESSOR: ${{ matrix.predecessor }}
           CI_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
           OUF_ONB_DB_PASSWORD: local-ci-only
         run: bash scripts/ci/predecessor-return.sh

@@ -36,7 +36,9 @@ public class SourceRevisionApi {
       }
       if(type==SourceRevisionService.Prepare.class&&(!args.path("parentVersionId").isTextual()
           ||!args.path("commandKey").isTextual()||!args.path("configurationHash").isTextual()
-          ||!args.path("publicationEffect").isTextual()||args.has("changes")==args.has("assetRef")
+          ||!args.path("publicationEffect").isTextual()||(args.has("changes")&&args.has("assetRef"))
+          ||(!args.has("changes")&&!args.has("assetRef")&&!args.has("compositions"))
+          ||(args.has("compositions")&&!args.path("compositions").isArray())
           ||(args.has("changes")&&!args.path("changes").isArray())
           ||(args.has("newColumns")&&(!args.has("assetRef")||!args.path("newColumns").isArray()))
           ||(args.has("assetRef")&&(!args.path("assetRef").path("assetId").isTextual()
@@ -46,6 +48,7 @@ public class SourceRevisionApi {
     }catch(java.io.IOException e){throw new IllegalArgumentException("ONB_REVISION_ARGUMENTS_INVALID",e);}
   }
   @PostMapping("/prepare") public ResponseEntity<?> prepare(@RequestBody byte[] raw,HttpServletRequest request){
+    if(raw.length>it.comune.trieste.ouf.onboarding.application.ManagedFileLimits.MAX_MAPPING_ENVELOPE_BYTES)throw new IllegalArgumentException("ONB_REVISION_ARGUMENTS_INVALID");
     var caller=receipts.verifySourceRevision(request.getHeader("X-OUF-Source-Revision-Receipt"),request.getRequestURI(),SourceRevisionService.PREPARE,raw);
     var command=arguments(raw,SourceRevisionService.Prepare.class);
     if(command.assetRef()!=null){

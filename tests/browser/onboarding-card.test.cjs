@@ -31,6 +31,16 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
     const card = {challenge_id:id,source_id:'luoghi',version:1,status:'CREATED',onboardingState:'IN_REVIEW',configuration_hash:'sha256:'+'b'.repeat(64),lockVersion:2,
       expires_at:'2999-01-01T00:00:00Z',reviewSnapshot:snapshot,verifiedTerms:semantic,termVerification:'COMPLETE',
       configuration:{semanticReviewTerms:{[cls]:agent},semanticReferenceBindings:[{reviewTerms:[agent]}],semanticMapping:{targetClasses:[{classIri:cls}]}}};
+    const typeId='urn:test:postal', typeRef=typeId+'@'+id;
+    const pin={semanticId:typeId,publicationSetId:id,label:{it:'Recapito pubblicato'},definitionSha256:'a'.repeat(64),
+      definition:{components:[{name:'indirizzo',type:'string',cardinality:'ONE',required:true,labels:{it:'Indirizzo postale'}}]}};
+    const joined={constructorId:'TEXT_JOIN_V1',inputs:[{role:'part',fieldName:'indirizzo',reader:'TEXT_NFC_TRIM_V1'},
+      {role:'part',fieldName:'civico',reader:'IDENTITY'}],params:{separator:' / '}};
+    const address={kind:'STRUCTURED',targetPropertyIri:'urn:indirizzo',dataAccessLabel:'OPEN',typeRef,
+      components:[{component:'indirizzo',constructor:joined}]};
+    card.configuration.semanticReferenceBindings.push(pin);
+    card.configuration.semanticMapping.compositions=[address];
+    snapshot.DATATYPE={[typeRef]:pin};
     const posts=[], errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/*',async route=>{
@@ -61,6 +71,9 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
     for(const text of ['testo','numero','data','ha codice','chiave della fonte','segnale d’identità'])assert.ok((await table.innerText()).includes(text));
     const article=page.locator('article');
     for(const text of ['Luoghi.csv','4217 byte','27 righe · 21 colonne','Luogo pubblico','del proprietario Comune','Cosa comporta l’approvazione','Ingestion acquisisce','UDP materializza','disattivare','1500','set-luoghi','tutti i segnali','creazione richiede'])assert.ok((await article.innerText()).includes(text),text);
+    assert.match(await article.innerText(),/Recapito pubblicato/);
+    assert.match(await article.innerText(),/Indirizzo postale.*testo.*un valore.*obbligatorio/);
+    assert.match(await article.innerText(),/Unisce in ordine.*Uniforma i caratteri Unicode/);
     const warnings=await page.locator('.warnings').innerText();
     for(const text of ['latitudine · il profilo rileva un numero','latitudine · licenza','latitudine · descrizione italiana assente','referente · dato personale · esclusa'])assert.ok(warnings.includes(text),text);
     for(const text of ['verificato dal registro semantico','Definizione del catalogo','Classe','Proprietà','Comune di Trieste','CC BY 4.0']) assert.ok((await article.innerText()).includes(text),text);
@@ -99,9 +112,12 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
         {section:'IDENTITY',target:'maxCandidates',comment:''},{section:'SEMANTIC',target:cls,comment:''},{section:'LIMITS',target:'maxRows',comment:''}]}});
     card.previousReview={version:1,feedback:posts[0].body.reviewFeedback,changes:[{section:'FIELD',target:'referente',before:{...field.referente},after:{...field.referente,access:'RESTRICTED'}}]};
     card.previousReview.changes.push({section:'SEMANTIC',target:cls,before:{...agent,revisionId:'old'},after:{...agent,revisionId:'new'}});
+    const old=structuredClone(address);old.components[0].constructor.params.separator=' | ';
+    card.previousReview.changes.push({section:'COMPOSITION',target:'urn:indirizzo',before:old,after:address});
     field.referente.access='RESTRICTED'; card.version=2; card.status='CREATED'; card.onboardingState='IN_REVIEW';
     await page.reload(); await page.getByRole('heading',{name:'Differenze rispetto alla versione 1'}).waitFor();
     const diff=page.locator('.warnings').first();
+    assert.match(await diff.innerText(),/Composizione urn:indirizzo.*Unisce in ordine.* → .*Unisce in ordine/);
     assert.match(await diff.innerText(),/PERSONAL.*→.*RESTRICTED/);
     assert.doesNotMatch(await diff.textContent(),/FALSO-AGENTE/);
     assert.match(await diff.innerText(),/Rivedere <b>il contatto<\/b>/);

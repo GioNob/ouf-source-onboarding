@@ -70,9 +70,11 @@ final class ManagedReviewSnapshot {
       boolean included=projected.contains(field);
       var row=new LinkedHashMap<String,Object>();
       row.put("included",included);row.put("property",iri);row.put("transform",property.get("transform"));
+      if(property.containsKey("transformParams"))row.put("transformParams",property.get("transformParams"));
       row.put("profileType",column.get("dataType"));row.put("sourceKey",keys.contains(field));
       row.put("signal",signals.contains(iri));
       Object label=included?labels.get(iri==null?field:iri):null;
+      if(included&&iri==null&&child(config,"compositionInputLabels").containsKey(field))label=child(config,"compositionInputLabels").get(field);
       if(!included&&Objects.equals(excluded.get("profileId"),String.valueOf(profile.get("profile_id"))))
         label=child(excluded,"labels").get(field);
       row.put("access",label);
@@ -97,6 +99,18 @@ final class ManagedReviewSnapshot {
     // JSONB objects have no insertion order. Keep the original header order separately.
     snapshot.put("bindings",bindings);
     snapshot.put("columnOrder",List.copyOf(fields.keySet()));
+    var compositions=new LinkedHashMap<String,Object>();
+    for(Object raw:list(mapping.get("compositions"))){
+      var item=object(raw);String target=(String)item.get("targetPropertyIri");
+      compositions.put(target,item);addReference(semantics,config,bindings,target,target,null,"PROPERTY");
+    }
+    if(!compositions.isEmpty())snapshot.put("COMPOSITION",compositions);
+    var definitions=new LinkedHashMap<String,Object>();
+    for(Object raw:bindings){
+      var pin=object(raw);
+      if(pin.containsKey("definition"))definitions.put(pin.get("semanticId")+"@"+pin.get("publicationSetId"),pin);
+    }
+    if(!definitions.isEmpty())snapshot.put("DATATYPE",definitions);
     snapshot.put("FIELD",fields);snapshot.put("IDENTITY",identity);snapshot.put("SEMANTIC",semantics);snapshot.put("LIMITS",limits);
     return snapshot;
   }
@@ -118,7 +132,7 @@ final class ManagedReviewSnapshot {
   }
   static List<Map<String,Object>> differences(Map<?,?> before,Map<?,?> after){
     var changes=new ArrayList<Map<String,Object>>();
-    for(String section:List.of("FIELD","IDENTITY","SEMANTIC","LIMITS")){
+    for(String section:List.of("FIELD","IDENTITY","SEMANTIC","LIMITS","COMPOSITION","DATATYPE")){
       var prior=child(before,section);var next=child(after,section);
       var targets=new LinkedHashSet<>(prior.keySet().stream().map(Object::toString).toList());
       next.keySet().forEach(key->targets.add(key.toString()));
