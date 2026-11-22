@@ -194,8 +194,9 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.equal(rejected.state, 'REJECTED');
   assert.equal(rejected.configuration_hash, review.configurationHash);
   const {card} = await openCard(fixture, review);
-  assert.equal(card.onboardingState, 'REJECTED');
-  // The predecessor in production (b3f33586, V43) projects a rejection with review notes as CHANGES_REQUESTED.
+  // The predecessor in production (b3f33586, V43) projects a rejection with review notes as CHANGES_REQUESTED,
+  // both in the progress and in the card state derived from it (the version row stays REJECTED, checked above).
+  assert.equal(card.onboardingState, 'CHANGES_REQUESTED');
   assert.equal(card.progress.state, 'CHANGES_REQUESTED');
   assert.equal(card.progress.challengeStatus, 'CANCELLED');
   const row = await version(fixture, child);
