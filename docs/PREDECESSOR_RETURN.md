@@ -2,7 +2,7 @@
 
 Per il rilascio dei tipi di valore (D-084) il predecessore designato in esercizio è `9eeff596a36e9cb36393af557faca39f6bb91f79` (PR #74, ricontrollo umano delle dipendenze), con schema V43. La matrice prova anche `b3f33586dd3b1bb427838f2fa1596b1bc58a55b3` (PR #69, V43), l'immagine a cui torna il rilascio della PR #74 se non va a buon fine. D-080 richiede un esito verde del job `predecessor-return` per la coppia di revisioni prima di qualificare il rilascio `rollbackCompatible`. Una modifica successiva del candidato o del predecessore richiede una nuova prova.
 
-Il workflow gira su push e pull request. Con `workflow_dispatch` il parametro `predecessor` accetta uno SHA. Il candidato è il commit effettivamente estratto come HEAD dal runner, incluso il merge di prova nelle pull request. Il job costruisce dai due alberi Git, controlla le etichette OCI contro gli SHA completi e registra SHA e ID immutabili delle immagini nel log. Lo scenario verifica che il candidato aggiunga soltanto `V44__managed_profile_distinct_values.sql` alla cronologia Flyway V43 del predecessore e che la cronologia V44 resti identica dopo il ritorno.
+Il workflow gira su push e pull request. Con `workflow_dispatch` il parametro `predecessor` accetta uno SHA. Il candidato è il commit effettivamente estratto come HEAD dal runner, incluso il merge di prova nelle pull request. Il job costruisce dai due alberi Git, controlla le etichette OCI contro gli SHA completi e registra SHA e ID immutabili delle immagini nel log. Lo scenario verifica che il candidato aggiunga `V44__managed_profile_distinct_values.sql` e `V45__managed_value_map_preparation.sql` alla cronologia Flyway V43 del predecessore e che la cronologia fino a V45 resti identica dopo il ritorno.
 
 ## Dati e verifiche
 
