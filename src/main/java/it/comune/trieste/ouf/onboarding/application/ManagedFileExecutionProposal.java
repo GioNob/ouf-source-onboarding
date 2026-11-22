@@ -71,7 +71,9 @@ public final class ManagedFileExecutionProposal {
       require(binding!=null);String id=atom(binding.semanticId()),version=atom(binding.semanticVersion());
       String set=uuid(binding.publicationSetId());
       String coordinate=id+"@"+set;
-      require(refs.add(id+"@"+version) && (publication.equals(set) || combined.typeRefs.contains(coordinate)
+      // A nested type can be part of the published definition without an item builder.
+      // Preparation verifies the artifact kind of additional pins from other sets.
+      require(refs.add(id+"@"+version) && (publication.equals(set) || !combined.typeRefs.isEmpty()
           || valueMapRefs.contains(coordinate) || valueMapRefs.contains(id)));
       var pinned=new LinkedHashMap<String,Object>(Map.of("semanticId",id,"semanticVersion",version,
           "revisionId",uuid(binding.revisionId()),"publicationSetId",set));

@@ -26,8 +26,12 @@
     const source = card.adoptionProvenance || {};
     const label = card.label_json?.it || card.local_name || card.semantic_id;
     const english = card.label_json?.en;
-    const heading = card.status === 'OPEN' && !expired(card) ? 'Stai approvando l’adozione' : 'Richiesta di adozione';
-    element('h2', `${heading} ${types[card.artifact_type] || 'della definizione'} «${label}»${english ? ' (' + english + ')' : ''}`, article);
+    const open = card.status === 'OPEN' && !expired(card);
+    const nativeDatatype = card.artifact_type === 'DATATYPE' && !card.adoptionProvenance;
+    const heading = nativeDatatype
+      ? (open ? 'Stai approvando il tipo strutturato' : 'Richiesta di approvazione del tipo strutturato')
+      : (open ? 'Stai approvando l’adozione' : 'Richiesta di adozione') + ' ' + (types[card.artifact_type] || 'della definizione');
+    element('h2', `${heading} «${label}»${english ? ' (' + english + ')' : ''}`, article);
     const facts = document.createElement('dl');
     const fact = (name, value) => { element('dt', name, facts); return element('dd', value, facts); };
     const iri = source.canonicalUri || card.semantic_id;
@@ -52,7 +56,7 @@
     article.append(facts);
     if (card.artifact_type === 'DATATYPE' && card.datatypeReview) datatypeSummary(card.datatypeReview, article);
     const warnings = [];
-    if (source.licenseWarning || !source.license) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
+    if (source.licenseWarning || (!nativeDatatype && !source.license)) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
     for (const finding of card.validationFindings || []) {
       warnings.push(typeof finding === 'string' ? finding : finding.message || finding.code || JSON.stringify(finding));
     }
@@ -67,8 +71,14 @@
     element('p', 'Approvi questa revisione. Con il successivo comando «Pubblica» la definizione diventa pubblicata e utilizzabile nei mapping delle fonti dell’ente. Non modifica dati esistenti e può essere deprecata in seguito.', article);
   }
   function datatypeSummary(review, article) {
-    const table = element('table', '', article);
-    element('caption', 'Componenti del tipo strutturato', table);
+    const title = 'Componenti del tipo strutturato';
+    const scroll = element('div', '', article);
+    scroll.className = 'field-scroll datatype-components';
+    scroll.tabIndex = 0;
+    scroll.setAttribute('role', 'region');
+    scroll.setAttribute('aria-label', title);
+    const table = element('table', '', scroll);
+    element('caption', title, table);
     const header = element('tr', '', element('thead', '', table));
     for (const title of ['Nome', 'Tipo', 'Cardinalità', 'Obbligatorio', 'Vincoli']) {
       element('th', title, header).scope = 'col';
@@ -96,7 +106,7 @@
   function datatypeChangeText(value) {
     if (Array.isArray(value)) return value.join(' → ');
     if (value === null || typeof value !== 'object') return String(value);
-    if (!value.name) return Object.entries(value).map(([language,label]) => language + ' · ' + label).join(', ');
+    if (!Object.hasOwn(value, 'cardinality')) return Object.entries(value).map(([language,label]) => language + ' · ' + label).join(', ');
     const constraints = {minInclusive:'Minimo incluso',maxInclusive:'Massimo incluso',maxLength:'Lunghezza massima',vocabularyRef:'Vocabolario'};
     return [value.name, typeNames[value.type] || value.type, value.cardinality === 'MANY' ? 'Più valori' : 'Un valore',
       value.required ? 'Obbligatorio' : 'Facoltativo', value.labels && datatypeChangeText(value.labels),
@@ -149,7 +159,7 @@
       expressionText(c,definitions)).join(' · ');
   }
   function definitionText(pin,definitions) {
-    return [pin.label.it,...pin.definition.components.map(c =>
+    return [pin.label?.it || pin.semanticId,...pin.definition.components.map(c =>
       (c.labels?.it || c.name) + ' (' + c.name + ') · ' + (typeNames[c.type] || definitions[c.type]?.label?.it || c.type) +
       ' · ' + (c.cardinality === 'MANY' ? 'più valori' : 'un valore') + ' · ' + (c.required ? 'obbligatorio' : 'facoltativo') +
       (c.constraints ? ' · vincoli ' + JSON.stringify(c.constraints) : ''))].join(' — ');

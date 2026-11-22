@@ -73,13 +73,18 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
       const component = {nome:'strade', etichetta:'Strade <img>', tipo:'Testo', cardinalità:'Più valori',
         obbligatorio:'Sì', vincoli:'Lunghezza massima 80'};
       const review = {componenti:[component], versionePrecedente:'Prima pubblicazione', differenze:[]};
-      semantic = {...semantic, artifact_type:'DATATYPE', label_json:{it:'Indirizzo'}, datatypeReview:review};
+      semantic = {...semantic, artifact_type:'DATATYPE', label_json:{it:'Indirizzo'}, datatypeReview:review,
+        validationFindings:['Il componente «strade» è senza etichetta italiana.']};
+      delete semantic.adoptionProvenance;
       await page.reload();
+      await page.getByRole('heading', {name:'Stai approvando il tipo strutturato «Indirizzo»'}).waitFor();
       const table = page.getByRole('table', {name:'Componenti del tipo strutturato'});
       await table.waitFor();
       assert.deepEqual(await table.locator('thead th').allTextContents(), ['Nome','Tipo','Cardinalità','Obbligatorio','Vincoli']);
       assert.deepEqual(await table.locator('tbody tr > *').allTextContents(), ['strade · Strade <img>','Testo','Più valori','Sì','Lunghezza massima 80']);
       assert.equal(await table.locator('img').count(), 0);
+      assert.match(await page.locator('.warnings').innerText(), /Il componente «strade»/);
+      assert.doesNotMatch(await page.locator('.warnings').innerText(), /Licenza/);
       await page.getByText('Prima pubblicazione', {exact:true}).waitFor();
       review.versionePrecedente = '1.0';
       const old = {name:'strade',type:'string',cardinality:'MANY',required:false};
@@ -101,6 +106,13 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
       review.differenze = [];
       await page.reload();
       await page.getByText('Nessuna differenza.', {exact:true}).waitFor();
+      const viewport = page.viewportSize();
+      await page.setViewportSize({width:375,height:720});
+      const region = page.getByRole('region', {name:'Componenti del tipo strutturato'});
+      await region.focus();
+      assert.equal(await region.evaluate(el => el === document.activeElement && el.scrollWidth > el.clientWidth), true);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+      await page.setViewportSize(viewport);
       assert.equal(posts.length, 2);
     });
     let sourcePosts=0,budgetPosts=0,budgetCommand;const source={challenge_id:id,status:'CREATED',onboardingState:'IN_REVIEW',lockVersion:2,configuration_hash:'sha256:'+hash,source_id:'test-source',source_name:'Test source',expires_at:'2999-01-01T00:00:00Z',configuration:{semanticMapping:{targetClasses:[{classIri:"urn:example:class",category:{schemeIri:"urn:example:scheme",conceptIri:"urn:example:concept"}},{classIri:"urn:example:other"}],propertyMappings:[{sourceField:'nome',targetPropertyIri:'urn:name',transform:'IDENTITY'}]}},progress:{ingestionCompatibilityObserved:false}};

@@ -7,11 +7,15 @@ import static it.comune.trieste.ouf.onboarding.application.ValueCompositions.*;
 /** Called on a private draft before its configuration hash and HUMAN challenge are created. */
 final class PublishedDatatypes {
   private PublishedDatatypes(){}
+  static boolean hasPinnedEvidence(Map<?,?> pin){
+    return pin.containsKey("definition") || pin.containsKey("definitionSha256")
+        || pin.containsKey("valueMapRef") || pin.containsKey("vocabularyRef");
+  }
   static boolean requiresPreparation(Map<?,?> mapping,Map<?,?> extraction,Object bindings){
     if(mapping.containsKey("compositions"))return true;
     if(!ManagedReviewSnapshot.child(extraction,"selection").containsKey("fileProfileId"))return false;
     if(ManagedReviewSnapshot.list(bindings).stream().map(ManagedReviewSnapshot::object)
-        .anyMatch(pin->pin.containsKey("definitionSha256") || pin.containsKey("definition") || pin.containsKey("valueMapRef") || pin.containsKey("vocabularyRef")))return true;
+        .anyMatch(PublishedDatatypes::hasPinnedEvidence))return true;
     var legacy=Set.of("IDENTITY","DECIMAL_DOT_V1","DECIMAL_COMMA_V1","DATE_ISO_V1","DATE_DMY_V1");
     return ManagedReviewSnapshot.list(mapping.get("propertyMappings")).stream().map(ManagedReviewSnapshot::object)
         .anyMatch(p->p.containsKey("transformParams") || p.get("transform") instanceof String reader && !legacy.contains(reader));
@@ -22,6 +26,7 @@ final class PublishedDatatypes {
     Map<String,Map<String,Object>> pins=new LinkedHashMap<>();
     Map<String,Object> retainedVocabularies=new HashMap<>();
     Map<String,Object> retainedDigests=new HashMap<>();
+    Map<String,Object> retainedDefinitions=new HashMap<>();
     Set<String> versions=new HashSet<>();
     for(Object raw:list(config.get("semanticReferenceBindings"),1,32)){
       var binding=map(raw);
@@ -37,6 +42,7 @@ final class PublishedDatatypes {
         retainedVocabularies.put(ref,binding.get("vocabularyRef"));
       }
       if(binding.containsKey("definitionSha256"))retainedDigests.put(ref,binding.get("definitionSha256"));
+      if(binding.containsKey("definition"))retainedDefinitions.put(ref,binding.get("definition"));
     }
     require(versions.size()==refs.size() && versions.containsAll(refs));
     Object expressions=mapping.containsKey("compositions")?mapping.get("compositions"):List.of();
@@ -58,6 +64,8 @@ final class PublishedDatatypes {
       }
     }
     mapPins.addAll(retainedVocabularies.keySet());
+    var runtime=map(map(config.get("extractionProfile")).get("runtime"));
+    Object executionSet=ManagedReviewSnapshot.child(runtime,"execution").get("semanticPublicationSetRef");
     // Bindings carry coordinates, not artifact kinds. Classify them from the Registry so even
     // an additional pinned DATATYPE (outside a property expression) carries its definition.
     for(var entry:pins.entrySet()){
@@ -66,7 +74,10 @@ final class PublishedDatatypes {
       if(actual==null || !(actual.get("artifact_type") instanceof String) || !pin.get("semanticId").equals(actual.get("semantic_id")) || !pin.get("semanticVersion").equals(actual.get("semantic_version"))
           || !pin.get("publicationSetId").equals(actual.get("publication_set_id")) || !pin.get("revisionId").equals(actual.get("revision_id")))
         throw DatatypeResolver.unresolved();
+      String kind=text(actual,"artifact_type");
+      boolean datatype="DATATYPE".equals(kind);
       if(mapPins.contains(entry.getKey())){
+        if(datatype || "CONCEPT".equals(kind))throw DatatypeResolver.unresolvedValueMap();
         var proof=registry.valueMapPin(actual);
         if(proof==null || !pin.get("semanticId").equals(proof.valueMapRef())
             || !pin.get("publicationSetId").equals(proof.publicationSetId()) || proof.vocabularyRef()==null)
@@ -77,20 +88,29 @@ final class PublishedDatatypes {
         pin.put("valueMapRef",entry.getKey());
         pin.put("vocabularyRef",proof.vocabularyRef());
       }
-      if("DATATYPE".equals(actual.get("artifact_type"))){
+      if(datatype){
         verify(pin,actual,hashes);
         if(retainedDigests.containsKey(entry.getKey()) && !Objects.equals(retainedDigests.get(entry.getKey()),pin.get("definitionSha256")))
           throw DatatypeResolver.unresolved();
       }else if(combined.typeRefs.contains(entry.getKey()) || retainedDigests.containsKey(entry.getKey()))throw DatatypeResolver.unresolved();
-      if("CONCEPT".equals(actual.get("artifact_type")) && actual.get("definition") instanceof Map<?,?> concept && concept.containsKey("vocabularyRef")){
+      if("CONCEPT".equals(kind) && actual.get("definition") instanceof Map<?,?> concept && concept.containsKey("vocabularyRef")){
         iri(text(concept,"vocabularyRef"));
         pin.put("definition",concept);
       }
-      if(combined.labels.containsKey(pin.get("semanticId")) && !"PROPERTY".equals(actual.get("artifact_type")))throw DatatypeResolver.unresolved();
+      if(retainedDefinitions.containsKey(entry.getKey())
+          && !Objects.equals(retainedDefinitions.get(entry.getKey()),pin.get("definition")))
+        throw DatatypeResolver.unresolved();
+      if(combined.labels.containsKey(pin.get("semanticId")) && !"PROPERTY".equals(kind))throw DatatypeResolver.unresolved();
     }
+    var mappedTypes=new HashSet<>(combined.typeRefs);
     for(var entry:pins.entrySet())
       if(entry.getValue().containsKey("definitionSha256"))
-        checkClosure(entry.getKey(),pins,new HashSet<>(),new int[]{0});
+        checkClosure(entry.getKey(),pins,new HashSet<>(),new int[]{0},mappedTypes);
+    if(executionSet!=null)for(var entry:pins.entrySet()){
+      String ref=entry.getKey();
+      if(!executionSet.equals(entry.getValue().get("publicationSetId")) && !mappedTypes.contains(ref) && !mapPins.contains(ref))
+        throw DatatypeResolver.unresolved();
+    }
     combined=new ValueCompositions(expressions,profiles,ref->definition(pins,ref));
     Map<String,String> targetLabels=new HashMap<>();
     for(Object raw:list(config.get("dataAccessPolicies"),1,ManagedFileLimits.MAX_COLUMNS)){
@@ -111,7 +131,7 @@ final class PublishedDatatypes {
       require(target.getValue().equals(targetLabels.get(target.getKey()))
           && pins.values().stream().anyMatch(pin->target.getKey().equals(pin.get("semanticId"))));
     }
-    var runtime=map(map(config.get("extractionProfile")).get("runtime"));
+
     if(runtime.containsKey("udp")){
       var udp=map(runtime.get("udp"));
       var materialized=new HashSet<String>();
@@ -135,14 +155,17 @@ final class PublishedDatatypes {
     if(pin==null || !pin.containsKey("definitionSha256") || !(pin.get("definition") instanceof Map<?,?> definition))throw DatatypeResolver.unresolved();
     return definition;
   }
-  private static void checkClosure(String ref,Map<String,Map<String,Object>> pins,Set<String> path,int[] leaves){
+  private static void checkClosure(String ref,Map<String,Map<String,Object>> pins,Set<String> path,int[] leaves,Set<String> referenced){
     var def=definition(pins,ref);
     String id=text(pins.get(ref),"semanticId");
     require(path.size()<4 && path.add(id));
     for(var component:componentSpecs(def).values()){
       String type=text(component,"type");
       if(ValueReader.DATATYPES.containsKey(type))require(++leaves[0]<=256);
-      else checkClosure(type,pins,path,leaves);
+      else{
+        referenced.add(type);
+        checkClosure(type,pins,path,leaves,referenced);
+      }
     }
     path.remove(id);
   }
@@ -151,7 +174,7 @@ final class PublishedDatatypes {
         || !(actual.get("definition") instanceof Map<?,?> definition)
         || !(actual.get("definitionSha256") instanceof String digest)
         || !hashes.ofDefinition(definition).equals(digest.startsWith("sha256:")?digest:"sha256:"+digest)
-        || !(actual.get("label") instanceof Map<?,?> label) || !(label.get("it") instanceof String it) || it.isBlank())
+        || !(actual.get("label") instanceof Map<?,?> label) || !label.values().stream().allMatch(String.class::isInstance))
       throw DatatypeResolver.unresolved();
     pin.put("definition",definition);pin.put("definitionSha256",digest);pin.put("label",label);
   }

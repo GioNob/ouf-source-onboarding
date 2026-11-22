@@ -67,17 +67,16 @@ public class OnboardingService {
     @SuppressWarnings("unchecked") var draft=(Map<String,Object>)current.get("configuration");
     var semantic=ManagedReviewSnapshot.child(draft,"semanticMapping");
     var extraction=ManagedReviewSnapshot.child(draft,"extractionProfile");
-    if(PublishedDatatypes.requiresPreparation(semantic,extraction,draft.get("semanticReferenceBindings"))){
+    Object prior=draft.get("semanticReferenceBindings");
+    if(PublishedDatatypes.requiresPreparation(semantic,extraction,prior)){
       if(!"DRAFT".equals(current.get("state"))||((Number)current.get("lock_version")).longValue()!=expected)throw precondition();
       var profiles=managedFiles.getObject().projectedTypes(sourceId,extraction);
-      Object prior=draft.get("semanticReferenceBindings");
       PublishedDatatypes.prepare(draft,profiles,datatypeResolver,hashes);
       if(!Objects.equals(prior,draft.get("semanticReferenceBindings"))){
         current=patchVersion(sourceId,id,expected,draft,actor,correlation);
         expected=((Number)current.get("lock_version")).longValue();
       }
-    }else if(draft.get("semanticReferenceBindings") instanceof List<?> bindings
-        && bindings.stream().anyMatch(b->b instanceof Map<?,?> pin && (pin.containsKey("definition")||pin.containsKey("definitionSha256")||pin.containsKey("valueMapRef")||pin.containsKey("vocabularyRef")))){
+    }else if(ManagedReviewSnapshot.list(prior).stream().map(ManagedReviewSnapshot::object).anyMatch(PublishedDatatypes::hasPinnedEvidence)){
       throw DatatypeResolver.unresolved();
     }
     Map<String,Object> validation=validate(sourceId,id,actor,correlation);if(!"PASS".equals(validation.get("result")))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALIDATION_FAILED","Configuration contains blocking validation errors");String hash=hashes.of(current.get("configuration"));
