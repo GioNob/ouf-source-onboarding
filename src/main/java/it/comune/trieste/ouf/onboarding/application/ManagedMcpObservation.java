@@ -64,7 +64,6 @@ public final class ManagedMcpObservation {
 
   public static Map<String,Object> handoff(Map<String,Object> body) {
     State state = State.valueOf((String) body.get("status"));
-    if (state == State.PENDING && Boolean.TRUE.equals(body.get("legacy"))) return body;
     return switch (state) {
       case EXPIRED -> with(body, state, Reason.WAIT_DEADLINE_EXPIRED);
       case PENDING -> with(body, state, Reason.UPLOAD_PENDING, Action.READ_AGAIN);

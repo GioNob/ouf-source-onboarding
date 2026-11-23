@@ -34,19 +34,22 @@ Status is evidence-based: **IMPLEMENTED** requires executable code plus tests or
 
 ## D-089 · Managed file picker
 
-The following test IDs identify assertions in `ManagedFileChatHandoffTest` on the module CI PostgreSQL database with a controlled clock. Runtime qualification requires a successful CI run.
+The picker tests in `ManagedFileChatHandoffTest` use the module CI PostgreSQL database and a controlled clock for issuance, decisions and reclamation. D089-09 uses the signed-delegation fixture in `ManagedFileDelegationVerifierTest`. Runtime qualification requires a successful CI run.
 
 | PET ID | Observable behavior |
 |---|---|
 | D089-01 | Two concurrent issuers receive the same UUIDv4, URL, times and version. Scope conflicts fail, and replay after a decision returns the original issuance. |
 | D089-02 | A staged asset or a rejection becomes visible on the next read. Identical decisions keep version 2. Different assets, codes and outcome kinds conflict. |
 | D089-03 | Second 3599 remains pending. At 3600 both a reader and a late writer observe durable expiry, with one version increment. |
-| D089-04 | Unknown and foreign IDs have the identical legacy response. The first THS decision binds an unissued ID, and a foreign writer cannot change it. Asset ownership includes tenant and subject. |
+| D089-04 | Reading, checking an upload, completing or rejecting another subject's or tenant's ID returns 409 `ONB_HANDOFF_UNKNOWN`. An owned receipt also requires ownership of the asset being staged. Denied writes preserve the pending version. |
 | D089-05 | A pre-deadline writer and a deadline reader on separate PostgreSQL connections agree on the sole committed terminal outcome. |
-| D089-06 | Recreating the picker context preserves a pending deadline and a terminal legacy receipt. The predecessor-return workflow also restarts the entire candidate image during a wait. |
-| D089-07 | Outcomes survive through the final second of retention. Reclaiming a receipt preserves the issued ID against replay through the legacy path. |
+| D089-06 | Recreating the picker context preserves the original issue acknowledgement, a pending deadline and the code and version of an issued terminal receipt. The predecessor-return workflow also restarts the entire candidate image during a wait. |
+| D089-07 | A rejection is readable through the last second of retention. Retirement clears the code and preserves the command acknowledgement. Reads, upload checks and both decisions then return 409 `ONB_HANDOFF_UNKNOWN`. |
 | D089-08 | Invalid duration settings prevent service construction. An installation-specific shorter deadline survives a change in configuration. |
 | D089-09 | `ManagedFileDelegationVerifierTest` exercises the HTTP issue route with a valid signed receipt and checks missing or wrong-path delegation and invalid command UUIDs. |
+| D089-10 | MockMvc compares the serialized HTTP 409 problem body byte for byte for missing, foreign-tenant, foreign-subject, retired and residual legacy IDs, using a different correlation header on each read. All return `ONB_HANDOFF_UNKNOWN` and the MCP owner-error observation. |
+| D089-11 | Pre-stream validation, completion with an owned asset and rejection of an unissued ID return 409 `ONB_HANDOFF_UNKNOWN`. The handoff table stays empty. |
+| D089-12 | A staged V46 legacy row inserted as predecessor data is unknown on read, upload validation, replay of the same asset and rejection. Its asset and version survive through the last second of retention. Reclamation deletes it at the boundary. |
 
 The D-080 workflow includes `82aabaa`. It compares the full candidate handoff row and Flyway history through V46 after the predecessor has resumed reads and writes. MCP tranche renewal, admission, and the end-to-end latency measurement belong to the MCP and cross-module PET.
 

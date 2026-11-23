@@ -21,7 +21,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class ManagedFileChatHandoff {
   private static final String TABLE = "ouf_onboarding.managed_file_handoff";
-  private static final Map<String,Object> LEGACY_PENDING = Map.of("status", "PENDING", "legacy", true);
   private final ManagedFileService files;
   private final JdbcTemplate db;
   private final TransactionTemplate tx;
@@ -52,13 +51,11 @@ public class ManagedFileChatHandoff {
   }
 
   private record Receipt(UUID id, Instant issued, Instant until, String state, long version,
-                         UUID asset, String code, boolean legacy, boolean retired) {
+                         UUID asset, String code) {
     static Receipt read(ResultSet rs, int row) throws SQLException {
-      var until = rs.getTimestamp("wait_until");
       return new Receipt(rs.getObject("handoff_id", UUID.class), rs.getTimestamp("issued_at").toInstant(),
-          until == null ? null : until.toInstant(), rs.getString("state"), rs.getLong("observation_version"),
-          rs.getObject("asset_id", UUID.class), rs.getString("code"), rs.getBoolean("legacy"),
-          rs.getBoolean("receipt_retired"));
+          rs.getTimestamp("wait_until").toInstant(), rs.getString("state"), rs.getLong("observation_version"),
+          rs.getObject("asset_id", UUID.class), rs.getString("code"));
     }
   }
 
@@ -88,20 +85,18 @@ public class ManagedFileChatHandoff {
   }
 
   public void complete(UUID id, UUID asset, String tenant, String subject) {
-    files.requireTenantOwner(asset, tenant, subject);
     finish(id, tenant, subject, "STAGED", asset, null);
   }
 
   /** Reject a stale or foreign URL before streaming to the Gateway. Finish checks again after the upload. */
   public void checkUpload(UUID id, String tenant, String subject) {
-    var states = db.queryForList("select case when tenant_id<>? or subject_id<>? or receipt_retired then 'UNAVAILABLE'"
-        + " when state='PENDING' and wait_until<=? then 'EXPIRED' else state end from " + TABLE + " where handoff_id=?",
-        String.class, tenant, subject, Timestamp.from(now()), id);
-    if (states.isEmpty()) return; // Predecessor URL, bound only at completion.
-    switch (states.getFirst()) {
-      case "PENDING", "STAGED" -> { } // Finish reconciles the actual asset ID, including a replay.
+    Receipt row = requireIssued(id, tenant, subject, false);
+    switch (row.state()) {
+      case "PENDING" -> {
+        if (!now().isBefore(row.until())) throw conflict("ONB_HANDOFF_EXPIRED");
+      }
+      case "STAGED" -> { } // Finish reconciles the actual asset ID on replay.
       case "EXPIRED" -> throw conflict("ONB_HANDOFF_EXPIRED");
-      case "UNAVAILABLE" -> throw conflict("ONB_HANDOFF_UNAVAILABLE");
       default -> throw conflict("ONB_HANDOFF_OUTCOME_CONFLICT");
     }
   }
@@ -115,14 +110,8 @@ public class ManagedFileChatHandoff {
   private void finish(UUID id, String tenant, String subject, String state, UUID asset, String code) {
     reclaim();
     boolean expired = tx.execute(ignored -> {
-      Timestamp firstSeen = Timestamp.from(now());
-      // An unissued predecessor ID is first bound by the authenticated THS writer.
-      if (db.update("insert into " + TABLE + """
-           (handoff_id, tenant_id, subject_id, issued_at, state, observation_version, asset_id, code, completed_at, legacy)
-           values (?, ?, ?, ?, ?, 1, ?, ?, ?, true) on conflict (handoff_id) do nothing
-          """, id, tenant, subject, firstSeen, state, asset, code, firstSeen) == 1) return false;
-      Receipt row = owned(id, tenant, subject, true);
-      if (row == null || row.retired()) throw conflict("ONB_HANDOFF_UNAVAILABLE");
+      Receipt row = requireIssued(id, tenant, subject, true);
+      if ("STAGED".equals(state)) files.requireTenantOwner(asset, tenant, subject);
       Instant decision = now();
       if (expire(row, decision) || "EXPIRED".equals(row.state())) return true;
       if ("PENDING".equals(row.state())) {
@@ -139,10 +128,11 @@ public class ManagedFileChatHandoff {
     if (expired) throw conflict("ONB_HANDOFF_EXPIRED");
   }
 
-  private Receipt owned(UUID id, String tenant, String subject, boolean lock) {
-    var rows = db.query("select * from " + TABLE + " where handoff_id=? and tenant_id=? and subject_id=?" + (lock ? " for update" : ""),
-        Receipt::read, id, tenant, subject);
-    return rows.isEmpty() ? null : rows.getFirst();
+  private Receipt requireIssued(UUID id, String tenant, String subject, boolean lock) {
+    var rows = db.query("select * from " + TABLE + " where handoff_id=? and tenant_id=? and subject_id=?"
+        + " and not legacy and not receipt_retired" + (lock ? " for update" : ""), Receipt::read, id, tenant, subject);
+    if (rows.isEmpty()) throw conflict("ONB_HANDOFF_UNKNOWN");
+    return rows.getFirst();
   }
 
   private boolean expire(Receipt row, Instant decision) {
@@ -155,25 +145,19 @@ public class ManagedFileChatHandoff {
 
   public Map<String,Object> result(UUID id, String tenant, String subject) {
     return tx.execute(ignored -> {
-      Receipt row = owned(id, tenant, subject, false);
-      if (row == null || row.retired()) return LEGACY_PENDING;
+      Receipt row = requireIssued(id, tenant, subject, false);
       boolean expired = false;
       if ("PENDING".equals(row.state()) && !now().isBefore(row.until())) {
-        row = owned(id, tenant, subject, true);
-        if (row == null || row.retired()) return LEGACY_PENDING;
+        row = requireIssued(id, tenant, subject, true);
         expired = expire(row, now());
       }
       String state = expired ? "EXPIRED" : row.state();
       var result = new LinkedHashMap<String,Object>();
       result.put("status", state);
-      if (row.legacy()) {
-        result.put("legacy", true);
-      } else {
-        result.put("state", state);
-        result.put("observationVersion", Long.toString(row.version() + (expired ? 1 : 0)));
-        result.put("issuedAt", row.issued().toString());
-        result.put("waitUntil", row.until().toString());
-      }
+      result.put("state", state);
+      result.put("observationVersion", Long.toString(row.version() + (expired ? 1 : 0)));
+      result.put("issuedAt", row.issued().toString());
+      result.put("waitUntil", row.until().toString());
       if (row.asset() != null) {
         files.requireTenantOwner(row.asset(), tenant, subject);
         result.put("assetId", row.asset());
@@ -196,7 +180,7 @@ public class ManagedFileChatHandoff {
          where handoff_id in (select handoff_id from ouf_onboarding.managed_file_handoff
            where legacy and not receipt_retired and completed_at<=? order by completed_at limit 64 for update skip locked)
         """, cutoff);
-    // Keep the issued ID and command binding: an old URL must never become an unissued legacy ID.
+    // Keep the original command acknowledgement available for idempotent issuance.
     db.update("update " + TABLE + """
          set receipt_retired=true, asset_id=null, code=null
          where handoff_id in (select handoff_id from ouf_onboarding.managed_file_handoff

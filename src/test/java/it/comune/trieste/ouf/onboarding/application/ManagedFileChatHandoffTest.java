@@ -1,23 +1,40 @@
 package it.comune.trieste.ouf.onboarding.application;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import it.comune.trieste.ouf.authorization.PrincipalContext;
+import it.comune.trieste.ouf.onboarding.api.CorrelationFilter;
+import it.comune.trieste.ouf.onboarding.api.PermissionDelegationVerifier;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
+import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.support.GenericApplicationContext;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.context.WebApplicationContext;
 
 /** Same migrated PostgreSQL database as module-ci. All picker times are controlled. */
 @SpringBootTest
@@ -29,6 +46,8 @@ class ManagedFileChatHandoffTest {
   @Autowired ManagedFileService files;
   @Autowired JdbcTemplate db;
   @Autowired TransactionTemplate tx;
+  @Autowired WebApplicationContext context;
+  @MockitoBean PermissionDelegationVerifier receipts;
   private ManagedFileChatHandoff owner;
 
   @BeforeEach void setup() {
@@ -107,31 +126,29 @@ class ManagedFileChatHandoffTest {
     assertThat(at(3605).result(second, TENANT, USER)).isEqualTo(expired);
   }
 
-  @Test void d089_04_unknownAndForeignAreIndistinguishableAndLegacyBindsFirstWriter() {
-    UUID issued = issue(), legacy = UUID.randomUUID(), asset = asset();
-    var masked = Map.of("status", "PENDING", "legacy", true);
-    owner.checkUpload(legacy, TENANT, USER);
-    assertThatThrownBy(() -> owner.checkUpload(issued, "other", USER)).hasMessage("ONB_HANDOFF_UNAVAILABLE");
-    assertThat(ManagedMcpObservation.handoff(owner.result(legacy, TENANT, USER))).isEqualTo(masked);
-    assertThat(owner.result(issued, "other", USER)).isEqualTo(masked);
-    assertThat(owner.result(issued, TENANT, "other")).isEqualTo(masked);
-    assertThatThrownBy(() -> owner.reject(issued, "other", USER, "SIZE_INVALID")).hasMessage("ONB_HANDOFF_UNAVAILABLE");
-    assertThatThrownBy(() -> owner.complete(issued, asset, "other", USER)).isInstanceOf(DomainFailure.class);
+  private void assertUnknown(ThrowingCallable operation) {
+    assertThatThrownBy(operation).isInstanceOfSatisfying(DomainFailure.class, failure -> {
+      assertThat(failure.status()).isEqualTo(HttpStatus.CONFLICT);
+      assertThat(failure.code()).isEqualTo("ONB_HANDOFF_UNKNOWN");
+    });
+  }
+
+  @Test void d089_04_foreignTenantAndSubjectCannotUseOrChangeTheReceipt() {
+    UUID issued = issue(), asset = asset();
+    assertUnknown(() -> owner.result(issued, "other", USER));
+    assertUnknown(() -> owner.checkUpload(issued, "other", USER));
+    assertUnknown(() -> owner.reject(issued, "other", USER, "SIZE_INVALID"));
+    assertUnknown(() -> owner.complete(issued, asset, "other", USER));
+    assertUnknown(() -> owner.result(issued, TENANT, "other"));
+    assertUnknown(() -> owner.checkUpload(issued, TENANT, "other"));
+    assertUnknown(() -> owner.reject(issued, TENANT, "other", "SIZE_INVALID"));
+    assertUnknown(() -> owner.complete(issued, asset, TENANT, "other"));
     UUID foreignAsset = (UUID) files.registerOwned(null, "object://fixture/" + UUID.randomUUID(),
         "sha256:" + "b".repeat(64), "text/csv", 42, USER, "retention://fixture", "other").get("asset_id");
-    assertThatThrownBy(() -> owner.complete(issued, foreignAsset, "other", USER)).hasMessage("ONB_HANDOFF_UNAVAILABLE");
+    assertUnknown(() -> owner.complete(issued, foreignAsset, "other", USER));
+    assertThatThrownBy(() -> owner.complete(issued, foreignAsset, TENANT, USER)).isInstanceOfSatisfying(
+        DomainFailure.class, failure -> assertThat(failure.code()).isEqualTo("ONB_FILE_OWNER_SCOPE_UNPROVEN"));
     assertThat(owner.result(issued, TENANT, USER)).containsEntry("state", "PENDING").containsEntry("observationVersion", "1");
-    owner.complete(legacy, asset, TENANT, USER);
-    owner.complete(legacy, asset, TENANT, USER);
-    assertThat(at(3700).result(legacy, TENANT, USER)).isEqualTo(Map.of("status", "STAGED", "assetId", asset, "legacy", true));
-    assertThat(owner.result(legacy, TENANT, "other")).isEqualTo(masked);
-    assertThatThrownBy(() -> owner.reject(legacy, TENANT, "other", "SIZE_INVALID")).hasMessage("ONB_HANDOFF_UNAVAILABLE");
-    UUID rejection = UUID.randomUUID();
-    owner.reject(rejection, TENANT, USER, "FORMAT_UNSUPPORTED");
-    assertThat(at(3700).result(rejection, TENANT, USER))
-        .isEqualTo(Map.of("status", "REJECTED", "code", "FORMAT_UNSUPPORTED", "legacy", true));
-    assertThat(db.queryForObject("select count(*) from " + TABLE +
-        " where legacy and wait_until is null and command_key is null", Long.class)).isEqualTo(2L);
   }
 
   @Test void d089_05_competingDeadlineAndCompletionPublishOneTerminalVersion() throws Exception {
@@ -165,37 +182,37 @@ class ManagedFileChatHandoffTest {
   }
 
   @Test void d089_06_restartPreservesPendingAndTerminalReceipts() {
-    UUID key = UUID.randomUUID(), legacy = UUID.randomUUID();
+    UUID key = UUID.randomUUID(), rejected = issue();
     Map<String,Object> issued;
     try (var first = pickerContext(0)) {
       var before = first.getBean(ManagedFileChatHandoff.class);
       issued = before.issue(key, TENANT, USER);
-      before.reject(legacy, TENANT, USER, "SIZE_INVALID");
+      before.reject(rejected, TENANT, USER, "SIZE_INVALID");
     }
     try (var second = pickerContext(2700)) {
       var after = second.getBean(ManagedFileChatHandoff.class);
       assertThat(after.issue(key, TENANT, USER)).isEqualTo(issued);
       assertThat(after.result((UUID) issued.get("handoffId"), TENANT, USER))
           .containsEntry("waitUntil", issued.get("waitUntil")).containsEntry("state", "PENDING");
-      assertThat(after.result(legacy, TENANT, USER)).containsEntry("code", "SIZE_INVALID");
+      assertThat(after.result(rejected, TENANT, USER)).containsEntry("code", "SIZE_INVALID")
+          .containsEntry("state", "REJECTED").containsEntry("observationVersion", "2");
     }
   }
 
   @Test void d089_07_retentionRunsFromCompletionAndCannotReopenAnIssuedLink() {
-    UUID key = UUID.randomUUID(), legacy = UUID.randomUUID();
+    UUID key = UUID.randomUUID(), asset = asset();
     var issued = owner.issue(key, TENANT, USER);
     UUID id = (UUID) issued.get("handoffId");
     at(100).reject(id, TENANT, USER, "SIZE_INVALID");
-    at(100).reject(legacy, TENANT, USER, "SIZE_INVALID");
     var lastSecond = at(100 + 86400 - 1);
     lastSecond.issue(UUID.randomUUID(), TENANT, USER);
     assertThat(lastSecond.result(id, TENANT, USER)).containsEntry("state", "REJECTED");
-    assertThat(lastSecond.result(legacy, TENANT, USER)).containsEntry("status", "REJECTED");
     var after = at(100 + 86400);
     assertThat(after.issue(key, TENANT, USER)).isEqualTo(issued);
-    assertThat(after.result(id, TENANT, USER)).isEqualTo(Map.of("status", "PENDING", "legacy", true));
-    assertThat(after.result(legacy, TENANT, USER)).isEqualTo(after.result(id, TENANT, USER));
-    assertThatThrownBy(() -> after.reject(id, TENANT, USER, "SIZE_INVALID")).hasMessage("ONB_HANDOFF_UNAVAILABLE");
+    assertUnknown(() -> after.result(id, TENANT, USER));
+    assertUnknown(() -> after.checkUpload(id, TENANT, USER));
+    assertUnknown(() -> after.complete(id, asset, TENANT, USER));
+    assertUnknown(() -> after.reject(id, TENANT, USER, "SIZE_INVALID"));
     assertThat(db.queryForObject("select code is null and receipt_retired from " + TABLE + " where handoff_id=?",
         Boolean.class, id)).isTrue();
   }
@@ -211,5 +228,78 @@ class ManagedFileChatHandoffTest {
     var issued = shorter.issue(UUID.randomUUID(), TENANT, USER);
     assertThat(issued).containsEntry("waitUntil", START.plusSeconds(15).toString());
     assertThat(at(15).result((UUID) issued.get("handoffId"), TENANT, USER)).containsEntry("state", "EXPIRED");
+  }
+
+  @Test void d089_10_unavailableReceiptsReturnByteIdenticalHttpProblems() throws Exception {
+    UUID retired = issue();
+    owner.reject(retired, TENANT, USER, "SIZE_INVALID");
+    var after = at(86400);
+    UUID foreignTenant = (UUID) after.issue(UUID.randomUUID(), "other", USER).get("handoffId");
+    UUID foreignSubject = (UUID) after.issue(UUID.randomUUID(), TENANT, "other").get("handoffId");
+    UUID owned = (UUID) after.issue(UUID.randomUUID(), TENANT, USER).get("handoffId");
+    after.reject(owned, TENANT, USER, "FORMAT_UNSUPPORTED");
+    UUID legacy = insertLegacyStaged(asset());
+
+    var mvc = MockMvcBuilders.webAppContextSetup(context).addFilters(new CorrelationFilter()).build();
+    readHandoff(mvc, owned).andExpect(status().isOk()).andExpect(jsonPath("$.state").value("REJECTED"))
+        .andExpect(jsonPath("$.legacy").doesNotExist());
+    byte[] missing = readUnknownBody(mvc, UUID.randomUUID());
+    for (UUID id : new UUID[]{foreignTenant, foreignSubject, retired, legacy}) {
+      assertThat(readUnknownBody(mvc, id)).isEqualTo(missing);
+    }
+  }
+
+  private byte[] readUnknownBody(MockMvc mvc, UUID id) throws Exception {
+    return readHandoff(mvc, id).andExpect(status().isConflict())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(jsonPath("$.code").value("ONB_HANDOFF_UNKNOWN")).andExpect(jsonPath("$.workflowState").value("ERROR"))
+        .andExpect(jsonPath("$.reasonCode").value("OWNER_ERROR")).andExpect(jsonPath("$.allowedActions[0]").value("NONE"))
+        .andExpect(jsonPath("$.legacy").doesNotExist()).andReturn().getResponse().getContentAsByteArray();
+  }
+
+  private ResultActions readHandoff(MockMvc mvc, UUID id) throws Exception {
+    String path = "/api/internal/v1/onboarding/managed-file-mcp/handoff";
+    String capability = "ouf.managed-source.file.upload";
+    byte[] body = """
+        {"Arguments":{"handoffId":"%s"}}
+        """.formatted(id).getBytes(StandardCharsets.UTF_8);
+    var principal = new PrincipalContext(USER, TENANT, PrincipalContext.ActorType.HUMAN, null,
+        "fixture-auth", "fixture-issuer", "fixture-audience", Set.of(capability));
+    when(receipts.verifyManagedFile("fixture", path, capability, body))
+        .thenReturn(new PermissionDelegationVerifier.Delegated(principal, "fixture"));
+    String correlation = UUID.randomUUID().toString();
+    return mvc.perform(post(path).header("X-OUF-Managed-File-Receipt", "fixture")
+            .header("X-Correlation-ID", correlation).contentType(MediaType.APPLICATION_JSON).content(body))
+        .andExpect(header().string("X-Correlation-ID", correlation));
+  }
+
+  @Test void d089_11_unissuedUploadAndBothDecisionsLeaveNoReceipt() {
+    UUID missing = UUID.randomUUID(), asset = asset();
+    assertUnknown(() -> owner.checkUpload(missing, TENANT, USER));
+    assertUnknown(() -> owner.complete(missing, asset, TENANT, USER));
+    assertUnknown(() -> owner.reject(missing, TENANT, USER, "SIZE_INVALID"));
+    assertThat(db.queryForObject("select count(*) from " + TABLE, Long.class)).isZero();
+  }
+
+  private UUID insertLegacyStaged(UUID asset) {
+    UUID legacy = UUID.randomUUID();
+    db.update("insert into " + TABLE + """
+         (handoff_id, tenant_id, subject_id, issued_at, state, observation_version, asset_id, completed_at, legacy)
+         values (?, ?, ?, ?, 'STAGED', 1, ?, ?, true)
+        """, legacy, TENANT, USER, Timestamp.from(START), asset, Timestamp.from(START));
+    return legacy;
+  }
+
+  @Test void d089_12_residualReceiptCannotBeReplayedAndIsReclaimedAtRetention() {
+    UUID asset = asset(), legacy = insertLegacyStaged(asset);
+    assertUnknown(() -> owner.result(legacy, TENANT, USER));
+    assertUnknown(() -> owner.checkUpload(legacy, TENANT, USER));
+    assertUnknown(() -> owner.complete(legacy, asset, TENANT, USER));
+    assertUnknown(() -> owner.reject(legacy, TENANT, USER, "SIZE_INVALID"));
+    at(86399).issue(UUID.randomUUID(), TENANT, USER);
+    assertThat(db.queryForObject("select asset_id from " + TABLE + " where handoff_id=? and legacy and observation_version=1",
+        UUID.class, legacy)).isEqualTo(asset);
+    at(86400).issue(UUID.randomUUID(), TENANT, USER);
+    assertThat(db.queryForObject("select count(*) from " + TABLE + " where handoff_id=?", Long.class, legacy)).isZero();
   }
 }
