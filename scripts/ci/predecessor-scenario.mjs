@@ -237,8 +237,13 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   // Reconcile a candidate command, then exercise a new predecessor write and its identical retry.
   // The older V43 predecessor replays the command without the additive D-085 observation fields.
   const additive = new Set(['workflowState', 'reasonCode', 'allowedActions', 'lockVersion']);
-  assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'),
-    predecessorHasDistinctValues ? child : Object.fromEntries(Object.entries(child).filter(([key]) => !additive.has(key))));
+  // task-52c derives the proposal requirement from the retained configuration (nothing is stored), so a
+  // predecessor replays the same draft as DRAFT_READY without the derived fields.
+  const derived = new Set(['executionProposalRequired', 'missingSections']);
+  const replayed = Object.fromEntries(Object.entries(child)
+    .filter(([key]) => !derived.has(key) && (predecessorHasDistinctValues || !additive.has(key))));
+  if (replayed.reasonCode === 'EXECUTION_PROPOSAL_REQUIRED') replayed.reasonCode = 'DRAFT_READY';
+  assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'), replayed);
   const prepared = await prepare(fixture, child, 'return-review');
   assert.equal(prepared.state, 'IN_REVIEW');
   assert.equal(prepared.challengeStatus, 'CREATED');
