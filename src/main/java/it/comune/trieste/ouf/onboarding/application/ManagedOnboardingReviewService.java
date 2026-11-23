@@ -486,6 +486,11 @@ public class ManagedOnboardingReviewService {
   }
 
   DomainFailure assetConflict(PrincipalContext p,String bound){
+    String code="ONB_REVISION_ASSET_SOURCE_CONFLICT";
+    return new DomainFailure(HttpStatus.CONFLICT,code,code,assetConflictProperties(p,bound));
+  }
+
+  Map<String,Object> assetConflictProperties(PrincipalContext p,String bound){
     var properties=new LinkedHashMap<String,Object>();
     var resolutions=new ArrayList<String>();
     if(p!=null && bound!=null && p.scopes().contains(READ)){
@@ -508,7 +513,7 @@ public class ManagedOnboardingReviewService {
     if(permittedCommand(p,"ouf.managed-source.file.upload"))
       resolutions.add("UPLOAD_NEW_FILE");
     properties.put("resolutions",resolutions);
-    return new DomainFailure(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT","Managed file is bound to another source",properties);
+    return properties;
   }
 
   private Map<String,Object> readAuthorized(PrincipalContext p,String source,UUID version,String ifObservationVersion){

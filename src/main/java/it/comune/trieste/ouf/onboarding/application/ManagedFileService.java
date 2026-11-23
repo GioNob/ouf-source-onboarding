@@ -500,7 +500,7 @@ public class ManagedFileService {
     if(tenant!=null)requireTenantOwner(input.assetId(),tenant,actor.subject());
     var asset=asset(input.assetId());
     if(asset.get("source_id") instanceof String bound && !input.sourceId().equals(bound))
-      throw reviews.assetConflict(principal,bound);
+      throw boundAssetConflict(principal,bound);
     var profile=selectedProfile(fileProfile(input.assetId(),input.profileId()),input.selectedLayer());
     var compiled=input.compile(asset,profile);
     onboarding.checkDraftReaders(compiled.configuration(),compiled.profiles());
@@ -515,7 +515,7 @@ public class ManagedFileService {
     if(tenant!=null)requireTenantOwner(assetId,tenant,actor.subject());
     Map<String,Object> asset=asset(assetId),profile=selectedProfile(fileProfile(assetId,profileId),input.selectedLayer());
     if(asset.get("source_id")!=null&&!sourceId.equals(asset.get("source_id")))
-      throw reviews.assetConflict(principal,(String)asset.get("source_id"));
+      throw boundAssetConflict(principal,(String)asset.get("source_id"));
     UUID parent=redraftParent(asset,profileId,sourceId,name,owner,tenant,actor);
     UUID replace=replaceDraft && parent==null && tenant!=null && sourceId.equals(asset.get("source_id"))
         ?replaceableDraft(sourceId,assetId,profileId,name,owner,tenant,actor.subject(),true):null;
@@ -689,6 +689,10 @@ public class ManagedFileService {
   private Map<String,Object> jsonRow(Map<String,Object> row,String...fields){try{Map<String,Object> out=new LinkedHashMap<>(row);for(String f:fields)if(out.get(f) instanceof String s)out.put(f,json.readValue(s,Object.class));return out;}catch(Exception e){throw new IllegalStateException(e);}}
   private static DomainFailure invalid(String code,String message){return new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,code,message);}
   private static DomainFailure conflict(String code,String message){return new DomainFailure(HttpStatus.CONFLICT,code,message);}
+  private DomainFailure boundAssetConflict(PrincipalContext principal,String bound){
+    return new DomainFailure(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT","Managed file is bound to another source",
+        reviews.assetConflictProperties(principal,bound));
+  }
   private static OffsetDateTime utc(Instant instant){return OffsetDateTime.ofInstant(instant,ZoneOffset.UTC);}
   private static void requireLease(Duration lease){if(lease.toSeconds()<10||lease.toSeconds()>3600)throw invalid("ONB_LEASE_INVALID","lease must be between PT10S and PT1H");}
   private static Map<String,Object> semanticTarget(String classIri,List<String> refs){

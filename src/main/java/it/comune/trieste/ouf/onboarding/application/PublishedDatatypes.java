@@ -65,11 +65,17 @@ final class PublishedDatatypes {
   // Stable field/reader pairs that cause the managed mapping to consult the Registry.
   static List<Map<String,String>> dependentReaders(Map<?,?> config){
     var mapping=ManagedReviewSnapshot.child(config,"semanticMapping");
-    var readers=new TreeMap<String,Set<String>>();
+    var fields=new HashMap<String,String>();
     if(mapping.containsKey("compositions")){
-      var fields=new HashMap<String,String>();
       var projection=ManagedReviewSnapshot.child(ManagedReviewSnapshot.child(config,"extractionProfile"),"projection");
       ManagedReviewSnapshot.list(projection.get("FILE")).forEach(field->fields.put((String)field,null));
+    }
+    return dependentReaders(mapping,fields);
+  }
+
+  private static List<Map<String,String>> dependentReaders(Map<?,?> mapping,Map<String,String> fields){
+    var readers=new TreeMap<String,Set<String>>();
+    if(mapping.containsKey("compositions")){
       readers.putAll(new ValueCompositions(mapping.get("compositions"),fields,null).fieldReaders);
     }
     for(var raw:ManagedReviewSnapshot.list(mapping.get("propertyMappings"))){
@@ -94,14 +100,14 @@ final class PublishedDatatypes {
 
   static DomainFailure readerFailure(Map<?,?> config,Map<String,String> profiles,DomainFailure failure){
     var issues=new ArrayList<Map<String,Object>>();
-    for(var pair:dependentReaders(config)){
+    var mapping=ManagedReviewSnapshot.child(config,"semanticMapping");
+    for(var pair:dependentReaders(mapping,profiles)){
       String field=pair.get("fieldName"),transform=pair.get("transform");
       issues.add(readerIssue(field,transform,profiles.get(field),ValueReader.named(transform).output));
     }
     if(issues.isEmpty()){
       // A retained published definition can fail even for local readers. A reader-only edit
       // cannot repair those coordinates; report the affected mappings without a false fallback.
-      var mapping=ManagedReviewSnapshot.child(config,"semanticMapping");
       for(var raw:ManagedReviewSnapshot.list(mapping.get("propertyMappings"))){
         var property=ManagedReviewSnapshot.object(raw);
         if(property.get("sourceField") instanceof String field && property.get("transform") instanceof String reader)

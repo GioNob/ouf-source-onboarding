@@ -146,6 +146,7 @@ class ManagedOnboardingReviewRuntimeTest {
     create.put("sourceId","other-fixture");
     var visible=ownerPost(http,"create",create,409);
     assertThat(visible.required("code").asText()).isEqualTo("ONB_REVISION_ASSET_SOURCE_CONFLICT");
+    assertThat(visible.required("detail").asText()).isEqualTo("Managed file is bound to another source");
     assertThat(visible.required("boundSourceId").asText()).isEqualTo(source);
     assertThat(visible.required("resolutions")).isEqualTo(runtimeJson.valueToTree(List.of("CREATE_REVISION","UPLOAD_NEW_FILE")));
     var denied=mock(AuthorizationPolicy.AuthorizationDecision.class);
