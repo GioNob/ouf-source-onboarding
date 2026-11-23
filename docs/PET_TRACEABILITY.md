@@ -58,6 +58,11 @@ The D-080 workflow includes `82aabaa`. It compares the full candidate handoff ro
 | ONB-52C-02 | Omitted proposal and mismatched pins leave the draft at lock zero. Stale version takes precedence. A valid proposal for three text properties freezes one challenge across replay. | `task52cPoiCsvDeclaresMissingProposalAndReplaysOneChallenge` |
 | ONB-52C-03 | Create rejects the publication UUID suffix at its input index and leaves no source, version or idempotency record. | `task52cPoiCsvDeclaresMissingProposalAndReplaysOneChallenge` |
 | ONB-52C-04 | Decode errors carry safe diagnostic paths, domain validators retain their codes and unexpected exceptions produce a correlated 500. | `task52cErrorsLogOnlySchemaPathsAndExceptionClasses`, `task52cSharedValidatorsReturnTypedUnprocessableFailures`, `task52cRetainedInvalidCompositionReturnsItsDomainCode` |
+| ONB-52D-01 | Checked and deferred reader selection, published bindings, stable per-field diagnostics, atomic rejection and command replay. | `task52dReaderChecksAndSameAssetCorrection`, `task52dBoundReadersReplayAndRespectSourceVisibility` |
+| ONB-52D-02 | Correct three deferred string readers after a preparation failure and prepare the replacement using the original CSV. | `task52dReaderChecksAndSameAssetCorrection` |
+| ONB-52D-03 | Authorized source visibility and resolution filtering on asset conflict. | `task52dBoundReadersReplayAndRespectSourceVisibility` |
+
+Task 52d targets predecessor `7db13b25c6668e4755ad67d622e812fe3e74b497` (V46). Omitted bindings preserve historical create fingerprints. The existing predecessor-return matrix exercises V43 and V45 baselines. A return run with the V46 production predecessor requires a runner accepting a V46 baseline.
 
 ## Release boundary
 

@@ -14,14 +14,19 @@ final class PublishedDatatypes {
     return pin.containsKey("definition") || pin.containsKey("definitionSha256")
         || pin.containsKey("valueMapRef") || pin.containsKey("vocabularyRef") || pin.containsKey("targetVocabulary");
   }
+  private static final Set<String> LOCAL_READERS=Set.of("IDENTITY","DECIMAL_DOT_V1","DECIMAL_COMMA_V1","DATE_ISO_V1","DATE_DMY_V1");
   static boolean requiresPreparation(Map<?,?> mapping,Map<?,?> extraction,Object bindings){
     if(mapping.containsKey("compositions"))return true;
     if(!ManagedReviewSnapshot.child(extraction,"selection").containsKey("fileProfileId"))return false;
     if(ManagedReviewSnapshot.list(bindings).stream().map(ManagedReviewSnapshot::object)
         .anyMatch(PublishedDatatypes::hasPinnedEvidence))return true;
-    var legacy=Set.of("IDENTITY","DECIMAL_DOT_V1","DECIMAL_COMMA_V1","DATE_ISO_V1","DATE_DMY_V1");
     return ManagedReviewSnapshot.list(mapping.get("propertyMappings")).stream().map(ManagedReviewSnapshot::object)
-        .anyMatch(p->p.containsKey("transformParams") || p.get("transform") instanceof String reader && !legacy.contains(reader));
+        .anyMatch(PublishedDatatypes::usesPublishedReader);
+  }
+
+  private static boolean usesPublishedReader(Map<?,?> property){
+    return property.containsKey("transformParams")
+        || property.get("transform") instanceof String name && !LOCAL_READERS.contains(name);
   }
   static void prepare(Map<String,Object> config,Map<String,String> profiles,DatatypeResolver registry,CanonicalHash hashes){
     prepare(config,profiles,registry,hashes,(ref,digest)->{});
@@ -49,6 +54,69 @@ final class PublishedDatatypes {
 
   static void prepare(Map<String,Object> config,Map<String,String> profiles,DatatypeResolver registry,CanonicalHash hashes,
       BiConsumer<String,String> verifiedValueMap){
+    try{
+      verifyBindings(config,profiles,registry,hashes,verifiedValueMap);
+    }catch(DomainFailure failure){
+      if(!"ONB_DATATYPE_UNRESOLVED".equals(failure.code()))throw failure;
+      throw readerFailure(config,profiles,failure);
+    }
+  }
+
+  // Stable field/reader pairs that cause the managed mapping to consult the Registry.
+  static List<Map<String,String>> dependentReaders(Map<?,?> config){
+    var mapping=ManagedReviewSnapshot.child(config,"semanticMapping");
+    var readers=new TreeMap<String,Set<String>>();
+    if(mapping.containsKey("compositions")){
+      var fields=new HashMap<String,String>();
+      var projection=ManagedReviewSnapshot.child(ManagedReviewSnapshot.child(config,"extractionProfile"),"projection");
+      ManagedReviewSnapshot.list(projection.get("FILE")).forEach(field->fields.put((String)field,null));
+      readers.putAll(new ValueCompositions(mapping.get("compositions"),fields,null).fieldReaders);
+    }
+    for(var raw:ManagedReviewSnapshot.list(mapping.get("propertyMappings"))){
+      var property=ManagedReviewSnapshot.object(raw);
+      if(usesPublishedReader(property) && property.get("transform") instanceof String reader)
+        readers.computeIfAbsent((String)property.get("sourceField"),key->new TreeSet<>()).add(reader);
+    }
+    var result=new ArrayList<Map<String,String>>();
+    readers.forEach((field,transforms)->transforms.forEach(reader->result.add(Map.of("fieldName",field,"transform",reader))));
+    return result;
+  }
+
+  static Map<String,Object> readerIssue(String field,String transform,String profile){
+    return readerIssue(field,transform,profile,null);
+  }
+  private static Map<String,Object> readerIssue(String field,String transform,String profile,String output){
+    var allowed=Arrays.stream(ValueReader.values()).filter(r->LOCAL_READERS.contains(r.name()) && r.supports(profile))
+        .filter(r->output==null || output.equals(r.output))
+        .map(Enum::name).toList();
+    return Map.of("fieldName",field,"transform",transform,"allowedTransforms",allowed);
+  }
+
+  static DomainFailure readerFailure(Map<?,?> config,Map<String,String> profiles,DomainFailure failure){
+    var issues=new ArrayList<Map<String,Object>>();
+    for(var pair:dependentReaders(config)){
+      String field=pair.get("fieldName"),transform=pair.get("transform");
+      issues.add(readerIssue(field,transform,profiles.get(field),ValueReader.named(transform).output));
+    }
+    if(issues.isEmpty()){
+      // A retained published definition can fail even for local readers. A reader-only edit
+      // cannot repair those coordinates; report the affected mappings without a false fallback.
+      var mapping=ManagedReviewSnapshot.child(config,"semanticMapping");
+      for(var raw:ManagedReviewSnapshot.list(mapping.get("propertyMappings"))){
+        var property=ManagedReviewSnapshot.object(raw);
+        if(property.get("sourceField") instanceof String field && property.get("transform") instanceof String reader)
+          issues.add(Map.of("fieldName",field,"transform",reader,"allowedTransforms",List.of()));
+      }
+      issues.sort(Comparator.comparing(issue->(String)issue.get("fieldName")));
+    }
+    var properties=new LinkedHashMap<>(failure.properties());
+    properties.put("fields",issues);
+    if(!issues.isEmpty())properties.putAll(issues.getFirst());
+    return new DomainFailure(failure.status(),failure.code(),failure.getMessage(),properties);
+  }
+
+  private static void verifyBindings(Map<String,Object> config,Map<String,String> profiles,DatatypeResolver registry,
+      CanonicalHash hashes,BiConsumer<String,String> verifiedValueMap){
     var mapping=map(config.get("semanticMapping"));
     var refs=list(mapping.get("semanticRefs"),1,Integer.MAX_VALUE);
     Map<String,Map<String,Object>> pins=new LinkedHashMap<>();

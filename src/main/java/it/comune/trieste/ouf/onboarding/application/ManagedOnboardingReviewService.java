@@ -88,6 +88,28 @@ public class ManagedOnboardingReviewService {
     String fingerprint=hashes.of(request);
     if(request.candidateAction()!=null && (!Set.of("WITHDRAW","RESTART_DRAFT").contains(request.candidateAction())
         ||request.executionProposal()!=null))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_REQUEST_INVALID");
+    try{
+      return prepareAuthorized(p,request,fingerprint,correlation);
+    }catch(DomainFailure failure){
+      if(!"ONB_DATATYPE_UNRESOLVED".equals(failure.code()))throw failure;
+      var properties=new LinkedHashMap<>(failure.properties());
+      if(!properties.containsKey("fields")){
+        var version=ownedVersion(p,request.sourceId(),request.onboardingVersionId());
+        var config=ManagedReviewSnapshot.object(version.get("configuration"));
+        properties.putAll(PublishedDatatypes.readerFailure(config,files.projectedTypes(request.sourceId(),
+            ManagedReviewSnapshot.child(config,"extractionProfile")),failure).properties());
+      }
+      List<String> resolutions=new ArrayList<>();
+      if(permittedCommand(p,"ouf.managed-source.onboarding.create")
+          && files.canReplaceDraft(p,request.sourceId(),request.onboardingVersionId()))resolutions.add("REPLACE_DRAFT");
+      if(resolutions.isEmpty() && p.scopes().contains("ouf.onboarding.configuration.write"))resolutions.add("UPDATE_DRAFT");
+      if(resolutions.isEmpty() && request.executionProposal()!=null)resolutions.add("CORRECT_EXECUTION_PROPOSAL");
+      properties.put("resolutions",resolutions);
+      throw new DomainFailure(failure.status(),failure.code(),failure.getMessage(),properties);
+    }
+  }
+
+  private Map<String,Object> prepareAuthorized(PrincipalContext p,Prepare request,String fingerprint,String correlation){
     var preparation=tx.execute(status->beginPreparation(p,request,fingerprint,correlation));
     if(preparation.admission()==null)return preparation.receipt();
     if(preparation.admission().failure()!=null)throw preparation.admission().failure();
@@ -208,7 +230,7 @@ public class ManagedOnboardingReviewService {
             """).param("parent",current.get("parent_version_id"),java.sql.Types.OTHER).param("source",request.sourceId())
             .param("tenant",p.tenantId()).param("subject",p.subjectId()).param("asset",selected)
             .param("profile",ManagedFileService.retainedFileId(selection.get("fileProfileId"))).query(Boolean.class).single();
-        if(!sameRefusedInput)throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT");
+        if(!sameRefusedInput)throw assetConflict(p,(String)files.asset(selected).get("source_id"));
       }
       return ManagedFileExecutionProposal.compile(configuration,files.asset(selected),p.tenantId(),request.executionProposal());
   }
@@ -413,6 +435,11 @@ public class ManagedOnboardingReviewService {
 
   @Transactional(isolation=Isolation.REPEATABLE_READ) @SuppressWarnings("unchecked")
   public Map<String,Object> readLatest(PrincipalContext p,String source,String ifObservationVersion){
+    UUID version=latestReadableVersion(p,source);
+    return readAuthorized(p,source,version,ifObservationVersion);
+  }
+
+  private UUID latestReadableVersion(PrincipalContext p,String source){
     if(source==null||!source.matches("[A-Za-z0-9_.:-]{1,160}"))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_IDENTITY_INVALID");
     var rows=db.sql("select onboarding_version_id from ouf_onboarding.onboarding_version where source_id=:s order by version desc limit 1")
       .param("s",source).query(UUID.class).list();
@@ -425,7 +452,7 @@ public class ManagedOnboardingReviewService {
       :db.sql("select 1 from ouf_onboarding.managed_onboarding_review where source_id=:source and tenant_id=:tenant and subject_id=:subject limit 1")
         .param("source",source).param("tenant",p.tenantId()).param("subject",p.subjectId()).query(Integer.class).optional().isPresent();
     if(!proven)throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_OWNER_SCOPE_UNPROVEN");
-    return readAuthorized(p,source,version,ifObservationVersion);
+    return version;
   }
 
   @Transactional(isolation=Isolation.REPEATABLE_READ)
@@ -439,16 +466,58 @@ public class ManagedOnboardingReviewService {
     return readAuthorized(p,source,version,ifObservationVersion);
   }
 
+  private List<Map<String,Object>> visibleReviews(PrincipalContext p,String source,UUID version){
+    requireManagedOwner(p,source);
+    var retained=db.sql("select * from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:v")
+        .param("v",version).query().listOfRows();
+    if(!retained.isEmpty()&&(!Objects.equals(retained.getFirst().get("tenant_id"),p.tenantId())||!Objects.equals(retained.getFirst().get("subject_id"),p.subjectId())))throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
+    return retained;
+  }
+
+  private boolean permittedCommand(PrincipalContext p,String capability){
+    if(p==null || p.actorType()!=PrincipalContext.ActorType.HUMAN || !p.scopes().contains(capability))return false;
+    try{
+      return policy.authorizeActive(p,new ResourceContext("capability",null,p.tenantId(),null,Map.of()),
+          capability,"COMMAND",Instant.now()).allowed();
+    }catch(IllegalStateException unavailable){
+      // A missing active policy cannot prove this optional recovery hint.
+      return false;
+    }
+  }
+
+  DomainFailure assetConflict(PrincipalContext p,String bound){
+    var properties=new LinkedHashMap<String,Object>();
+    var resolutions=new ArrayList<String>();
+    if(p!=null && bound!=null && p.scopes().contains(READ)){
+      try{
+        UUID version=latestReadableVersion(p,bound);
+        visibleReviews(p,bound,version);
+        properties.put("boundSourceId",bound);
+        var current=onboarding.version(bound,version);
+        if(SourceRevisionService.revisionEligible(db,current) && SourceRevisionService.permitted(policy,p,bound,version,
+            SourceRevisionService.PREPARE,"COMMAND"))resolutions.add("CREATE_REVISION");
+        else if(permittedCommand(p,"ouf.managed-source.onboarding.create") && files.canReplaceDraft(p,bound,version))
+          resolutions.add("CREATE_REVISION");
+      }catch(DomainFailure denied){
+        if(denied.status()!=HttpStatus.FORBIDDEN && denied.status()!=HttpStatus.NOT_FOUND
+            && !Set.of("ONB_REVIEW_MANAGED_SOURCE_REQUIRED","ONB_REVIEW_IDENTITY_INVALID","ONB_REVIEW_CONFIGURATION_DRIFT").contains(denied.code()))throw denied;
+      }catch(IllegalStateException unavailable){
+        // Without a policy decision, return only independently authorized resolutions.
+      }
+    }
+    if(permittedCommand(p,"ouf.managed-source.file.upload"))
+      resolutions.add("UPLOAD_NEW_FILE");
+    properties.put("resolutions",resolutions);
+    return new DomainFailure(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT","Managed file is bound to another source",properties);
+  }
+
   private Map<String,Object> readAuthorized(PrincipalContext p,String source,UUID version,String ifObservationVersion){
     var current=db.sql("""
         select source_id,onboarding_version_id,state,lock_version,configuration_hash,version
         from ouf_onboarding.onboarding_version where source_id=:s and onboarding_version_id=:v
         """).param("s",source).param("v",version).query().listOfRows().stream().findFirst()
         .orElseThrow(()->new DomainFailure(HttpStatus.NOT_FOUND,"ONB_NOT_FOUND","version not found"));
-    requireManagedOwner(p,source);
-    var retained=db.sql("select * from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:v")
-        .param("v",version).query().listOfRows();
-    if(!retained.isEmpty()&&(!Objects.equals(retained.getFirst().get("tenant_id"),p.tenantId())||!Objects.equals(retained.getFirst().get("subject_id"),p.subjectId())))throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
+    var retained=visibleReviews(p,source,version);
     var loadVersion=(java.util.function.Supplier<Map<String,Object>>)()->onboarding.version(source,version);
     var observation=observe(current,retained.isEmpty()?null:retained.getFirst(),loadVersion);
     if(observation.version().equals(ifObservationVersion)){
