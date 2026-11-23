@@ -2,7 +2,21 @@
 
 `ManagedFileExecutionProposal.compile` completes an owner-retained managed CSV DRAFT for human review. The caller supplies exact published semantic bindings, one selected publication set, an explicit governed UDP resolution/materialization policy and finite parser limits. The owner derives source, immutable asset, profile, staging/hash/size, mapping and adapter references. Neither configuration state nor runtime authority changes in this pure compiler.
 
-The preparation profile accepts 1–32 selected mapped properties, `IDENTITY` mappings and lexical CSV values. Production `ManagedTabularAdapter.csv` preserves CSV cell strings; `CanonicalRecordPipeline.map` currently implements `IDENTITY` only. Thus the materialization datatype is `xsd:string`, including postal codes, raw coordinates, counts and dates. Inferred profile types are metadata, not coercion instructions. Leading zeroes remain intact. Typed numeric/date normalization, geometry and temporal interpretation are separate reviewed mappings and are not represented as completed here.
+Preparation accepts `TEXT_NFC_TRIM_V1` on profiled `STRING` columns. Its materialization datatype is `xsd:string` and its governed identity comparator is `TEXT_V1`. The owner verifies the projected types and looks up the published pins before freezing this configuration. Execution and compatibility attestation remain separate lifecycle steps.
+
+Draft responses list missing proposal sections in this order.
+
+| Proposal section | Evidence in the retained configuration |
+|---|---|
+| `semanticBindings` | Pinned entries in `semanticReferenceBindings` |
+| `semanticPublicationSetRef` | Selected set in `extractionProfile.runtime.execution` |
+| `udp.resolution` | Resolution policy in `extractionProfile.runtime.udp` |
+| `udp.materialization` | Materialization policy in the same UDP object |
+| `limits` | Finite `maxRows`, `maxColumns` and `maxCellChars` in execution |
+
+The retained version-1 exact-key CSV profiles used before governed proposals can prepare with their historical limits. The list reports missing inputs. Compilation still verifies the complete submitted proposal against the asset, profile, owner and mapping.
+
+Every `create.semanticRefs` entry uses `semanticId@semanticVersion`. A UUID suffix returns HTTP 422 with `ONB_SEMANTIC_REF_FORM_INVALID` and the zero-based `index`. Supply the publication set UUID in the separate proposal fields. A binding set that differs from the retained references returns HTTP 422 with `ONB_SEMANTIC_REF_VERSION_MISMATCH` and `semanticRef`. It identifies the first missing retained coordinate, or the first retained coordinate if all are covered and the proposal contains surplus bindings. The draft can be prepared again with corrected bindings.
 
 An imported ontology binding can contain standard external class/property IRIs and local source-preserving properties. This does not require one revision per term: the exact imported RDF snapshot must actually contain the required assertions. Preparation checks the retained semantic reference set against every supplied binding and requires the shared publication set; registry resolution, semantic content validation, frozen compatibility attestation, HUMAN/THS review and current UDP identity-coverage activation gates remain mandatory owner lifecycle checks.
 

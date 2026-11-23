@@ -27,7 +27,7 @@ enum ValueReader {
   static ValueReader named(String id){
     try{return valueOf(id);}catch(IllegalArgumentException|NullPointerException e){throw invalid();}
   }
-  static IllegalArgumentException invalid(){return new IllegalArgumentException("ONB_VALUE_READER_INVALID");}
+  static ReviewValidationFailure invalid(){return new ReviewValidationFailure("ONB_VALUE_READER_INVALID");}
   Map<String,Object> mappingParameters(Map<?,?> property){
     Object alias=property.get("valueMapRef");
     if(alias!=null && !(alias instanceof String))throw invalid();

@@ -68,7 +68,7 @@ public class ManagedOnboardingReviewService {
       throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
     Object raw=metadata.get("managedFileAssetId");
     if(!(raw instanceof String value))throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_MANAGED_SOURCE_REQUIRED");
-    files.requireOwner(UUID.fromString(value),p.subjectId());
+    files.requireOwner(ManagedFileService.retainedFileId(value),p.subjectId());
   }
   private String url(UUID challenge){
     return ThsPublicOrigin.base(publicOrigin)+"/trusted-human/onboarding/?challenge="+challenge;
@@ -97,13 +97,8 @@ public class ManagedOnboardingReviewService {
       // Every attempt resolves live. The journal holds only digests and the attempt fence.
       verified=onboarding.verifyValueMapDraft(request.sourceId(),preparation.draft(),
           (ref,digest)->valueMaps.observe(claim,ref,digest));
-    }catch(DomainFailure failure){
-      throw valueMaps.failed(claim,failure);
-    }catch(DataAccessException failure){
-      throw failure;
     }catch(RuntimeException failure){
-      throw valueMaps.failed(claim,new DomainFailure(HttpStatus.CONFLICT,
-          "ONB_VALUE_MAP_PREPARATION_BLOCKED","Semantic verification requires reconciliation"));
+      throw preparationFailure(claim,failure);
     }
     try{
       return tx.execute(status->{
@@ -119,9 +114,16 @@ public class ManagedOnboardingReviewService {
         valueMaps.complete(claim);
         return finishPreparation(p,request,fingerprint,correlation,current,draft,verified);
       });
-    }catch(DomainFailure failure){
-      throw valueMaps.failed(claim,failure);
+    }catch(RuntimeException failure){
+      throw preparationFailure(claim,failure);
     }
+  }
+
+  private RuntimeException preparationFailure(ManagedValueMapPreparation.Claim claim,RuntimeException failure){
+    if(failure instanceof DataAccessException)return failure;
+    if(failure instanceof DomainFailure domain)return valueMaps.failed(claim,domain);
+    valueMaps.failed(claim,fail(HttpStatus.INTERNAL_SERVER_ERROR,"ONB_REVIEW_INTERNAL_ERROR"));
+    return failure;
   }
 
   private void lockPreparation(PrincipalContext p,Prepare request){
@@ -168,6 +170,11 @@ public class ManagedOnboardingReviewService {
       return Preparation.done(recoverCandidate(p,request,fingerprint,retained.isEmpty()?null:retained.getFirst(),correlation));
     requireCurrentDraft(current,request);
     @SuppressWarnings("unchecked") var configuration=(Map<String,Object>)current.get("configuration");
+    if(request.executionProposal()==null){
+      var missing=ManagedFileExecutionProposal.missingSections(configuration);
+      if(!missing.isEmpty())throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_EXECUTION_PROPOSAL_REQUIRED",
+          "Complete the execution proposal before preparing this draft",Map.of("missingSections",missing));
+    }
     var draft=request.executionProposal()==null?configuration:compileProposal(p,request,current,configuration);
     var selection=PublishedDatatypes.valueMapSelection(draft);
     if(selection.isEmpty())return Preparation.done(finishPreparation(p,request,fingerprint,correlation,current,draft,null));
@@ -185,7 +192,7 @@ public class ManagedOnboardingReviewService {
       Map<String,Object> configuration){
       @SuppressWarnings("unchecked") var metadata=(Map<String,Object>)onboarding.source(request.sourceId()).get("metadata");
       var selection=ManagedReviewSnapshot.child(ManagedReviewSnapshot.child(configuration,"extractionProfile"),"selection");
-      UUID selected=UUID.fromString((String)selection.get("assetId"));
+      UUID selected=ManagedFileService.retainedFileId(selection.get("assetId"));
       if(!selected.toString().equals(metadata.get("managedFileAssetId"))){
         files.requireTenantOwner(selected,p.tenantId(),p.subjectId());
         boolean sameRefusedInput=db.sql("""
@@ -200,7 +207,7 @@ public class ManagedOnboardingReviewService {
                   and anchor.configuration #>> '{extractionProfile,selection,fileProfileId}'=cast(:profile as text))))
             """).param("parent",current.get("parent_version_id"),java.sql.Types.OTHER).param("source",request.sourceId())
             .param("tenant",p.tenantId()).param("subject",p.subjectId()).param("asset",selected)
-            .param("profile",UUID.fromString((String)selection.get("fileProfileId"))).query(Boolean.class).single();
+            .param("profile",ManagedFileService.retainedFileId(selection.get("fileProfileId"))).query(Boolean.class).single();
         if(!sameRefusedInput)throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT");
       }
       return ManagedFileExecutionProposal.compile(configuration,files.asset(selected),p.tenantId(),request.executionProposal());
@@ -257,7 +264,7 @@ public class ManagedOnboardingReviewService {
     if(!(metadata.get("managedFileAssetId") instanceof String asset)
         ||(metadata.containsKey("managedTenantId")&&!p.tenantId().equals(metadata.get("managedTenantId"))))
       throw fail(HttpStatus.FORBIDDEN,"ONB_REVIEW_AUTHORIZATION_DENIED");
-    files.requireTenantOwner(UUID.fromString(asset),p.tenantId(),p.subjectId());
+    files.requireTenantOwner(ManagedFileService.retainedFileId(asset),p.tenantId(),p.subjectId());
     db.sql("""
         select f.asset_id from ouf_onboarding.source_property_revision r
         join ouf_onboarding.file_profile f on f.profile_id=r.replacement_profile_id
@@ -375,7 +382,7 @@ public class ManagedOnboardingReviewService {
     var selection=ManagedReviewSnapshot.child(extraction,"selection");
     var runtime=ManagedReviewSnapshot.child(extraction,"runtime");
     if(!selection.containsKey("assetId")&&!selection.containsKey("fileProfileId"))return Map.of(); // Non-file revision.
-    UUID assetId=UUID.fromString((String)selection.get("assetId")),profileId=UUID.fromString((String)selection.get("fileProfileId"));
+    UUID assetId=ManagedFileService.retainedFileId(selection.get("assetId")),profileId=ManagedFileService.retainedFileId(selection.get("fileProfileId"));
     var asset=files.asset(assetId);
     if(!Objects.equals(asset.get("source_id"),version.get("source_id"))||!Objects.equals(asset.get("content_hash"),runtime.get("contentHash")))
       throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_CONFIGURATION_DRIFT");
@@ -406,7 +413,7 @@ public class ManagedOnboardingReviewService {
 
   @Transactional(isolation=Isolation.REPEATABLE_READ) @SuppressWarnings("unchecked")
   public Map<String,Object> readLatest(PrincipalContext p,String source,String ifObservationVersion){
-    if(source==null||!source.matches("[A-Za-z0-9_.:-]{1,160}"))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_ARGUMENTS_INVALID");
+    if(source==null||!source.matches("[A-Za-z0-9_.:-]{1,160}"))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_IDENTITY_INVALID");
     var rows=db.sql("select onboarding_version_id from ouf_onboarding.onboarding_version where source_id=:s order by version desc limit 1")
       .param("s",source).query(UUID.class).list();
     // No distinct not-found response before owner authorization.
@@ -448,6 +455,8 @@ public class ManagedOnboardingReviewService {
       var unchanged=new LinkedHashMap<String,Object>();
       for(String field:List.of("sourceId","onboardingVersionId","state","lockVersion","workflowState","reasonCode","allowedActions","observationVersion"))
         unchanged.put(field,observation.fields().get(field));
+      if(ManagedMcpObservation.draftState(current))
+        for(String field:List.of("executionProposalRequired","missingSections"))unchanged.put(field,observation.fields().get(field));
       unchanged.put("unchanged",true);
       return unchanged;
     }
@@ -470,6 +479,7 @@ public class ManagedOnboardingReviewService {
     result.put("sourceId",current.get("source_id"));result.put("onboardingVersionId",current.get("onboarding_version_id"));
     result.put("state",current.get("state"));result.put("lockVersion",current.get("lock_version"));
     result.put("configurationHash",current.get("configuration_hash"));
+    if(ManagedMcpObservation.draftState(current))ManagedMcpObservation.describeDraft(result,loadVersion.get());
     if("REJECTED".equals(current.get("state"))&&db.sql("select exists(select 1 from ouf_onboarding.managed_candidate_recovery where candidate_id=:v and operation='WITHDRAW')")
         .param("v",current.get("onboarding_version_id")).query(Boolean.class).single())result.put("candidateDisposition","WITHDRAWN");
     result.put("humanApprovalRequired",!Set.of("APPROVED","ACTIVE","SUPERSEDED").contains(current.get("state")));

@@ -2,6 +2,9 @@ package it.comune.trieste.ouf.onboarding.application;
 
 import java.net.URI;
 import java.util.*;
+import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
+import org.springframework.http.HttpStatus;
+import static it.comune.trieste.ouf.onboarding.application.ManagedReviewSnapshot.child;
 
 /** Pure preparation of an explicitly typed CSV execution profile. It issues no approval or runtime authority. */
 public final class ManagedFileExecutionProposal {
@@ -16,6 +19,43 @@ public final class ManagedFileExecutionProposal {
   public record Proposal(List<SemanticBinding> semanticBindings,String semanticPublicationSetRef,
                          Map<String,Object> udp,Limits limits) {}
   private ManagedFileExecutionProposal() {}
+
+  static List<String> missingSections(Map<?,?> config) {
+    var runtime=child(child(config,"extractionProfile"),"runtime");
+    var execution=child(runtime,"execution");
+    var udp=child(runtime,"udp");
+    var resolution=child(udp,"resolution");
+    var missing=new ArrayList<String>();
+    if (!hasRetainedBindings(config)) missing.add("semanticBindings");
+    if (!(execution.get("semanticPublicationSetRef") instanceof String ref) || ref.isBlank())
+      missing.add("semanticPublicationSetRef");
+    if (resolution.isEmpty()) missing.add("udp.resolution");
+    if (child(udp,"materialization").isEmpty()) missing.add("udp.materialization");
+    // Predecessor exact-key execution profiles predate the governed parser-limit contract.
+    boolean legacy="EXACT_SOURCE_KEY".equals(resolution.get("strategyId")) && "1".equals(execution.get("adapterRuntimeVersion"))
+        && ("managed-csv".equals(execution.get("adapterId")) || "managed-tabular-v1".equals(execution.get("adapterId")));
+    if (!validLimit(execution,"maxRows",1_000_000,legacy) || !validLimit(execution,"maxColumns",10_000,legacy)
+        || !validLimit(execution,"maxCellChars",1_000_000,legacy))
+      missing.add("limits");
+    return List.copyOf(missing);
+  }
+
+  private static boolean hasRetainedBindings(Map<?,?> config){
+    if(!(config.get("semanticReferenceBindings") instanceof List<?> pins) || pins.isEmpty())return false;
+    if(!(child(config,"semanticMapping").get("semanticRefs") instanceof List<?> expected) || pins.size()!=expected.size())return false;
+    var coordinates=new HashSet<String>();
+    for(var pin:pins){
+      if(!(pin instanceof Map<?,?> binding))return false;
+      for(var key:List.of("semanticId","semanticVersion","revisionId","publicationSetId"))
+        if(!(binding.get(key) instanceof String text) || text.isBlank())return false;
+      coordinates.add(binding.get("semanticId")+"@"+binding.get("semanticVersion"));
+    }
+    return coordinates.size()==pins.size() && coordinates.equals(new HashSet<>(expected));
+  }
+
+  private static boolean validLimit(Map<?,?> execution,String key,int max,boolean optional){
+    return optional && !execution.containsKey(key) || inRange(execution.get(key),1,max);
+  }
 
   public static Map<String,Object> compile(Map<String,Object> existing,Map<String,Object> asset,
                                            String tenant,Proposal proposal) {
@@ -64,17 +104,30 @@ public final class ManagedFileExecutionProposal {
     require(!semantic.containsKey("vocabularyMappings") || list(semantic.get("vocabularyMappings"),0,0).isEmpty());
     require(!config.containsKey("relationshipMappings") || list(config.get("relationshipMappings"),0,0).isEmpty());
     String publication=uuid(proposal.semanticPublicationSetRef());
-    require(proposal.semanticBindings()!=null && !proposal.semanticBindings().isEmpty());
+    List<?> expectedRefs=list(semantic.get("semanticRefs"),1,Integer.MAX_VALUE);
+    require(new HashSet<>(expectedRefs).size()==expectedRefs.size());
+    var supplied=proposal.semanticBindings()==null?List.<SemanticBinding>of():proposal.semanticBindings();
+    var proposedRefs=new HashSet<String>();
+    for(var pin:supplied){
+      require(pin!=null);
+      proposedRefs.add(atom(pin.semanticId())+"@"+atom(pin.semanticVersion()));
+    }
+    if(!proposedRefs.equals(new HashSet<>(expectedRefs)) || proposedRefs.size()!=supplied.size()){
+      var ref=expectedRefs.stream().map(ManagedFileExecutionProposal::string)
+          .filter(expected->!proposedRefs.contains(expected)).findFirst().orElse(string(expectedRefs.getFirst()));
+      throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_SEMANTIC_REF_VERSION_MISMATCH",
+          "Proposal bindings must match the retained semantic references",Map.of("semanticRef",ref));
+    }
     var descriptions=new LinkedHashMap<String,Object>();
-    Set<String> refs=new LinkedHashSet<>();List<Map<String,Object>> bindings=new ArrayList<>();
-    for(SemanticBinding binding:proposal.semanticBindings()){
-      require(binding!=null);String id=atom(binding.semanticId()),version=atom(binding.semanticVersion());
+    List<Map<String,Object>> bindings=new ArrayList<>();
+    for(SemanticBinding binding:supplied){
+      String id=binding.semanticId(),version=binding.semanticVersion();
       String set=uuid(binding.publicationSetId());
       String coordinate=id+"@"+set;
       // A nested type can be part of the published definition without an item builder.
       // Preparation verifies the artifact kind of additional pins from other sets.
-      require(refs.add(id+"@"+version) && (publication.equals(set) || !combined.typeRefs.isEmpty()
-          || valueMapRefs.contains(coordinate) || valueMapRefs.contains(id)));
+      require(publication.equals(set) || !combined.typeRefs.isEmpty()
+          || valueMapRefs.contains(coordinate) || valueMapRefs.contains(id));
       var pinned=new LinkedHashMap<String,Object>(Map.of("semanticId",id,"semanticVersion",version,
           "revisionId",uuid(binding.revisionId()),"publicationSetId",set));
       if(binding.reviewTerms()!=null){
@@ -91,10 +144,8 @@ public final class ManagedFileExecutionProposal {
     for(String target:combined.labels.keySet())require(bindings.stream().anyMatch(b->target.equals(b.get("semanticId"))));
     config.remove("semanticReviewTerms");
     if(!descriptions.isEmpty())config.put("semanticReviewTerms",descriptions);
-    List<?> expectedRefs=list(semantic.get("semanticRefs"),1,Integer.MAX_VALUE);
-    require(new HashSet<>(expectedRefs).size()==expectedRefs.size() && refs.equals(new HashSet<>(expectedRefs)));
     for(Object raw:list(semantic.get("targetClasses"),1,32)){
-      Map<String,Object> target=map(raw);require(refs.contains(text(target,"ontologyId")+"@"+text(target,"ontologyVersion")));
+      Map<String,Object> target=map(raw);require(proposedRefs.contains(text(target,"ontologyId")+"@"+text(target,"ontologyVersion")));
     }
     Map<String,Object> udp=copy(proposal.udp());keys(udp,"resolution","materialization");
     Map<String,Object> resolution=object(udp,"resolution"),policy=object(resolution,"governedIdentity");
@@ -140,7 +191,10 @@ public final class ManagedFileExecutionProposal {
   private static String iri(String value){try{require(URI.create(value).isAbsolute());return value;}catch(RuntimeException e){throw invalid();}}
   private static String string(Object value){require(value instanceof String && !((String)value).isBlank() && ((String)value).length()<=2048);return (String)value;}
   private static String text(Map<String,Object> value,String key){return string(value.get(key));}
-  private static long integer(Object value,long minimum,long maximum){require(value instanceof Number);Number number=(Number)value;long n=number.longValue();require(number.doubleValue()==n && n>=minimum && n<=maximum);return n;}
+  private static boolean inRange(Object value,long minimum,long maximum){
+    return value instanceof Number n && n.doubleValue()==n.longValue() && n.longValue()>=minimum && n.longValue()<=maximum;
+  }
+  private static long integer(Object value,long minimum,long maximum){require(inRange(value,minimum,maximum));return ((Number)value).longValue();}
   private static List<?> list(Object value,int minimum,int maximum){require(value instanceof List<?>);List<?> result=(List<?>)value;require(result.size()>=minimum && result.size()<=maximum);return result;}
   @SuppressWarnings("unchecked") private static Map<String,Object> map(Object value){require(value instanceof Map<?,?>);return (Map<String,Object>)value;}
   private static Map<String,Object> object(Map<String,Object> value,String key){return map(value.get(key));}
@@ -148,5 +202,5 @@ public final class ManagedFileExecutionProposal {
   private static Map<String,Object> copy(Map<String,Object> value){require(value!=null);Map<String,Object> out=new LinkedHashMap<>();value.forEach((key,item)->out.put(key,copyValue(item)));return out;}
   private static Object copyValue(Object value){if(value instanceof Map<?,?>)return copy(map(value));if(value instanceof List<?> items)return new ArrayList<>(items.stream().map(ManagedFileExecutionProposal::copyValue).toList());return value;}
   private static void require(boolean condition){if(!condition)throw invalid();}
-  private static IllegalArgumentException invalid(){return new IllegalArgumentException("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");}
+  private static ReviewValidationFailure invalid(){return new ReviewValidationFailure("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");}
 }

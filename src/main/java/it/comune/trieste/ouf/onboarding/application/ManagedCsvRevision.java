@@ -146,7 +146,7 @@ public final class ManagedCsvRevision {
   private static boolean validMapping(Mapping m){
     if(m==null||m.propertyIri()==null||m.propertyIri().length()>2048||m.transform()==null
         ||m.reconciliation()==null||m.reconciliation().isEmpty())return false;
-    try{ValueReader.named(m.transform()).parameters(m.transformParams(),null);}catch(IllegalArgumentException invalid){return false;}
+    try{ValueReader.named(m.transform()).parameters(m.transformParams(),null);}catch(ReviewValidationFailure invalid){return false;}
     try{if(!URI.create(m.propertyIri()).isAbsolute())return false;}
     catch(IllegalArgumentException e){return false;}
     if(m.accessLabel()!=null&&!Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED").contains(m.accessLabel()))return false;
@@ -221,7 +221,7 @@ public final class ManagedCsvRevision {
   }
 
   static boolean supports(String transform,String type){
-    try{return ValueReader.named(transform).supports(type);}catch(IllegalArgumentException invalid){return false;}
+    try{return ValueReader.named(transform).supports(type);}catch(ReviewValidationFailure invalid){return false;}
   }
   private static String schemaRef(String asset,String profile){return "profile://managed-files/"+asset+"/profiles/"+profile;}
   private static Map<String,String> columns(Map<String,Object> profile){

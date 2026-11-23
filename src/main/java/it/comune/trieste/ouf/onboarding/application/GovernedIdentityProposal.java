@@ -67,5 +67,5 @@ final class GovernedIdentityProposal {
   }
   private static String string(Object value){if(!(value instanceof String s)||s.isBlank())throw invalid();return s;}
   private static boolean blank(Object value){return !(value instanceof String s)||s.isBlank();}
-  private static IllegalArgumentException invalid(){return new IllegalArgumentException("ONB_GOVERNED_IDENTITY_INVALID");}
+  private static ReviewValidationFailure invalid(){return new ReviewValidationFailure("ONB_GOVERNED_IDENTITY_INVALID");}
 }
