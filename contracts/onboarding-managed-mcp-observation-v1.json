@@ -6,16 +6,7 @@
   "type": "object",
   "oneOf": [
     {
-      "required": ["workflowState", "reasonCode", "allowedActions"],
-      "not": {
-        "required": ["status", "legacy"],
-        "properties": {"status": {"const": "PENDING"}, "legacy": {"const": true}}
-      }
-    },
-    {
-      "required": ["status", "legacy"],
-      "properties": {"status": {"const": "PENDING"}, "legacy": {"const": true}},
-      "additionalProperties": false
+      "required": ["workflowState", "reasonCode", "allowedActions"]
     },
     {
       "required": ["handoffId", "pickerUrl", "issuedAt", "waitUntil", "state", "observationVersion"],
@@ -40,6 +31,7 @@
   },
   "else": {"properties": {"observationVersion": {"$ref": "#/$defs/observationVersion"}}},
   "properties": {
+    "legacy": false,
     "workflowState": {
       "$ref": "#/$defs/state"
     },

@@ -17,13 +17,13 @@
 
 Il primo esito terminale porta la versione da 1 a 2. Ripetere lo stesso asset o lo stesso rifiuto conserva l'esito e la versione. Cambiare asset, codice o tipo di esito produce HTTP 409. Alla scadenza esatta anche il primo tentativo tardivo di completamento fallisce. Una scelta già confermata resta consultabile nella finestra di conservazione.
 
-La scadenza predefinita è un'ora dall'emissione e sopravvive al riavvio. La conservazione predefinita è 24 ore dal completamento, calcolate da `waitUntil` per uno scaduto. Le scritture del selettore recuperano a lotti ricevute oltre la finestra. Per gli ID emessi resta la registrazione del comando con tenant, soggetto, ID, tempi e stato finale. I riferimenti all'asset e il codice del rifiuto vengono cancellati. Questo impedisce di riaprire un vecchio URL come legacy. Parametri e procedura di ripristino sono nel [registro della configurazione](CONFIGURATION_REGISTER.md).
+La scadenza predefinita è un'ora dall'emissione e sopravvive al riavvio. La conservazione predefinita è 24 ore dal completamento, calcolate da `waitUntil` per uno scaduto. Le scritture del selettore recuperano a lotti ricevute oltre la finestra. Per gli ID emessi resta la registrazione del comando con tenant, soggetto, ID, tempi e stato finale. I riferimenti all'asset e il codice del rifiuto vengono cancellati. La ripetizione del comando di emissione conserva la conferma originaria anche dopo il ritiro della ricevuta. [Registro della configurazione e procedura di ripristino](CONFIGURATION_REGISTER.md).
 
-### Finestra di compatibilità D-080
+### ID sconosciuto e conservazione (D-089, D-080)
 
-Il MCP predecessore genera localmente il proprio ID. La lettura di un ID privo di ricevuta disponibile o appartenente ad altro tenant o soggetto restituisce esattamente `{"status":"PENDING","legacy":true}`. Una prima scelta o un primo rifiuto THS su un ID mai emesso crea la ricevuta durevole `legacy=true`, legata al chiamante e priva di `waitUntil`. Il proprietario vede `STAGED` con l'asset o `REJECTED` con il codice e `legacy:true`. Un altro chiamante riceve un rifiuto se prova a completarla.
+Sulla rotta Gateway `mcp-managed-file-handoff`, Onboarding restituisce HTTP 409 con codice `ONB_HANDOFF_UNKNOWN` per ID senza riga, di altro soggetto o tenant, con ricevuta ritirata o con riga residua `legacy=true`. Il corpo `application/problem+json` è identico in tutti i casi. Il chiamante trova la correlazione nell'header `X-Correlation-ID`. Il selettore applica lo stesso controllo prima dello streaming e prima di registrare una scelta o un rifiuto. Solo `handoff-issue` crea una riga.
 
-Il nuovo MCP tratta `legacy:true` come `HANDOFF_NOT_ISSUED` e ferma l'attesa. Al termine del supporto al predecessore, un rilascio successivo potrà eliminare l'accettazione degli ID locali e rispondere uniformemente `ONB_HANDOFF_UNKNOWN` per quelli assenti o altrui. In caso di ritorno all'immagine Onboarding `82aabaa`, V46 e le ricevute persistite restano nel database. Il predecessore riprende il proprio comportamento in memoria.
+Questo rilascio segue il MCP che usa sempre `handoff-issue`. La manutenzione elimina le righe residue del predecessore al termine della conservazione. Lo schema V46 conserva la colonna `legacy` per il ritorno a `23fa27f`.
 
 ## Evidenza storica del caricamento
 
