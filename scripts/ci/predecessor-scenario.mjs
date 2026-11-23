@@ -47,6 +47,14 @@ function command(fixture, route, capability, args, key) {
   }});
 }
 
+export function issuePicker(fixture, key) {
+  return command(fixture, 'handoff-issue', caps.upload, {commandKey: key}, key);
+}
+
+export function readPicker(fixture, handoffId) {
+  return command(fixture, 'handoff', caps.upload, {handoffId}, randomUUID());
+}
+
 async function profile(fixture, sourceId) {
   const headers = {Authorization: 'Bearer ' + fixture.bearer()};
   const {asset_id: assetId} = await json(files, {method: 'POST', headers, status: 201, body: JSON.stringify({

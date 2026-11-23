@@ -3,7 +3,6 @@ package it.comune.trieste.ouf.onboarding.application;
 import it.comune.trieste.ouf.authorization.*;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicyRegistry;
 import it.comune.trieste.ouf.onboarding.domain.*;
-import java.net.URI;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
@@ -72,13 +71,7 @@ public class ManagedOnboardingReviewService {
     files.requireOwner(UUID.fromString(value),p.subjectId());
   }
   private String url(UUID challenge){
-    URI origin;
-    try{origin=URI.create(publicOrigin);}catch(Exception e){throw fail(HttpStatus.SERVICE_UNAVAILABLE,"ONB_REVIEW_THS_ORIGIN_REQUIRED");}
-    if(!"https".equals(origin.getScheme())||origin.getHost()==null||origin.getRawUserInfo()!=null
-        ||origin.getRawQuery()!=null||origin.getRawFragment()!=null
-        ||!(origin.getPath().isEmpty()||"/".equals(origin.getPath())))
-      throw fail(HttpStatus.SERVICE_UNAVAILABLE,"ONB_REVIEW_THS_ORIGIN_REQUIRED");
-    return publicOrigin.replaceAll("/+$","")+"/trusted-human/onboarding/?challenge="+challenge;
+    return ThsPublicOrigin.base(publicOrigin)+"/trusted-human/onboarding/?challenge="+challenge;
   }
   private record Preparation(Map<String,Object> receipt,Map<String,Object> draft,ManagedValueMapPreparation.Admission admission){
     static Preparation done(Map<String,Object> receipt){return new Preparation(receipt,null,null);}

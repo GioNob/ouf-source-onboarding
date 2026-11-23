@@ -30,6 +30,32 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 class ManagedFileDelegationVerifierTest {
+  @Test void d089_09_issueRequiresTheSignedUploadDelegationForItsExactPathAndBody(@TempDir Path dir) throws Exception {
+    byte[] key = "c".repeat(64).getBytes(StandardCharsets.US_ASCII);
+    Path keyFile = dir.resolve("owner-key");
+    Files.write(keyFile, key);
+    var json = new ObjectMapper();
+    var verifier = new PermissionDelegationVerifier(json, keyFile.toString(), "https://iam.example/realm", "ouf-gateway", "ouf-mcp-server");
+    var handoffs = mock(ManagedFileChatHandoff.class);
+    var mvc = MockMvcBuilders.standaloneSetup(new ManagedFileMcpApi(verifier, mock(ManagedFileService.class), json, handoffs))
+        .setControllerAdvice(new ProblemHandler()).build();
+    String read = "/api/internal/v1/onboarding/managed-file-mcp/handoff", issue = read + "-issue";
+    String cap = "ouf.managed-source.file.upload", header = "X-OUF-Managed-File-Receipt";
+    UUID command = UUID.randomUUID(), id = UUID.randomUUID();
+    byte[] body = json.writeValueAsBytes(Map.of("Arguments", Map.of("commandKey", command.toString())));
+    mvc.perform(post(issue).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
+    mvc.perform(post(issue).contentType(MediaType.APPLICATION_JSON).content(body).header(header, sign(json, key, read, cap, body)))
+        .andExpect(status().isForbidden());
+    byte[] invalid = json.writeValueAsBytes(Map.of("Arguments", Map.of("commandKey", "1-1-1-1-1")));
+    mvc.perform(post(issue).contentType(MediaType.APPLICATION_JSON).content(invalid).header(header, sign(json, key, issue, cap, invalid)))
+        .andExpect(status().isBadRequest());
+    verifyNoInteractions(handoffs);
+    when(handoffs.issue(command, "tenant-a", "human:alice")).thenReturn(Map.of("handoffId", id));
+    mvc.perform(post(issue).contentType(MediaType.APPLICATION_JSON).content(body).header(header, sign(json, key, issue, cap, body)))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.handoffId").value(id.toString()));
+    verify(handoffs).issue(command, "tenant-a", "human:alice");
+  }
+
   @Test void acceptsOnlyBoundManagedReceiptAndRejectsPermissionDomain(@TempDir Path directory)throws Exception {
     byte[] key="a".repeat(64).getBytes(StandardCharsets.US_ASCII);
     Path file=directory.resolve("owner-key");Files.write(file,key);

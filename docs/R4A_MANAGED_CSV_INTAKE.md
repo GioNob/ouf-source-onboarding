@@ -2,6 +2,31 @@
 
 # R4a — intake governato del CSV reale
 
+## Selettore MCP e attesa umana (D-088/D-089)
+
+1. Prima di mostrare il link, il MCP chiama via Gateway `POST /api/internal/v1/onboarding/managed-file-mcp/handoff-issue`. La busta contiene `"Arguments":{"commandKey":"<uuid>"}`. La ricevuta Gateway verifica workload, delega HUMAN, capability di upload, percorso e corpo. Tenant e soggetto provengono dalla delega.
+2. Onboarding registra l'emissione in PostgreSQL e restituisce `handoffId` (UUIDv4), `pickerUrl`, `issuedAt`, `waitUntil`, `state:"PENDING"` e `observationVersion:"1"`. Una ripetizione dello stesso comando restituisce la conferma originaria. Il riuso della chiave da un altro soggetto o tenant riceve HTTP 409. Il link apre la pagina THS `/trusted-human/managed-files/?handoff=<uuid>` sull'origine configurata per le challenge.
+3. Il MCP presenta il link con `WAIT_FOR_HUMAN` e rilegge l'owner tramite `ouf.wait`. Ogni lettura usa la stessa mediazione e `POST …/managed-file-mcp/handoff` con `"Arguments":{"handoffId":"<uuid>"}`. Per una ricevuta emessa e disponibile del chiamante, `status` e `state` riportano lo stesso stato. La risposta include versione decimale in forma di stringa e i due istanti UTC registrati.
+
+| Stato | Comportamento osservabile |
+|---|---|
+| `PENDING` | Il proprietario può scegliere il file fino all'istante esclusivo `waitUntil`. |
+| `STAGED` | La scelta autorizzata ha registrato `assetId`. La rilettura verifica la titolarità dell'asset per tenant e soggetto. |
+| `REJECTED` | Il selettore ha registrato `code` uguale a `FORMAT_UNSUPPORTED` o `SIZE_INVALID`. |
+| `EXPIRED` | La scadenza ha chiuso un'attesa ancora pendente. Il MCP termina l'attesa con `WAIT_DEADLINE_EXPIRED`. L'utente può chiedere un nuovo selettore con `source.file.upload {}`. |
+
+Il primo esito terminale porta la versione da 1 a 2. Ripetere lo stesso asset o lo stesso rifiuto conserva l'esito e la versione. Cambiare asset, codice o tipo di esito produce HTTP 409. Alla scadenza esatta anche il primo tentativo tardivo di completamento fallisce. Una scelta già confermata resta consultabile nella finestra di conservazione.
+
+La scadenza predefinita è un'ora dall'emissione e sopravvive al riavvio. La conservazione predefinita è 24 ore dal completamento, calcolate da `waitUntil` per uno scaduto. Le scritture del selettore recuperano a lotti ricevute oltre la finestra. Per gli ID emessi resta la registrazione del comando con tenant, soggetto, ID, tempi e stato finale. I riferimenti all'asset e il codice del rifiuto vengono cancellati. Questo impedisce di riaprire un vecchio URL come legacy. Parametri e procedura di ripristino sono nel [registro della configurazione](CONFIGURATION_REGISTER.md).
+
+### Finestra di compatibilità D-080
+
+Il MCP predecessore genera localmente il proprio ID. La lettura di un ID privo di ricevuta disponibile o appartenente ad altro tenant o soggetto restituisce esattamente `{"status":"PENDING","legacy":true}`. Una prima scelta o un primo rifiuto THS su un ID mai emesso crea la ricevuta durevole `legacy=true`, legata al chiamante e priva di `waitUntil`. Il proprietario vede `STAGED` con l'asset o `REJECTED` con il codice e `legacy:true`. Un altro chiamante riceve un rifiuto se prova a completarla.
+
+Il nuovo MCP tratta `legacy:true` come `HANDOFF_NOT_ISSUED` e ferma l'attesa. Al termine del supporto al predecessore, un rilascio successivo potrà eliminare l'accettazione degli ID locali e rispondere uniformemente `ONB_HANDOFF_UNKNOWN` per quelli assenti o altrui. In caso di ritorno all'immagine Onboarding `82aabaa`, V46 e le ricevute persistite restano nel database. Il predecessore riprende il proprio comportamento in memoria.
+
+## Evidenza storica del caricamento
+
 Stato operativo (27/09/2026): il CSV è stato caricato dal picker HUMAN
 attraverso Gateway, Onboarding ha registrato l'asset
 `8ec8ae90-808a-4d9e-907c-d56de119e376` e il profilo

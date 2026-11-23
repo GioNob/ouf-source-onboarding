@@ -1,5 +1,16 @@
 # Registro della configurazione di Source Onboarding
 
+## Attesa umana del selettore dei file (D-065, D-089)
+
+| Parametro | Proprietà Spring | Variabile d'installazione | Default | Valori ammessi |
+|---|---|---|---:|---|
+| `waitMaxSeconds` | `ouf.onboarding.wait-max-seconds` | `OUF_ONB_WAIT_MAX_SECONDS` | 3600 s | Intero da 1 a 3600 |
+| `handoffRetentionSeconds` | `ouf.onboarding.handoff-retention-seconds` | `OUF_ONB_HANDOFF_RETENTION_SECONDS` | 86400 s | Intero positivo a 32 bit |
+
+Onboarding valida entrambi i valori all'avvio. Il primo fissa `waitUntil` per ciascuna nuova emissione. Il secondo stabilisce da quando è consentita la pulizia di una ricevuta conclusa, misurando il tempo da `completedAt`. Il link del selettore usa `ouf.authorization.ths.public-origin`, l'origine HTTPS delle challenge.
+
+Acquisire e ripristinare i due parametri e l'origine con la configurazione dell'installazione. Sono dati privi di segreti. Includere la tabella `ouf_onboarding.managed_file_handoff` nel backup coerente dello schema e della cronologia Flyway. Dopo il ripristino, verificare con un'identità autorizzata che chiave di comando, versione e scadenza di una ricevuta campione corrispondano alla cattura. La configurazione ripristinata si applica alle nuove emissioni.
+
 ## Registro delle capability di Authorization
 
 | Campo | Valore |

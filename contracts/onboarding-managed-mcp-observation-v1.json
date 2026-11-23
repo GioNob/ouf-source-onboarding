@@ -4,11 +4,41 @@
   "title": "ouf.onboarding.managed-mcp-observation.v1",
   "description": "Campi additivi delle risposte JSON delle rotte owner managed-file-mcp e source-revision-mcp. Il blocco next appartiene al MCP.",
   "type": "object",
-  "required": [
-    "workflowState",
-    "reasonCode",
-    "allowedActions"
+  "oneOf": [
+    {
+      "required": ["workflowState", "reasonCode", "allowedActions"],
+      "not": {
+        "required": ["status", "legacy"],
+        "properties": {"status": {"const": "PENDING"}, "legacy": {"const": true}}
+      }
+    },
+    {
+      "required": ["status", "legacy"],
+      "properties": {"status": {"const": "PENDING"}, "legacy": {"const": true}},
+      "additionalProperties": false
+    },
+    {
+      "required": ["handoffId", "pickerUrl", "issuedAt", "waitUntil", "state", "observationVersion"],
+      "properties": {
+        "handoffId": {"type": "string", "format": "uuid"},
+        "pickerUrl": {"type": "string", "format": "uri"},
+        "issuedAt": {"type": "string", "format": "date-time"},
+        "waitUntil": {"type": "string", "format": "date-time"},
+        "state": {"const": "PENDING"},
+        "observationVersion": {"const": "1"}
+      },
+      "additionalProperties": false
+    }
   ],
+  "if": {"required": ["issuedAt", "waitUntil"]},
+  "then": {
+    "required": ["state", "observationVersion"],
+    "properties": {
+      "state": {"enum": ["PENDING", "STAGED", "REJECTED", "EXPIRED"]},
+      "observationVersion": {"type": "string", "pattern": "^[1-9][0-9]*$"}
+    }
+  },
+  "else": {"properties": {"observationVersion": {"$ref": "#/$defs/observationVersion"}}},
   "properties": {
     "workflowState": {
       "$ref": "#/$defs/state"
@@ -31,9 +61,6 @@
       "then": {
         "maxItems": 1
       }
-    },
-    "observationVersion": {
-      "$ref": "#/$defs/observationVersion"
     },
     "publicationEnvelopeBlock": {
       "type": "object",
@@ -72,6 +99,7 @@
         "PROFILE_AVAILABLE",
         "PROFILE_COLUMNS",
         "PENDING",
+        "EXPIRED",
         "STAGED",
         "PROFILED",
         "QUARANTINED",
@@ -97,6 +125,7 @@
         "PROFILE_AVAILABLE": "Profilo disponibile.",
         "PROFILE_COLUMNS": "Pagina delle colonne del profilo.",
         "PENDING": "Esito del caricamento ancora atteso.",
+        "EXPIRED": "Il termine del selettore è trascorso prima della scelta del file.",
         "STAGED": "File depositato.",
         "PROFILED": "Ricevuta di upload riconciliata su file già profilato.",
         "QUARANTINED": "Ricevuta di upload riconciliata su file in quarantena.",
@@ -126,6 +155,7 @@
         "UPLOAD_STAGED",
         "UPLOAD_REJECTED",
         "UPLOAD_QUARANTINED",
+        "WAIT_DEADLINE_EXPIRED",
         "DRAFT_READY",
         "HUMAN_DECISION_PENDING",
         "CHALLENGE_EXPIRED",
@@ -158,6 +188,7 @@
         "UPLOAD_STAGED": "Handoff con file depositato.",
         "UPLOAD_REJECTED": "Handoff con rifiuto.",
         "UPLOAD_QUARANTINED": "Il file della ricevuta è in quarantena.",
+        "WAIT_DEADLINE_EXPIRED": "L'attesa umana del selettore è terminata alla scadenza fissata dall'owner.",
         "DRAFT_READY": "Bozza nello stato ammesso per la preparazione.",
         "HUMAN_DECISION_PENDING": "Challenge aperta, corrente e con tempo residuo.",
         "CHALLENGE_EXPIRED": "Challenge scaduta rinnovabile.",

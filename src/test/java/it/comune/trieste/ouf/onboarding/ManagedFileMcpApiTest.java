@@ -36,10 +36,13 @@ class ManagedFileMcpApiTest {
         new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
     when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.file.upload",raw))
         .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
-    when(handoffs.result(id,"human:alice")).thenReturn(Map.of("assetId",asset,"status","STAGED"));
+    var observation=Map.<String,Object>of("assetId",asset,"status","STAGED","state","STAGED","observationVersion","2",
+        "issuedAt","2030-03-01T08:00:00Z","waitUntil","2030-03-01T09:00:00Z");
+    when(handoffs.result(id,"tenant-a","human:alice")).thenReturn(observation);
     var result=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),handoffs).handoff(raw,request);
-    assertThat(result).containsOnlyKeys("assetId","status","workflowState","reasonCode","allowedActions");
-    verify(handoffs).result(id,"human:alice");
+    assertThat(result).containsAllEntriesOf(observation)
+        .containsOnlyKeys("assetId","status","state","observationVersion","issuedAt","waitUntil","workflowState","reasonCode","allowedActions");
+    verify(handoffs).result(id,"tenant-a","human:alice");
     verifyNoInteractions(files);
   }
   @Test void jobStatusExposesOnlyBoundedFieldsAndChecksAssetOwner(){
