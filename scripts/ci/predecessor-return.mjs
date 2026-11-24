@@ -99,7 +99,10 @@ try {
   const old = run(previous);
   await ready(old, 'predecessor on empty database');
   const baseline = history();
-  const predecessorHasDistinctValues = baseline.at(-1).version === '45';
+  // D-080 (sprint-03 task-58a): the deployed #81 (20e90de) already runs V46, so a
+  // candidate without migrations must keep the exact history and the same picker reader.
+  const predecessorHasHandoff = baseline.at(-1).version === '46';
+  const predecessorHasDistinctValues = predecessorHasHandoff || baseline.at(-1).version === '45';
   assert.ok(predecessorHasDistinctValues || baseline.at(-1).version === '43');
   // Seed only the isolated IAM policy; the runtime writes every onboarding row through HTTP.
   const bundle = policy(), payload = JSON.stringify(bundle);
@@ -118,9 +121,9 @@ try {
   await ready(next, 'candidate on populated database');
   const candidateHistory = history('46');
   assert.deepEqual(candidateHistory.slice(0, baseline.length), baseline, 'candidate must retain the exact deployed migration history');
-  const expected = predecessorHasDistinctValues ? [] :
-    ['V44__managed_profile_distinct_values.sql', 'V45__managed_value_map_preparation.sql'];
-  assert.deepEqual(candidateHistory.slice(baseline.length).map(row => row.script), [...expected, 'V46__managed_file_handoff.sql']);
+  const expected = predecessorHasHandoff ? [] : [...(predecessorHasDistinctValues ? [] :
+    ['V44__managed_profile_distinct_values.sql', 'V45__managed_value_map_preparation.sql']), 'V46__managed_file_handoff.sql'];
+  assert.deepEqual(candidateHistory.slice(baseline.length).map(row => row.script), expected);
   const commandKey = randomUUID();
   const issued = await issuePicker(fixture, commandKey);
   const pending = await readPicker(fixture, issued.handoffId);
@@ -162,11 +165,15 @@ try {
   assert.equal(docker('inspect', '-f', '{{.Image}}', old), previous);
   await ready(old, 'predecessor return on candidate data');
   const oldObservation = await readPicker(fixture, issued.handoffId);
-  assert.equal(oldObservation.status, 'PENDING');
-  for (const field of ['state', 'issuedAt', 'waitUntil', 'observationVersion']) {
-    assert.ok(!(field in oldObservation), 'predecessor uses its original handoff reader');
+  if (predecessorHasHandoff) {
+    assert.deepEqual(oldObservation, pending, 'deployed predecessor reads the candidate picker unchanged');
+  } else {
+    assert.equal(oldObservation.status, 'PENDING');
+    for (const field of ['state', 'issuedAt', 'waitUntil', 'observationVersion']) {
+      assert.ok(!(field in oldObservation), 'predecessor uses its original handoff reader');
+    }
   }
-  const returnedProfile = await verifyReturn(fixture, seed, result, predecessorHasDistinctValues);
+  const returnedProfile = await verifyReturn(fixture, seed, result, predecessorHasDistinctValues, predecessorHasHandoff);
   assert.equal(distinctProfile(result.typed.profileId), valueEvidence);
   const returnedValues = distinctProfile(returnedProfile.profileId);
   if (predecessorHasDistinctValues) assert.deepEqual(JSON.parse(returnedValues), JSON.parse(valueEvidence));
