@@ -57,6 +57,9 @@ class ManagedOnboardingReviewRuntimeTest {
     UUID asset=(UUID)files.registerOwned(null,"object://fixture/edicole.csv",hashes.ofBytes(csv),"text/csv",
         csv.length,human.subject(),"retention://test",tenant).get("asset_id");
     UUID profile=(UUID)files.profile(asset,csv,"object://fixture/edicole-sample.json").get("profile_id");
+    var retained=files.fileProfile(asset,profile);
+    var preview=files.previewProfile(asset,profile,tenant,human.subject());
+    for(var result:List.of(retained,preview))assertThat(((Map<?,?>)result.get("metadata")).get("maxCellChars")).isEqualTo(7);
     var fields=List.of(new ManagedFileService.FieldDecision("name","INCLUDE","OPEN",property,"IDENTITY",null,null,null),
         new ManagedFileService.FieldDecision("unused","EXCLUDE","OPEN",null,null,null,null,null));
     var refs=List.of(semanticId+"@"+adopted.semanticVersion());
@@ -73,8 +76,7 @@ class ManagedOnboardingReviewRuntimeTest {
     var udp=Map.<String,Object>of("resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1",
         "policyRef","urn:fixture:identity","governedIdentity",policy),"materialization",Map.of("policyRef","urn:fixture:authority",
         "properties",List.of(materialized),"bitemporalProperties",List.of(),"checkpointInterval",1));
-    var proposal=new ManagedFileExecutionProposal.Proposal(List.of(adopted),adopted.publicationSetId(),udp,
-        new ManagedFileExecutionProposal.Limits(100,2,1000));
+    var proposal=new ManagedFileExecutionProposal.Proposal(List.of(adopted),adopted.publicationSetId(),udp,null);
     var mapper=principal(tenant,human.subject());
     var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"review:edicole",proposal);
     return new Governed(mapper,command,reviews.prepare(mapper,command,"prepare"));
@@ -850,6 +852,12 @@ class ManagedOnboardingReviewRuntimeTest {
     registry.publish(semanticId,"1.1.0","Seconda");
     assertThat(registry.snapshots.get(registry.active)).isNotEqualTo(originalBytes);
     assertThat(reviews.prepare(mapper,command,"retry")).isEqualTo(review);
+    var original=command.executionProposal();
+    var changed=new ManagedFileExecutionProposal.Proposal(original.semanticBindings(),original.semanticPublicationSetRef(),
+        original.udp(),new ManagedFileExecutionProposal.Limits(101,null,null));
+    var reused=new ManagedOnboardingReviewService.Prepare(command.sourceId(),command.onboardingVersionId(),
+        command.expectedVersion(),command.commandKey(),changed);
+    assertThatThrownBy(()->reviews.prepare(mapper,reused,"retry")).hasMessage("ONB_REVIEW_COMMAND_CONFLICT");
     var card=reviews.humanCard(mapper,(UUID)review.get("challengeId"));
     var config=(Map<?,?>)card.get("configuration");
     assertThat(((Map<?,?>)config.get("semanticMapping")).get("semanticRefs")).isEqualTo(refs);

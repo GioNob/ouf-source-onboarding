@@ -15,9 +15,12 @@ public final class ManagedFileExecutionProposal {
       List<ReviewTerm> reviewTerms) {
     public SemanticBinding(String id,String version,String revision,String set){this(id,version,revision,set,null);}
   }
-  public record Limits(int maxRows,int maxColumns,int maxCellChars) {}
+  @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+  public record Limits(Integer maxRows,Integer maxColumns,Integer maxCellChars) {}
   public record Proposal(List<SemanticBinding> semanticBindings,String semanticPublicationSetRef,
-                         Map<String,Object> udp,Limits limits) {}
+                         Map<String,Object> udp,
+                         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                         Limits limits) {}
   private ManagedFileExecutionProposal() {}
 
   static List<String> missingSections(Map<?,?> config) {
@@ -58,7 +61,7 @@ public final class ManagedFileExecutionProposal {
   }
 
   public static Map<String,Object> compile(Map<String,Object> existing,Map<String,Object> asset,
-                                           String tenant,Proposal proposal) {
+                                           Map<String,Object> profile,String tenant,Proposal proposal,AcquisitionLimits installation) {
     require(existing!=null && asset!=null && proposal!=null && tenant!=null && !tenant.isBlank());
     Map<String,Object> config=copy(existing),extraction=object(config,"extractionProfile"),runtime=object(extraction,"runtime");
     Map<String,Object> semantic=object(config,"semanticMapping"),source=object(semantic,"sourceType"),bundle=object(config,"bundle");
@@ -78,9 +81,14 @@ public final class ManagedFileExecutionProposal {
         && profileId.equals(object(extraction,"selection").get("fileProfileId")));
     require(text(bundle,"schemaRef").equals("profile://managed-files/"+assetId+"/profiles/"+profileId));
     long size=integer(asset.get("size_bytes"),1,10_485_760);
-    Limits limits=proposal.limits();require(limits!=null);
-    integer(limits.maxRows(),1,1_000_000);integer(limits.maxColumns(),1,10_000);integer(limits.maxCellChars(),1,1_000_000);
     List<?> fields=list(object(extraction,"projection").get("FILE"),1,ManagedFileLimits.MAX_COLUMNS);
+    Limits requested=proposal.limits();
+    if(requested!=null){
+      if(requested.maxRows()!=null)integer(requested.maxRows(),1,1_000_000);
+      if(requested.maxColumns()!=null)integer(requested.maxColumns(),1,10_000);
+      if(requested.maxCellChars()!=null)integer(requested.maxCellChars(),1,1_000_000);
+    }
+    Limits limits=installation.resolve(profile,requested);
     require(fields.size()<=limits.maxColumns() && new HashSet<>(fields).size()==fields.size());
     Set<String> mapped=new LinkedHashSet<>(),mappedFields=new LinkedHashSet<>(),classes=new LinkedHashSet<>();
     Map<String,String> declaredDatatypes=new HashMap<>();

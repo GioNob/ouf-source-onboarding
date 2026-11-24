@@ -66,9 +66,9 @@ class ManagedFileExecutionProposalTest {
   @Test void assetOrTenantDriftCannotBeCompiled(){
     for(String key:List.of("asset_id","source_id","staging_ref","content_hash")){
       var changed=asset();changed.put(key,"changed");
-      assertThatThrownBy(()->ManagedFileExecutionProposal.compile(config(),changed,"fixture-tenant",proposal())).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+      assertThatThrownBy(()->ManagedFileExecutionProposal.compile(config(),changed,profile(2),"fixture-tenant",proposal(),AcquisitionLimitsTest.DEFAULTS)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
     }
-    assertThatThrownBy(()->ManagedFileExecutionProposal.compile(config(),asset(),"other-tenant",proposal())).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    assertThatThrownBy(()->ManagedFileExecutionProposal.compile(config(),asset(),profile(2),"other-tenant",proposal(),AcquisitionLimitsTest.DEFAULTS)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
   }
   @Test void everySemanticReferenceMustHaveOneExactBindingInTheSelectedSet(){
     var correct=proposal();
@@ -180,7 +180,9 @@ class ManagedFileExecutionProposalTest {
   }
 
   @Test void mappedRevisionExtendsGovernedComparisonOnThePinnedPublication(){
-    var compiled=compile(config(),proposal());
+    var p=proposal();
+    var compiled=compile(config(),new ManagedFileExecutionProposal.Proposal(p.semanticBindings(),PUBLICATION,p.udp(),
+        new ManagedFileExecutionProposal.Limits(100,2,1000)));
     var previous=asset();previous.put("media_type","text/csv");
     var next=new LinkedHashMap<>(previous);next.put("asset_id",UUID.randomUUID());
     var schema=List.of(Map.of("name","nome_teatro","dataType","STRING"),Map.of("name","cap","dataType","STRING"));
@@ -196,11 +198,16 @@ class ManagedFileExecutionProposalTest {
     var decision=new ManagedCsvRevision.NewColumn("fee","MAP",m);
     var missing=new ManagedCsvRevision.Mapping(m.propertyIri(),m.transform(),rule,null,null,null);
     assertThatThrownBy(()->ManagedCsvRevision.replace(compiled,previous,before,next,after,2,
-        List.of(new ManagedCsvRevision.NewColumn("fee","MAP",missing))))
+        List.of(new ManagedCsvRevision.NewColumn("fee","MAP",missing)),AcquisitionLimitsTest.DEFAULTS))
         .isInstanceOfSatisfying(ManagedCsvRevision.Incompatible.class,e->assertThat(e.diagnostics())
             .extracting(ManagedCsvRevision.Finding::code).containsExactly("INVALID_NEW_COLUMN_COMPARISON"));
-    ManagedCsvRevision.replace(compiled,previous,before,next,after,2,List.of(decision));
+    var narrowInstallation=new AcquisitionLimits(1000,2,1000,25,100,8,1024);
+    assertThatThrownBy(()->ManagedCsvRevision.replace(compiled,previous,before,next,after,2,List.of(decision),narrowInstallation))
+        .isInstanceOfSatisfying(ManagedCsvRevision.Incompatible.class,e->assertThat(e.diagnostics())
+            .extracting(ManagedCsvRevision.Finding::code).containsExactly("EXECUTION_LIMIT_EXCEEDED"));
+    ManagedCsvRevision.replace(compiled,previous,before,next,after,2,List.of(decision),AcquisitionLimitsTest.DEFAULTS);
     var runtime=object(object(compiled,"extractionProfile"),"runtime");
+    assertThat(object(runtime,"execution")).containsEntry("maxColumns",11).containsEntry("maxCellChars",1_000_000);
     var resolution=object(object(runtime,"udp"),"resolution");
     var policy=object(resolution,"governedIdentity");
     GovernedIdentityProposal.validate(resolution,policy,SOURCE,Set.of(CLASS),Set.of(NAME,CAP,m.propertyIri()));
@@ -208,6 +215,35 @@ class ManagedFileExecutionProposalTest {
         "semanticRef",m.propertyIri()+"@"+PUBLICATION,"comparator",comparison.comparator(),"assertionRef",comparison.assertionRef(),
         "uniqueWithinScope",false,"excludesOnDisagreement",false));
     assertThat(policy.get("sufficientRules")).isEqualTo(object(object(proposal().udp(),"resolution"),"governedIdentity").get("sufficientRules"));
+  }
+
+  @Test void replacementRetainsParentOrRecomputesAllLimitsWithinInstallation() {
+    var parent=compile(config(),proposal());
+    var previous=asset();previous.put("media_type","text/csv");
+    var next=new LinkedHashMap<>(previous);next.put("asset_id",UUID.randomUUID());
+    var schema=List.of(Map.of("name","nome_teatro","dataType","STRING"),Map.of("name","cap","dataType","STRING"));
+    var before=Map.<String,Object>of("profile_id",PROFILE,"format","CSV","metadata",Map.of("rows",1,"delimiter",";"),
+        "inferred_schema",schema);
+    var after=new LinkedHashMap<>(before);
+    after.put("profile_id",UUID.randomUUID());after.put("candidate_keys",List.of("nome_teatro"));
+    var installation=new AcquisitionLimits(200,10,1200,25,10,1,30);
+    record Replacement(int rows,int chars,int maxRows,int maxColumns,int maxCellChars) {}
+    for(var sample:List.of(new Replacement(100,1000,100,10,1000),new Replacement(101,10,127,3,40),
+        new Replacement(2,1001,12,3,1200))){
+      after.put("metadata",Map.of("rows",sample.rows(),"maxCellChars",sample.chars(),"delimiter",";"));
+      var draft=clone(parent);
+      ManagedCsvRevision.replace(draft,previous,before,next,after,2,List.of(),installation);
+      assertThat(object(object(object(draft,"extractionProfile"),"runtime"),"execution"))
+          .containsEntry("maxRows",sample.maxRows()).containsEntry("maxColumns",sample.maxColumns()).containsEntry("maxCellChars",sample.maxCellChars());
+    }
+    for(var sample:List.of(List.of(201,10),List.of(2,1201))){
+      after.put("metadata",Map.of("rows",sample.get(0),"maxCellChars",sample.get(1),"delimiter",";"));
+      var draft=clone(parent);
+      assertThatThrownBy(()->ManagedCsvRevision.replace(draft,previous,before,next,after,2,List.of(),installation))
+          .isInstanceOfSatisfying(ManagedCsvRevision.Incompatible.class,e->assertThat(e.diagnostics())
+              .extracting(ManagedCsvRevision.Finding::code).containsExactly("EXECUTION_LIMIT_EXCEEDED"));
+      assertThat(draft).isEqualTo(clone(parent));
+    }
   }
 
   @Test void wideExecutionPreservesAllPropertiesAndRejectsThe1025th() {
@@ -283,7 +319,13 @@ class ManagedFileExecutionProposalTest {
     assertThat(revised).containsEntry("compositionInputLabels",Map.of("cap","RESTRICTED"));
   }
 
-  private Map<String,Object> compile(Map<String,Object> c,ManagedFileExecutionProposal.Proposal p){return ManagedFileExecutionProposal.compile(c,asset(),"fixture-tenant",p);}
+  private Map<String,Object> profile(int columns){
+    return Map.of("metadata",Map.of("rows",1),"inferred_schema",Collections.nCopies(columns,Map.of()));
+  }
+  private Map<String,Object> compile(Map<String,Object> c,ManagedFileExecutionProposal.Proposal p){
+    int columns=((List<?>)object(object(c,"extractionProfile"),"projection").get("FILE")).size();
+    return ManagedFileExecutionProposal.compile(c,asset(),profile(columns),"fixture-tenant",p,AcquisitionLimitsTest.DEFAULTS);
+  }
   private Map<String,Object> asset(){return new LinkedHashMap<>(Map.of("asset_id",UUID.fromString(ASSET),"source_id",SOURCE,"staging_ref","staging://fixture/source.csv","content_hash","sha256:fixture","size_bytes",321L));}
   private ManagedFileExecutionProposal.Proposal proposal(){
     var signals=new ArrayList<Map<String,Object>>();var props=new ArrayList<Map<String,Object>>();

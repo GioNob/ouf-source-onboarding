@@ -78,20 +78,23 @@ public class ManagedFileProfiler {
     if(text.startsWith("\uFEFF"))text=text.substring(1);
     if(text.indexOf('\u0000')>=0)throw new IllegalArgumentException("CSV must be UTF-8 text");
     char separator=delimiter(text);
-    CSVFormat format=CSVFormat.DEFAULT.builder().setDelimiter(separator).setHeader()
-        .setSkipHeaderRecord(true).setIgnoreEmptyLines(true).get();
+    CSVFormat format=CSVFormat.RFC4180.builder().setDelimiter(separator).setHeader()
+        .setSkipHeaderRecord(true).setDuplicateHeaderMode(DuplicateHeaderMode.ALLOW_ALL).get();
+    // validateHeaders rejects duplicates with the retained, data-free profiling diagnostic.
     try(CSVParser parser=CSVParser.parse(text,format)) {
       List<String> headers=parser.getHeaderNames();validateHeaders(headers);
       List<Set<String>> distinct=new ArrayList<>(headers.size());
       for(int c=0;c<headers.size();c++)distinct.add(new HashSet<>());
       String[] types=new String[headers.size()];boolean[] nullable=new boolean[headers.size()];
-      List<Map<String,String>> sample=new ArrayList<>(5);int rows=0;
+      List<Map<String,String>> sample=new ArrayList<>(5);int rows=0,maxCellChars=0;
       for(CSVRecord record:parser) {
         if(rows>=MAX_ROWS)throw new IllegalArgumentException("row limit exceeded");
         if(record.size()>headers.size())throw new IllegalArgumentException("CSV row exceeds declared headers");
         Map<String,String> example=rows<5?new LinkedHashMap<>():null;
         for(int c=0;c<headers.size();c++) {
-          String raw=record.isSet(c)?record.get(c):"",value=CellWhitespace.trim(raw);
+          String raw=record.isSet(c)?record.get(c):"";
+          maxCellChars=Math.max(maxCellChars,raw.length());
+          String value=CellWhitespace.trim(raw);
           if(value.isEmpty())nullable[c]=true;
           else {
             distinct.get(c).add(value);
@@ -111,7 +114,7 @@ public class ManagedFileProfiler {
         distinct.set(c,null);
       }
       return new Profile("CSV",Map.of("encoding","UTF-8","delimiter",String.valueOf(separator),
-          "headerRow",1,"rows",rows,"columns",headers.size()),List.copyOf(columns),List.copyOf(keys),List.copyOf(sample),
+          "headerRow",1,"rows",rows,"columns",headers.size(),"maxCellChars",maxCellChars),List.copyOf(columns),List.copyOf(keys),List.copyOf(sample),
           Map.of(FLAT_PROFILE,values));
     } catch(IOException e) {throw new IllegalArgumentException("invalid CSV",e);}
   }

@@ -40,6 +40,20 @@ Tracciabilità PET (D-082), D-090 T1. Nel job CI `java21-postgresql17`, `Permiss
 | `onboarding.published-mapping.v1` | Source Onboarding owns the mapping embedded in `ouf_onboarding.published_configuration.bundle` for UDP consumption. Depends on `onboarding.semantic-mapping.v1`. | Same handling as the reviewed configuration. | Capture the original bundle with its publication row, version link, checksum and lifecycle state in the same snapshot. Restore the captured rows and links. | Verify checksum and version link, then compare the published mapping with the approved version, including category absence. |
 | `ouf.onboarding.publication.max-runtime-envelope-bytes` | Source Onboarding installation setting in bytes. Default `2097152` (2 MiB), the lower known runtime read limit. Set at or below the smallest installed Ingestion and UDP publication read capacity, including Gateway limits on those routes. The check counts UTF-8 JSON bytes for the whole runtime envelope, including D-084 pins, embedded definitions, value maps, the longest valid source status and the framing of the single-item discovery page. | No. | Capture and restore the effective setting with the installation configuration, alongside the runtime and Gateway read limits. | Verify that review and activation reject a body over the restored limit and that active and exact reads return the admitted envelope. A blocked candidate can be withdrawn and replaced with a smaller revision. |
 
+## Managed file acquisition limits (D-065)
+
+The following Spring settings are integers under `ouf.onboarding.acquisition-limits.`. All seven are non-secret installation configuration. Capture the effective values with the installation configuration backup. Restore them before starting Onboarding and verify a new review snapshot against a known file. Frozen reviews retain their original basis. The environment overrides below use the prefix `OUF_ONB_ACQUISITION_LIMITS_`.
+
+| Property suffix | Environment suffix | Default | Inclusive range |
+|---|---|---:|---:|
+| `max-rows` | `MAX_ROWS` | 1000000 | 1–1000000 |
+| `max-columns` | `MAX_COLUMNS` | 1024 | 1–10000 |
+| `max-cell-chars` | `MAX_CELL_CHARS` | 1000000 | 1–1000000 |
+| `margin-percent` | `MARGIN_PERCENT` | 25 | 0–1000 |
+| `min-headroom-rows` | `MIN_HEADROOM_ROWS` | 100 | 0–1000000 |
+| `min-headroom-columns` | `MIN_HEADROOM_COLUMNS` | 8 | 0–10000 |
+| `min-headroom-cell-chars` | `MIN_HEADROOM_CELL_CHARS` | 1024 | 0–1000000 |
+
 ## Controlled category contract (D-059)
 
 The local [semantic mapping profile](../contracts/onboarding/semantic-mapping-category-v1.json) extends the frozen RC3 schema. A human selects the canonical class and may declare its category on the target class. For discovery, the optional JSON body of `POST …/mapping/build-draft` accepts `category` for the configured target class. For managed files, pass the same optional field beside `targetClassIri` in the create-onboarding or MCP draft request.

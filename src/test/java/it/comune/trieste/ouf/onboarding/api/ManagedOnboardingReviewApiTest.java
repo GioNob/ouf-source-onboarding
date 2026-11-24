@@ -37,7 +37,8 @@ class ManagedOnboardingReviewApiTest {
         args.put("executionProposal",bad);
         http.perform(post(path).contentType(MediaType.APPLICATION_JSON).header("X-Correlation-ID",correlation)
             .content(json.writeValueAsBytes(Map.of("Arguments",args))))
-            .andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.code").value("ONB_REVIEW_ARGUMENTS_INVALID"));
+            .andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.code").value(
+                bad.containsKey("limits")?"ONB_MANAGED_EXECUTION_PROPOSAL_INVALID":"ONB_REVIEW_ARGUMENTS_INVALID"));
       }
       verifyNoInteractions(service);
       args.remove("executionProposal");
@@ -49,12 +50,44 @@ class ManagedOnboardingReviewApiTest {
       assertThat(logs.list).extracting(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).containsExactly(
           "code=ONB_REVIEW_ARGUMENTS_INVALID phase=decode correlationId="+correlation+" path=Arguments",
           "code=ONB_REVIEW_ARGUMENTS_INVALID phase=decode correlationId="+correlation+" path=Arguments.executionProposal.*",
-          "code=ONB_REVIEW_ARGUMENTS_INVALID phase=decode correlationId="+correlation+" path=Arguments.executionProposal.limits.maxRows",
+          "code=ONB_MANAGED_EXECUTION_PROPOSAL_INVALID phase=decode correlationId="+correlation+" path=Arguments.executionProposal.limits.maxRows",
           "code=ONB_REVIEW_INTERNAL_ERROR phase=prepare correlationId="+correlation+" class=java.lang.IllegalArgumentException");
       assertThat(logs.list).allMatch(event->event.getThrowableProxy()==null);
     }finally{
       logger.detachAppender(logs);
       logs.stop();
+    }
+  }
+
+  @Test void optionalParserLimitsDecodeWithHistoricalFullShapeAndStrictIntegerTypes()throws Exception{
+    var receipts=mock(PermissionDelegationVerifier.class);
+    var service=mock(ManagedOnboardingReviewService.class);
+    when(receipts.verifyManagedFile(any(),anyString(),anyString(),any()))
+        .thenReturn(new PermissionDelegationVerifier.Delegated(null,"key"));
+    var json=new ObjectMapper();
+    var api=new ManagedOnboardingReviewApi(receipts,service,json);
+    var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/review-prepare");
+    var args=new LinkedHashMap<String,Object>(Map.of("sourceId","s","onboardingVersionId",UUID.randomUUID().toString(),
+        "expectedVersion",0,"commandKey","key"));
+    var proposal=new LinkedHashMap<String,Object>();
+    args.put("executionProposal",proposal);
+    for(var fields:List.of(Map.of("maxRows",10,"maxColumns",3,"maxCellChars",64),Map.of("maxRows",10),Map.of())){
+      if(fields.isEmpty())proposal.remove("limits"); else proposal.put("limits",fields);
+      api.prepare(json.writeValueAsBytes(Map.of("Arguments",args)),request);
+    }
+    var commands=org.mockito.ArgumentCaptor.forClass(ManagedOnboardingReviewService.Prepare.class);
+    verify(service,times(3)).prepare(any(),commands.capture(),any());
+    var captured=commands.getAllValues();
+    assertThat(captured.get(0).executionProposal().limits().maxCellChars()).isEqualTo(64);
+    assertThat(captured.get(1).executionProposal().limits().maxColumns()).isNull();
+    assertThat(captured.get(2).executionProposal().limits()).isNull();
+    var limits=new LinkedHashMap<String,Object>();
+    proposal.put("limits",limits);
+    for(Object invalid:Arrays.asList(null,"3",1.2,true,3_000_000_000L)){
+      limits.put("maxRows",invalid);
+      byte[] raw=json.writeValueAsBytes(Map.of("Arguments",args));
+      assertThatThrownBy(()->api.prepare(raw,request)).isInstanceOfSatisfying(
+          it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID"));
     }
   }
 
