@@ -106,14 +106,8 @@ public final class ManagedFileExecutionProposal {
     String publication=uuid(proposal.semanticPublicationSetRef());
     bind(config,semantic,proposal.semanticBindings(),publication,classes,mapped,combined.typeRefs,combined.labels.keySet(),valueMapRefs);
     Map<String,Object> udp=copy(proposal.udp());keys(udp,"resolution","materialization");
-    Map<String,Object> resolution=object(udp,"resolution"),policy=object(resolution,"governedIdentity");
-    MappingCategory.validate(semantic.get("targetClasses"),policy);
-    GovernedIdentityProposal.validate(resolution,policy,sourceId,classes,mapped);
-    require(tenant.equals(policy.get("tenantId")));
-    for(Object raw:list(policy.get("signals"),1,ManagedFileLimits.MAX_COLUMNS)){
-      Map<String,Object> signal=map(raw);require((text(signal,"id")+"@"+publication).equals(signal.get("semanticRef"))
-          && ValueReader.comparator(declaredDatatypes.get(text(signal,"id"))).equals(signal.get("comparator")));
-    }
+    new GovernedIdentityProposal(declaredDatatypes,publication)
+        .validateExecution(udp.get("resolution"),semantic.get("targetClasses"),sourceId,classes,tenant);
     Map<String,Object> materialization=object(udp,"materialization");
     keys(materialization,"policyRef","properties","bitemporalProperties","checkpointInterval");
     text(materialization,"policyRef");integer(materialization.get("checkpointInterval"),1,1_000_000);
