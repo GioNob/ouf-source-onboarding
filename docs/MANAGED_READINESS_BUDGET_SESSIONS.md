@@ -28,9 +28,9 @@ V42 also reconciles interrupted claims after lease and budget expiry. The grant
 serializes with publication and verifies the confirmed decision, frozen hash,
 generation, elapsed budget, ownership and absence of a publication for that
 version. The card shows the reconciled reason. The journal retains the prior
-phase and records when the original error code was absent. A historical 403
-or an undifferentiated pre-V42 UDP failure can receive a fresh HUMAN budget
-for rechecking the dependency. Outstanding backoff, a live lease, unknown
+phase and records when the original error code was absent. Non-transient HTTP
+4xx dependency refusals and the undifferentiated pre-V42 UDP failure can receive
+a fresh HUMAN budget for rechecking the dependency. Outstanding backoff, a live lease, unknown
 failures and inconsistent publication evidence keep the grant unavailable.
 The next activation verifies current authority and dependencies under a new
 generation. The grant itself writes only budget and audit state.

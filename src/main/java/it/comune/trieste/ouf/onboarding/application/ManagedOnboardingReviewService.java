@@ -385,11 +385,11 @@ public class ManagedOnboardingReviewService {
     if(!publications.isEmpty())result.put("publication",publications.getFirst());
     result.put("ingestionCompatibilityObserved",db.sql("select coalesce((select compatible from ouf_onboarding.consumer_compatibility_attestation where onboarding_version_id=:v and consumer='INGESTION_RUNTIME' and configuration_hash=:h order by created_at desc,attestation_id desc limit 1),false)")
         .param("v",current.get("onboarding_version_id")).param("h",current.get("configuration_hash")).query(Boolean.class).single());
-    var progress=db.sql("select readiness_started_at,readiness_attempts,readiness_generation,readiness_phase,readiness_lease_until,readiness_next_at,readiness_last_code from ouf_onboarding.managed_onboarding_review where onboarding_version_id=:v")
-        .param("v",current.get("onboarding_version_id")).query().listOfRows();
-    if(!progress.isEmpty()){
-      var value=new LinkedHashMap<String,Object>(progress.getFirst());
+    if(review!=null){
       var budget=budgetState((UUID)review.get("challenge_id"));boolean session=budget.get("readiness_session_id")!=null;
+      var value=new LinkedHashMap<String,Object>();
+      for(String key:List.of("readiness_started_at","readiness_attempts","readiness_generation","readiness_phase",
+          "readiness_lease_until","readiness_next_at","readiness_last_code"))value.put(key,budget.get(key));
       value.put("profile",session?"managed-review-recovery.v1":"managed-review-activation.v1");
       value.put("maximumAttempts",session?budget.get("session_maximum_attempts"):128);
       value.put("maximumElapsedSeconds",session?budget.get("session_maximum_seconds"):86400);
@@ -400,6 +400,9 @@ public class ManagedOnboardingReviewService {
       value.put("budgetExpiresAt",budget.get("budget_deadline"));
       value.put("budgetExhausted",Boolean.TRUE.equals(budget.get("budget_exhausted")));
       value.put("counterLineageVerified",Boolean.TRUE.equals(budget.get("budget_lineage_valid")));
+      value.put("humanRecheckAllowed","APPROVED".equals(current.get("state"))&&"CONFIRMED".equals(result.get("challengeStatus"))
+          &&recheckableBlock(budget)&&Boolean.TRUE.equals(budget.get("budget_lineage_valid"))
+          &&!Boolean.TRUE.equals(budget.get("budget_exhausted"))&&!Boolean.TRUE.equals(budget.get("delayed")));
       String reason=renewalCode(budget);
       boolean available="APPROVED".equals(current.get("state"))&&reason!=null;
       value.put("humanBudgetGrantAvailable",available);
@@ -487,7 +490,14 @@ public class ManagedOnboardingReviewService {
   }
   public static boolean humanRecheckCode(String code){
     // Pre-V42 the final UDP read conflated transport failures and invalid evidence.
-    return "ONB_READINESS_DEPENDENCY_403".equals(code)||"ONB_UDP_IDENTITY_PREFLIGHT_REQUIRED".equals(code);
+    return "ONB_UDP_IDENTITY_PREFLIGHT_REQUIRED".equals(code)
+        ||code!=null&&code.matches("ONB_READINESS_DEPENDENCY_4[0-9]{2}")&&!transientReadinessCode(code);
+  }
+  private static boolean recheckableBlock(Map<String,Object> state){
+    return "BLOCKED".equals(state.get("readiness_phase"))&&!Boolean.TRUE.equals(state.get("leased"))
+        &&state.get("readiness_started_at")!=null&&((Number)state.get("readiness_attempts")).intValue()>0
+        &&((Number)state.get("readiness_generation")).longValue()>0
+        &&humanRecheckCode((String)state.get("readiness_last_code"));
   }
   private static String renewalCode(Map<String,Object> state){
     if(!Boolean.TRUE.equals(state.get("budget_lineage_valid"))||!Boolean.TRUE.equals(state.get("budget_exhausted"))
@@ -569,7 +579,7 @@ public class ManagedOnboardingReviewService {
     return receipt(current,review);
   }
   public record ActivationClaim(UUID challenge,UUID version,String source,String hash,long lockVersion,long generation,
-      Map<String,Object> configuration,Map<String,Object> progress,boolean reconciled){}
+      Map<String,Object> configuration,Map<String,Object> progress,boolean reconciled,boolean recheck){}
   @Transactional(noRollbackFor=DomainFailure.class)
   @SuppressWarnings("unchecked") public ActivationClaim claimActivation(PrincipalContext p,UUID challenge,Decision decision){
     var review=humanReview(p,challenge);
@@ -577,7 +587,7 @@ public class ManagedOnboardingReviewService {
     String source=String.valueOf(review.get("source_id"));UUID version=(UUID)review.get("onboarding_version_id");
     var current=onboarding.version(source,version);String hash=String.valueOf(current.get("configuration_hash"));
     if(decision==null||!Objects.equals(decision.configurationHash(),hash)||!Objects.equals(review.get("configuration_hash"),hash))throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
-    if("ACTIVE".equals(current.get("state")))return new ActivationClaim(challenge,version,source,hash,((Number)current.get("lock_version")).longValue(),0,Map.of(),receipt(current,review),true);
+    if("ACTIVE".equals(current.get("state")))return new ActivationClaim(challenge,version,source,hash,((Number)current.get("lock_version")).longValue(),0,Map.of(),receipt(current,review),true,false);
     if(!"APPROVED".equals(current.get("state"))||!"CONFIRMED".equals(onboarding.approvalCard(challenge).get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_APPROVAL_REQUIRED");
     if(((Number)current.get("lock_version")).longValue()!=decision.expectedVersion())throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
     var state=budgetState(challenge);
@@ -590,8 +600,9 @@ public class ManagedOnboardingReviewService {
       throw fail(HttpStatus.CONFLICT,"ONB_READINESS_BUDGET_EXHAUSTED");
     }
     if(Boolean.TRUE.equals(state.get("delayed")))throw fail(HttpStatus.TOO_MANY_REQUESTS,"ONB_READINESS_BACKOFF");
+    boolean recheck="PAUSED".equals(state.get("readiness_phase"))&&humanRecheckCode((String)state.get("readiness_last_code"));
     long generation=db.sql("update ouf_onboarding.managed_onboarding_review set readiness_started_at=coalesce(readiness_started_at,clock_timestamp()),readiness_attempts=readiness_attempts+1,readiness_generation=readiness_generation+1,readiness_phase='CHECKING_COMPATIBILITY',readiness_lease_until=least(clock_timestamp()+interval '60 seconds',cast(:deadline as timestamptz)),readiness_next_at=null,readiness_last_code=null where challenge_id=:c returning readiness_generation").param("c",challenge).param("deadline",state.get("budget_deadline")).query(Long.class).single();
-    return new ActivationClaim(challenge,version,source,hash,decision.expectedVersion(),generation,(Map<String,Object>)current.get("configuration"),receipt(current,review),false);
+    return new ActivationClaim(challenge,version,source,hash,decision.expectedVersion(),generation,(Map<String,Object>)current.get("configuration"),receipt(current,review),false,recheck);
   }
   @Transactional public void activationPhase(ActivationClaim claim,String phase){
     if(!Set.of("CHECKING_IDENTITY","ACTIVATING").contains(phase))throw fail(HttpStatus.BAD_REQUEST,"ONB_READINESS_PHASE_INVALID");
@@ -690,9 +701,7 @@ public class ManagedOnboardingReviewService {
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVIEW_STALE_CARD");
     if(!"APPROVED".equals(current.get("state"))||!"CONFIRMED".equals(onboarding.approvalCard(challenge).get("status")))
       throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_APPROVAL_REQUIRED");
-    if(!"BLOCKED".equals(state.get("readiness_phase"))||Boolean.TRUE.equals(state.get("leased"))
-        ||state.get("readiness_started_at")==null||((Number)state.get("readiness_attempts")).intValue()<1||request.expectedGeneration()<1
-        ||!humanRecheckCode(request.blockedCode()))
+    if(!recheckableBlock(state))
       throw fail(HttpStatus.CONFLICT,"ONB_READINESS_RESUME_NOT_ALLOWED");
     if(!Boolean.TRUE.equals(state.get("budget_lineage_valid")))
       throw fail(HttpStatus.CONFLICT,"ONB_READINESS_COUNTER_LINEAGE_UNPROVEN");

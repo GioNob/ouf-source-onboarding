@@ -130,18 +130,42 @@ async function openCard(fixture, review) {
   throw new Error('THS login redirect limit exceeded');
 }
 
-export async function writeV42(fixture) {
+export async function writePredecessor(fixture) {
   const legacyFile = await profile(fixture, 'legacy');
   const legacy = await createDraft(fixture, legacyFile, 'OPEN', 'create-legacy');
   const legacyReview = await prepare(fixture, legacy, 'prepare-legacy');
   assert.equal(legacyReview.challengeStatus, 'CREATED');
+  const decision = {configurationHash: legacyReview.configurationHash, expectedVersion: legacyReview.lockVersion};
+  // Confirm directly at the HUMAN owner endpoint. The loopback fixture provides no semantic catalogue for THS term lookup.
+  const approved = await json(`/api/trusted-human/v1/approval-challenges/${legacyReview.challengeId}/review/confirm`, {
+    method: 'POST', headers: {Authorization: 'Bearer ' + fixture.bearer()}, body: JSON.stringify(decision),
+  });
+  assert.equal(approved.state, 'APPROVED');
+  const {headers} = await openCard(fixture, legacyReview);
+  const refusal = await json(ths + 'api/' + legacyReview.challengeId + '/activate', {method: 'POST', headers,
+    body: JSON.stringify({...decision, expectedVersion: approved.lockVersion}), status: 409});
+  assert.equal(refusal.code, 'ONB_READINESS_DEPENDENCY_422');
   const file = await profile(fixture, 'review');
   const parent = await createDraft(fixture, file, 'OPEN', 'create-parent');
   assert.equal((await version(fixture, parent)).state, 'DRAFT');
   return {legacy, legacyReview, parent, file};
 }
 
-export async function writeV43(fixture, {parent, file}) {
+export async function writeCandidate(fixture, {legacyReview, parent, file}) {
+  const blocked = await openCard(fixture, legacyReview);
+  const before = blocked.card.progress.activationProgress;
+  assert.equal(before.readiness_phase, 'BLOCKED');
+  assert.equal(before.humanRecheckAllowed, true);
+  assert.equal(before.cumulativeAttempts, 1);
+  const resumed = await json(ths + 'api/' + legacyReview.challengeId + '/resume', {method: 'POST', headers: blocked.headers,
+    body: JSON.stringify({configurationHash: legacyReview.configurationHash, expectedVersion: blocked.card.lockVersion,
+      expectedGeneration: before.readiness_generation, blockedCode: before.readiness_last_code})});
+  const readiness = resumed.activationProgress;
+  assert.equal(resumed.state, 'APPROVED');
+  assert.equal(readiness.readiness_phase, 'PAUSED');
+  assert.equal(readiness.readiness_generation, before.readiness_generation + 1);
+  assert.equal(readiness.cumulativeAttempts, before.cumulativeAttempts);
+  assert.equal(readiness.budgetExpiresAt, before.budgetExpiresAt);
   const review = await prepare(fixture, parent, 'prepare-parent');
   const {card, headers} = await openCard(fixture, review);
   assert.deepEqual(card.reviewSnapshot.columnOrder, ['name', 'unused']);
@@ -156,25 +180,29 @@ export async function writeV43(fixture, {parent, file}) {
   assert.equal(row.state, 'DRAFT');
   assert.equal(row.version, 2);
   assert.equal(row.parent_version_id, parent.onboardingVersionId);
-  return {review, child};
+  return {review, child, readiness};
 }
 
-export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child}) {
+export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child, readiness}) {
   const original = await version(fixture, legacy);
   assert.equal(original.configuration_hash, legacyReview.configurationHash);
-  assert.equal(original.state, 'IN_REVIEW');
+  assert.equal(original.state, 'APPROVED');
+  const resumed = (await openCard(fixture, legacyReview)).card.progress.activationProgress;
+  for (const key of ['readiness_phase', 'readiness_generation', 'readiness_last_code', 'cumulativeAttempts', 'budgetExpiresAt'])
+    assert.equal(resumed[key], readiness[key], 'predecessor reads retained readiness ' + key);
   const rejected = await version(fixture, parent);
   assert.equal(rejected.state, 'REJECTED');
   assert.equal(rejected.configuration_hash, review.configurationHash);
   const {card} = await openCard(fixture, review);
-  assert.equal(card.onboardingState, 'REJECTED');
-  assert.equal(card.progress.state, 'REJECTED');
+  // The predecessor in production (b3f33586, V43) projects a rejection with review notes as CHANGES_REQUESTED,
+  // both in the progress and in the card state derived from it (the version row stays REJECTED, checked above).
+  assert.equal(card.onboardingState, 'CHANGES_REQUESTED');
+  assert.equal(card.progress.state, 'CHANGES_REQUESTED');
   assert.equal(card.progress.challengeStatus, 'CANCELLED');
   const row = await version(fixture, child);
-  // The V42 read API does not project parent_version_id; the link is verified in the database by the caller.
-  assert.ok(row.parent_version_id === undefined || row.parent_version_id === parent.onboardingVersionId);
+  assert.equal(row.parent_version_id, parent.onboardingVersionId);
   assert.equal(row.state, 'DRAFT');
-  // Reconcile a V43 command with V42, then exercise a new V42 write and its identical retry.
+  // Reconcile a candidate command, then exercise a new predecessor write and its identical retry.
   assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'), child);
   const prepared = await prepare(fixture, child, 'return-review');
   assert.equal(prepared.state, 'IN_REVIEW');

@@ -223,16 +223,34 @@
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
   const missingFileSnapshot = card => !card.reviewSnapshot && (card.configuration?.extractionProfile?.selection?.assetId || card.configuration?.semanticMapping?.sourceType?.typeCode === 'FILE');
   const approvalBlocked = card => !semantic && (missingFileSnapshot(card) || card.termVerification !== 'COMPLETE');
-  const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : item.card.onboardingState === 'APPROVED' && !item.card.progress?.activationProgress?.budgetExhausted && item.card.progress?.activationProgress?.counterLineageVerified !== false && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
-  const canBudget = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED' && item.card.progress?.activationProgress?.humanBudgetGrantAvailable === true && (item.reason?.value.trim().length || 0) >= 10;
-  const canResume = item => !semantic && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED'
-    && item.card.progress?.activationProgress?.readiness_phase === 'BLOCKED'
-    && ['ONB_READINESS_DEPENDENCY_403','ONB_UDP_IDENTITY_PREFLIGHT_REQUIRED'].includes(item.card.progress.activationProgress.readiness_last_code)
-    && (typeof item.card.progress.activationProgress.budgetExhausted === 'boolean'
-      ? !item.card.progress.activationProgress.budgetExhausted && item.card.progress.activationProgress.counterLineageVerified !== false
-      : item.card.progress.activationProgress.readiness_attempts < 128 && Date.parse(item.card.progress.activationProgress.readiness_started_at) + 86400000 > Date.now() + 50000)
-    && !(Date.parse(item.card.progress.activationProgress.readiness_lease_until) > Date.now())
-    && !(Date.parse(item.card.progress.activationProgress.readiness_next_at) > Date.now());
+  const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : !item.needsRefresh && item.card.status === 'CONFIRMED' && item.card.onboardingState === 'APPROVED' && !item.card.progress?.activationProgress?.budgetExhausted && item.card.progress?.activationProgress?.counterLineageVerified !== false && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
+  const canBudget = item => !semantic && !item.needsRefresh && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED' && item.card.progress?.activationProgress?.humanBudgetGrantAvailable === true && (item.reason?.value.trim().length || 0) >= 10;
+  const canResume = item => !semantic && !item.needsRefresh && item.card.progress?.activationProgress?.humanRecheckAllowed === true;
+  function blockedReadiness(card, progress) {
+    const guidance = document.createElement('section'); guidance.className = 'warnings';
+    const code = progress.readiness_last_code;
+    const http = /^ONB_READINESS_DEPENDENCY_([0-9]{3})$/.exec(code)?.[1];
+    let failure = 'L’ultima verifica per l’attivazione si è bloccata.';
+    if (http) failure = card.progress.ingestionCompatibilityObserved === false
+      ? `La verifica di compatibilità con Ingestion ha ricevuto un rifiuto (HTTP ${http}).`
+      : `Una dipendenza ha rifiutato la verifica di compatibilità con Ingestion o il controllo di identità con UDP (HTTP ${http}).`;
+    if (code === 'ONB_READINESS_COMPATIBILITY_UNPROVEN') failure = 'La verifica di compatibilità con Ingestion non ha dato una conferma valida.';
+    if (['ONB_READINESS_IDENTITY_UNPROVEN', 'ONB_UDP_IDENTITY_PREFLIGHT_REQUIRED', 'ONB_UDP_IDENTITY_EVIDENCE_UNPROVEN'].includes(code))
+      failure = 'Il controllo di identità con UDP non ha dato una conferma valida.';
+    element('h3', 'Verifica di attivazione bloccata', guidance);
+    element('p', failure, guidance);
+    if (progress.humanRecheckAllowed === true) {
+      const remaining = progress.maximumAttempts - progress.sessionAttempts;
+      const deadline = new Date(progress.budgetExpiresAt).toLocaleString('it-IT', {timeZoneName:'short'});
+      element('p', `“Riprendi” registra la richiesta di un nuovo controllo completo. Il budget attuale conserva ${remaining} ${remaining === 1 ? 'tentativo' : 'tentativi'} fino al ${deadline}.`, guidance);
+      element('p', 'Dopo la ripresa scegli “Verifica e attiva”. OUF verifica la compatibilità con Ingestion e l’identità con UDP. Se tutti i controlli passano, la configurazione viene attivata e può partire l’acquisizione.', guidance);
+    } else {
+      element('p', progress.humanBudgetGrantAvailable === true
+        ? 'Il ricontrollo richiede un nuovo budget. In alternativa, torna nella chat e chiedi all’agente di preparare una nuova versione della fonte.'
+        : 'Il ricontrollo di questa versione non è disponibile. Torna nella chat e chiedi all’agente di preparare una nuova versione della fonte.', guidance);
+    }
+    return guidance;
+  }
   function controls() {
     const items = selected(); $('actions').disabled = busy || items.length === 0;
     const flagged = items.some(item => item.flags.some(flag => flag.box.checked));
@@ -341,7 +359,10 @@
       if (Array.isArray(configuration.semanticReferenceBindings))
         configuration.semanticReferenceBindings = configuration.semanticReferenceBindings.map(pinnedReference);
       detail('Configurazione da approvare', configuration, article);
-      if(card.progress?.activationProgress) detail('Avanzamento delle verifiche e tentativi disponibili', card.progress.activationProgress, article);
+      const activation = card.progress?.activationProgress;
+      if (activation?.readiness_phase === 'BLOCKED' && card.onboardingState === 'APPROVED')
+        article.querySelector('h2').after(blockedReadiness(card, activation));
+      if (activation) detail('Avanzamento delle verifiche e tentativi disponibili', activation, article);
       if(card.progress?.activationProgress?.budgetExhausted && card.onboardingState === 'APPROVED') {
         element('p', 'Il tempo o i tentativi disponibili per le verifiche sono terminati. La configurazione resta approvata.', article);
         if(card.progress.activationProgress.humanBudgetGrantAvailable === true) {
@@ -357,9 +378,9 @@
           if (card.progress.activationProgress.reconciledBudgetReason === 'ONB_READINESS_DEPENDENCY_403')
             reason.value = 'Verificare di nuovo le autorizzazioni correnti della dipendenza.';
           reason.oninput = controls; label.append(reason); article.append(label);
-        } else element('p', 'Occorre riconciliare lo stato prima di concedere altri tentativi.', article);
+        } else if (activation.readiness_phase !== 'BLOCKED') element('p', 'Occorre riconciliare lo stato prima di concedere altri tentativi.', article);
       }
-      if (card.onboardingState === 'APPROVED' && !card.progress?.ingestionCompatibilityObserved) element('p', 'Approvazione registrata. “Verifica e attiva” controlla la configurazione con Ingestion e confronta l’identità con gli oggetti esistenti prima di attivare.', article);
+      if (canComplete({card}) && !card.progress?.ingestionCompatibilityObserved) element('p', 'Approvazione registrata. “Verifica e attiva” controlla la configurazione con Ingestion e confronta l’identità con gli oggetti esistenti prima di attivare.', article);
     }
     detail('Riferimenti della revisione', { challenge: id, version: card.onboarding_version_id || card.revision_id, hash: card.configuration_hash || card.target_content_hash, expiresAt: card.expires_at }, article);
     const label = document.createElement('label'), checkbox = document.createElement('input'); checkbox.type = 'checkbox';
@@ -416,11 +437,14 @@
             maximumAttempts: 3, maximumElapsedSeconds: 900 };
         }
         if (operation === 'resume') Object.assign(body, { expectedGeneration: card.progress.activationProgress.readiness_generation, blockedCode: card.progress.activationProgress.readiness_last_code });
+        const readinessAction = !semantic && ['activate','resume','budget'].includes(operation);
+        if (readinessAction) item.needsRefresh = true;
         const response = await ThsSession.fetch(`api/${encodeURIComponent(id)}/${operation}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', [item.csrfHeader]: item.csrfToken }, body: JSON.stringify(body) });
         if (!response.ok) {
           const failure = await response.json().catch(() => null);
           const code = failure?.code || failure?.detail;
           const reason = typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,159}$/.test(code) ? ' · ' + code : '';
+          if (readinessAction) await load(id).catch(() => {});
           throw new Error(`Operazione non completata (HTTP ${response.status}${reason}).`);
         }
         await load(id); completed++;
