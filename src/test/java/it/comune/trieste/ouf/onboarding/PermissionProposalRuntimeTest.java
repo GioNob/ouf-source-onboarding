@@ -116,6 +116,18 @@ class PermissionProposalRuntimeTest {
   assertThat(nextLogin.getRedirectedUrl()).isEqualTo("/trusted-human/onboarding/");
   verify(decoder,never()).decode("fixture-expired");
  }
+  @Test void onb55d03RenewalLoginReturnsToLinkAndExpiredWritesAreNeverRedirected()throws Exception{
+    String page = "/trusted-human/analysis-renewal/Primo_link_rinnovo-001";
+    var result = http.perform(get(page).accept(MediaType.TEXT_HTML))
+        .andExpect(status().is3xxRedirection()).andReturn();
+    var afterLogin = new org.springframework.mock.web.MockHttpServletResponse();
+    thsLoginSuccess.onAuthenticationSuccess(result.getRequest(), afterLogin, null);
+    assertThat(afterLogin.getRedirectedUrl()).isEqualTo(page);
+    http.perform(get(page).accept(MediaType.APPLICATION_JSON))
+        .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("THS_SESSION_EXPIRED"));
+    http.perform(post(page + "/decision").header("X-CSRF-TOKEN", "stale").accept(MediaType.APPLICATION_JSON))
+        .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("THS_SESSION_EXPIRED"));
+  }
  @Test void expiredSessionOnApiReadOrWriteIsJsonEvenWithStaleCsrf()throws Exception{
   expiredClient();
   when(refreshClient.getTokenResponse(any())).thenThrow(new OAuth2AuthorizationException(new OAuth2Error("invalid_grant")));
