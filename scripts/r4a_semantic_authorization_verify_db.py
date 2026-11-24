@@ -43,17 +43,21 @@ def verify(old, active, state):
     before_grants = indexed(old['grants'], 'grantId')
     after_grants = indexed(active['grants'], 'grantId')
     caps, grants = EXPECTED_CAPS, EXPECTED_GRANTS
+    batch = 'ouf.semantic.search.batch'
     if 'catalogueHash' not in state:
-        # State files from the original seven-capability bootstrap predate discovery.
-        caps = [row for row in caps if row['descriptor']['requiredScope'] != 'ouf.semantic.discovery']
+        # The original seven-capability bootstrap predates discovery and batch search.
+        caps = [row for row in caps if row['descriptor']['requiredScope'] != 'ouf.semantic.discovery'
+                and row['descriptor']['capabilityId'] != batch]
         legacy_ids = {row['descriptor']['capabilityId'] for row in caps}
         grants = [row for row in grants if row['capabilityId'] in legacy_ids]
     elif state['catalogueHash'] != lifecycle.digest([caps, grants]):
-        # The ten-entry release recorded its manifest hash before adoption was added.
-        adopt = 'ouf.semantic.discovery.adopt'
-        caps = [row for row in caps if row['descriptor']['capabilityId'] != adopt]
-        grants = [row for row in grants if row['capabilityId'] != adopt]
-        if state['catalogueHash'] != lifecycle.digest([caps, grants]):
+        # Try the eleven-entry manifest first, then the ten-entry manifest from before adoption.
+        for excluded in ({batch}, {batch, 'ouf.semantic.discovery.adopt'}):
+            caps = [row for row in EXPECTED_CAPS if row['descriptor']['capabilityId'] not in excluded]
+            grants = [row for row in EXPECTED_GRANTS if row['capabilityId'] not in excluded]
+            if state['catalogueHash'] == lifecycle.digest([caps, grants]):
+                break
+        else:
             raise ValueError('STATE_MANIFEST_MISMATCH')
     expected_caps = {row['descriptor']['capabilityId']: row['descriptor'] for row in caps}
     expected_grants = {row['grantId']: row['capabilityId'] for row in grants}

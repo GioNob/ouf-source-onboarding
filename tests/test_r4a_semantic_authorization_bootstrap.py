@@ -10,10 +10,14 @@ import r4a_semantic_authorization_verify_db as verifier
 import r4a_semantic_human_scopes as human_scopes
 
 
+# Fingerprint of the eleven-entry manifest shipped with 52d.
+CATALOGUE_HASH_52D = 'e6aa14b72a22b18966cb57af4f6da75279feb8069e1efbccba1cf48af2a57083'
+
+
 class SemanticBootstrapTest(unittest.TestCase):
-    def test_plan_accepts_eleven_matching_descriptors_and_grants(self):
-        self.assertEqual(len(verifier.EXPECTED_CAPS), 11)
-        self.assertEqual(len(verifier.EXPECTED_GRANTS), 11)
+    def test_plan_accepts_twelve_matching_descriptors_and_grants(self):
+        self.assertEqual(len(verifier.EXPECTED_CAPS), 12)
+        self.assertEqual(len(verifier.EXPECTED_GRANTS), 12)
         with patch.object(sys, 'argv', ['bootstrap', 'plan']), \
                 patch.object(bootstrap, 'actor_token', return_value='fixture'), \
                 patch.object(bootstrap.policy, 'active', return_value={'policyRef': 'fixture:1', 'policy': {}}), \
@@ -23,6 +27,15 @@ class SemanticBootstrapTest(unittest.TestCase):
             bootstrap.main()
         catalogue.assert_called_once_with('fixture', verifier.EXPECTED_CAPS, False)
         desired.assert_called_once_with({}, verifier.EXPECTED_GRANTS)
+
+    def test_batch_search_reuses_the_search_scope_and_has_a_matching_admin_grant(self):
+        batch = 'ouf.semantic.search.batch'
+        search, = (row for row in verifier.EXPECTED_CAPS
+                   if row['descriptor']['capabilityId'] == 'ouf.semantic.search')
+        self.assertEqual(verifier.EXPECTED_CAPS[-1],
+                         {**search, 'descriptor': {**search['descriptor'], 'capabilityId': batch}})
+        self.assertEqual(verifier.EXPECTED_GRANTS[-1],
+                         {'grantId': 'grant-semantic-search-batch-human-admin', 'capabilityId': batch})
 
     def test_discovery_descriptors_and_grants_match_the_mcp_contract(self):
         discovery = 'ouf.semantic.discovery'
@@ -41,7 +54,7 @@ class SemanticBootstrapTest(unittest.TestCase):
         self.assertCountEqual(human_scopes.SCOPES,
                               {row['descriptor']['requiredScope'] for row in verifier.EXPECTED_CAPS})
 
-    def test_structural_verifier_accepts_owner_null_normalization(self):
+    def current_bootstrap_fixture(self):
         admin = {
             'grantId': 'admin', 'capabilityId': 'authorization.policy.admin',
             'tenantId': 'ouf-lab', 'subjectId': bootstrap.ADMIN_SUBJECT,
@@ -63,12 +76,29 @@ class SemanticBootstrapTest(unittest.TestCase):
                  'baselineGrantsHash': bootstrap.policy.digest(old['grants']),
                  'addedCapabilityIds': [x['descriptor']['capabilityId'] for x in verifier.EXPECTED_CAPS],
                  'addedGrantIds': [x['grantId'] for x in verifier.EXPECTED_GRANTS]}
-        self.assertEqual(verifier.verify(old, active, state), (1, 12, 1, 12))
+        return old, active, state
 
-        legacy = {**active,
-                  'capabilities': [row for row in active['capabilities']
+    def test_structural_verifier_rejects_eleven_entry_hash_for_twelve_entry_state(self):
+        old, active, state = self.current_bootstrap_fixture()
+        with self.assertRaisesRegex(ValueError, '^STATE_MANIFEST_MISMATCH$'):
+            verifier.verify(old, active, {**state, 'catalogueHash': CATALOGUE_HASH_52D})
+
+    def test_structural_verifier_accepts_owner_null_normalization(self):
+        old, active, state = self.current_bootstrap_fixture()
+        self.assertEqual(verifier.verify(old, active, state), (1, 13, 1, 13))
+
+        eleven = {**active, 'capabilities': active['capabilities'][:-1], 'grants': active['grants'][:-1]}
+        batch_delta = {**state, 'basePolicyRef': state['targetPolicyRef'], 'targetPolicyRef': 'ouf-lab-authorization:29',
+                       'baselineCapabilitiesHash': bootstrap.policy.digest(eleven['capabilities']),
+                       'baselineGrantsHash': bootstrap.policy.digest(eleven['grants']),
+                       'addedCapabilityIds': ['ouf.semantic.search.batch'],
+                       'addedGrantIds': ['grant-semantic-search-batch-human-admin']}
+        self.assertEqual(verifier.verify(eleven, {**active, 'version': 29}, batch_delta), (12, 13, 12, 13))
+
+        legacy = {**eleven,
+                  'capabilities': [row for row in eleven['capabilities']
                                    if row['requiredScope'] != 'ouf.semantic.discovery'],
-                  'grants': [row for row in active['grants']
+                  'grants': [row for row in eleven['grants']
                              if not row['capabilityId'].startswith('ouf.semantic.discovery')]}
         original_state = {key: value for key, value in state.items() if key != 'catalogueHash'}
         original_state.update(addedCapabilityIds=[row['capabilityId'] for row in legacy['capabilities'][1:]],
@@ -84,16 +114,16 @@ class SemanticBootstrapTest(unittest.TestCase):
                      'addedGrantIds': [row['grantId'] for row in ten_grants]}
         self.assertEqual(verifier.verify(old, ten, ten_state), (1, 11, 1, 11))
 
-        upgraded = {**active, 'version': 29}
+        upgraded = {**eleven, 'version': 29}
         upgrade = {
-            'catalogueHash': state['catalogueHash'],
+            'catalogueHash': CATALOGUE_HASH_52D,
             'basePolicyRef': state['targetPolicyRef'],
             'targetPolicyRef': active['bundleId'] + ':29',
             'baselineCapabilitiesHash': bootstrap.policy.digest(legacy['capabilities']),
             'baselineGrantsHash': bootstrap.policy.digest(legacy['grants']),
-            'addedCapabilityIds': [row['capabilityId'] for row in active['capabilities']
+            'addedCapabilityIds': [row['capabilityId'] for row in eleven['capabilities']
                                    if row['requiredScope'] == 'ouf.semantic.discovery'],
-            'addedGrantIds': [row['grantId'] for row in active['grants']
+            'addedGrantIds': [row['grantId'] for row in eleven['grants']
                               if row['capabilityId'].startswith('ouf.semantic.discovery')],
         }
         self.assertEqual(verifier.verify(legacy, upgraded, upgrade), (8, 12, 8, 12))

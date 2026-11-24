@@ -119,5 +119,16 @@
         "HUMAN"
       ]
     }
+  },
+  {
+    "ownerRef": "semantic",
+    "descriptor": {
+      "capabilityId": "ouf.semantic.search.batch",
+      "operation": "READ",
+      "requiredScope": "ouf.semantic.search",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
   }
 ]
