@@ -45,7 +45,7 @@ class ManagedFileDelegatedUploadApiTest {
     var api=new ManagedFileDelegatedUploadApi(verifier,files,storage);
     var response=api.upload(request);
     assertThat(response.getStatusCode().value()).isEqualTo(201);
-    assertThat(response.getBody()).containsOnlyKeys("assetId","status");
+    assertThat(response.getBody()).containsOnlyKeys("assetId","status","workflowState","reasonCode","allowedActions");
     assertThat(response.getBody().get("assetId")).isEqualTo(asset);
   }
 

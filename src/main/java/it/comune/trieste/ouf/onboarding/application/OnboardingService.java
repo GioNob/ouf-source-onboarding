@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.domain.*;
 import java.time.*;
 import java.util.*;
+import java.util.function.BiConsumer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -13,7 +15,14 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class OnboardingService {
   private final JdbcClient db; private final ObjectMapper json; private final CanonicalHash hashes; private final ConfigurationValidator validator; private final PublishedBundleCompiler bundles;private final RuntimeProjectionService projections;private final SchemaSurveillanceService surveillance;private final UdpIdentityActivationVerifier identityVerifier; private final Duration challengeTtl;
-  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,PublishedBundleCompiler bundles,RuntimeProjectionService projections,SchemaSurveillanceService surveillance,UdpIdentityActivationVerifier identityVerifier,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl){this.db=db;this.json=json;this.hashes=hashes;this.validator=validator;this.bundles=bundles;this.projections=projections;this.surveillance=surveillance;this.identityVerifier=identityVerifier;this.challengeTtl=challengeTtl;}
+  private final DatatypeResolver datatypeResolver;
+  private final ObjectProvider<ManagedFileService> managedFiles;
+  public OnboardingService(JdbcClient db,ObjectMapper json,CanonicalHash hashes,ConfigurationValidator validator,PublishedBundleCompiler bundles,RuntimeProjectionService projections,SchemaSurveillanceService surveillance,UdpIdentityActivationVerifier identityVerifier,@Value("${ouf.onboarding.approval-challenge-ttl:PT10M}") Duration challengeTtl,
+      DatatypeResolver datatypeResolver,ObjectProvider<ManagedFileService> managedFiles){
+    this.datatypeResolver=datatypeResolver;this.managedFiles=managedFiles;this.db=db;this.json=json;this.hashes=hashes;
+    this.validator=validator;this.bundles=bundles;this.projections=projections;this.surveillance=surveillance;
+    this.identityVerifier=identityVerifier;this.challengeTtl=challengeTtl;
+  }
 
   @Transactional public Map<String,Object> createSource(String id,String name,String kind,String mode,String owner,Map<String,Object> metadata,Actor actor,String correlation){
     if("INTERNAL_MANAGED".equals(kind)&&!"MANAGED".equals(mode))throw bad("ONB_SOURCE_MODE_INVALID","INTERNAL_MANAGED requires MANAGED acquisition");
@@ -55,7 +64,35 @@ public class OnboardingService {
   }
 
   @Transactional public Map<String,Object> submit(String sourceId,UUID id,long expected,Actor actor,String correlation){
-    Map<String,Object> current=version(sourceId,id);Map<String,Object> validation=validate(sourceId,id,actor,correlation);if(!"PASS".equals(validation.get("result")))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALIDATION_FAILED","Configuration contains blocking validation errors");String hash=hashes.of(current.get("configuration"));
+    Map<String,Object> current=version(sourceId,id);
+    @SuppressWarnings("unchecked") var draft=(Map<String,Object>)current.get("configuration");
+    var semantic=ManagedReviewSnapshot.child(draft,"semanticMapping");
+    var extraction=ManagedReviewSnapshot.child(draft,"extractionProfile");
+    Object prior=draft.get("semanticReferenceBindings");
+    if(PublishedDatatypes.requiresPreparation(semantic,extraction,prior)){
+      if(!"DRAFT".equals(current.get("state"))||((Number)current.get("lock_version")).longValue()!=expected)throw precondition();
+      var profiles=managedFiles.getObject().projectedTypes(sourceId,extraction);
+      PublishedDatatypes.prepare(draft,profiles,datatypeResolver,hashes);
+      if(!Objects.equals(prior,draft.get("semanticReferenceBindings"))){
+        current=patchVersion(sourceId,id,expected,draft,actor,correlation);
+        expected=((Number)current.get("lock_version")).longValue();
+      }
+    }else if(ManagedReviewSnapshot.list(prior).stream().map(ManagedReviewSnapshot::object).anyMatch(PublishedDatatypes::hasPinnedEvidence)){
+      throw DatatypeResolver.unresolved();
+    }
+    return freezeVerifiedDraft(sourceId,id,expected,current,actor,correlation);
+  }
+
+  Map<String,Object> verifyValueMapDraft(String sourceId,Map<String,Object> draft,BiConsumer<String,String> observed){
+    var verified=new LinkedHashMap<>(draft);
+    var profiles=managedFiles.getObject().projectedTypes(sourceId,ManagedReviewSnapshot.child(draft,"extractionProfile"));
+    PublishedDatatypes.prepare(verified,profiles,datatypeResolver,hashes,observed);
+    return verified;
+  }
+
+  /** Caller has verified the bindings and persists the matching draft in the same transaction. */
+  Map<String,Object> freezeVerifiedDraft(String sourceId,UUID id,long expected,Map<String,Object> current,Actor actor,String correlation){
+    Map<String,Object> validation=validate(sourceId,id,actor,correlation);if(!"PASS".equals(validation.get("result")))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_VALIDATION_FAILED","Configuration contains blocking validation errors");String hash=hashes.of(current.get("configuration"));
     if(db.sql("""
         select exists(select 1 from ouf_onboarding.managed_candidate_recovery w
           join ouf_onboarding.managed_onboarding_review r on r.onboarding_version_id=w.candidate_id
@@ -98,10 +135,12 @@ public class OnboardingService {
     ConfigurationValidator.spatial(configuration).ifPresent(profile->{response.put("spatialDecision",profile);response.put("spatialDecisionFindings",validator.validate(sourceId,configuration).findings().stream().filter(f->f.path().startsWith("/extractionProfile/runtime/udp/spatial")).toList());});return response;
   }
 
+  static final String OPEN_REVIEW_CHALLENGE = "onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>%s and configuration_hash=:h";
+
   @Transactional public Map<String,Object> confirm(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){
     if(!"HUMAN_USER".equals(actor.type()))throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_HUMAN_APPROVAL_REQUIRED","Approval requires a HUMAN_USER identity");
     Map<String,Object> v=lockChallengeVersion(sourceId,versionId);
-    int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=clock_timestamp() where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED' and expires_at>clock_timestamp() and configuration_hash=:h")
+    int challenge=db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=clock_timestamp() where challenge_id=:c and "+OPEN_REVIEW_CHALLENGE.formatted("clock_timestamp()"))
       .param("c",challengeId).param("v",versionId).param("s",sourceId).param("h",v.get("configuration_hash")).update();
     if(challenge!=1)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");
     int changed=db.sql("update ouf_onboarding.onboarding_version set state='APPROVED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v and source_id=:s and state='IN_REVIEW'")
@@ -179,7 +218,16 @@ public class OnboardingService {
   public List<Map<String,Object>> bundleHistory(String sourceId){return db.sql("select publication_id,source_id,onboarding_version_id,bundle_version,checksum,effective_from,active,created_at from ouf_onboarding.published_configuration where source_id=:s order by bundle_version desc").param("s",sourceId).query().listOfRows();}
 
   public Map<String,Object> approvalCard(UUID challengeId){Map<String,Object> row=jsonRow(db.sql("select c.challenge_id,c.source_id,c.onboarding_version_id,c.configuration_hash,c.status,c.expires_at,c.created_at,v.version,v.configuration::text configuration,s.name source_name from ouf_onboarding.approval_challenge c join ouf_onboarding.onboarding_version v on v.onboarding_version_id=c.onboarding_version_id join ouf_onboarding.source s on s.source_id=c.source_id where c.challenge_id=:i").param("i",challengeId).query().listOfRows().stream().findFirst().orElseThrow(()->missing("approval challenge")),"configuration");Map<String,Object> out=new LinkedHashMap<>(row);out.put("trustedApprovalRef","ths://approval-challenges/"+challengeId);out.put("changedSections",changedSections((Map<String,Object>)row.get("configuration"),latestConfigurationBefore(String.valueOf(row.get("source_id")),((Number)row.get("version")).intValue())));
-    var configuration=(Map<String,Object>)row.get("configuration");ConfigurationValidator.spatial(configuration).ifPresent(profile->{out.put("spatialDecision",profile);out.put("spatialDecisionFindings",validator.validate(String.valueOf(row.get("source_id")),configuration).findings().stream().filter(f->f.path().startsWith("/extractionProfile/runtime/udp/spatial")).toList());});return out;}
+    var configuration=(Map<String,Object>)row.get("configuration");
+    if(configuration.get("semanticReferenceBindings") instanceof List<?> bindings){
+      var reviewBindings=ManagedReviewSnapshot.reviewBindings(bindings);
+      if(!bindings.equals(reviewBindings)){
+        var reviewConfiguration=new LinkedHashMap<>(configuration);
+        reviewConfiguration.put("semanticReferenceBindings",reviewBindings);
+        out.put("configuration",reviewConfiguration);
+      }
+    }
+    ConfigurationValidator.spatial(configuration).ifPresent(profile->{out.put("spatialDecision",profile);out.put("spatialDecisionFindings",validator.validate(String.valueOf(row.get("source_id")),configuration).findings().stream().filter(f->f.path().startsWith("/extractionProfile/runtime/udp/spatial")).toList());});return out;}
   @Transactional public Map<String,Object> reject(String sourceId,UUID versionId,UUID challengeId,Actor actor,String correlation,String authenticationContextRef){
     return closeWithoutApproval(sourceId,versionId,challengeId,actor,correlation,authenticationContextRef,null);
   }
@@ -189,9 +237,9 @@ public class OnboardingService {
     var version=lockChallengeVersion(sourceId,versionId);
     int closed=db.sql("""
         update ouf_onboarding.approval_challenge set status='CANCELLED'
-        where challenge_id=:c and onboarding_version_id=:v and source_id=:s and status='CREATED'
-          and expires_at>clock_timestamp() and configuration_hash=:h
-        """).param("c",challengeId).param("s",sourceId).param("v",versionId).param("h",version.get("configuration_hash")).update();
+        where challenge_id=:c and
+        """+OPEN_REVIEW_CHALLENGE.formatted("clock_timestamp()"))
+        .param("c",challengeId).param("s",sourceId).param("v",versionId).param("h",version.get("configuration_hash")).update();
     if(closed!=1||!"IN_REVIEW".equals(version.get("state")))throw new DomainFailure(HttpStatus.CONFLICT,
         "ONB_APPROVAL_CHALLENGE_STALE","Challenge expired, stale, or already consumed");
     db.sql("update ouf_onboarding.onboarding_version set state='REJECTED',lock_version=lock_version+1,updated_at=transaction_timestamp() where onboarding_version_id=:v")

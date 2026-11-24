@@ -115,7 +115,12 @@ public final class GeoPackageReader implements AutoCloseable {
     for(int i=0;i<n;i++){var child=wkb(b,depth+1,budget);String expected=switch(type){case 4->"Point";case 5->"LineString";case 6->"Polygon";default->null;};if(expected!=null&&!expected.equals(child.get("type")))throw invalid();items.add(type==7?child:child.get("coordinates"));}
     return Map.of("type",switch(type){case 4->"MultiPoint";case 5->"MultiLineString";case 6->"MultiPolygon";default->"GeometryCollection";},type==7?"geometries":"coordinates",items);
   }
-  private static List<Double> point(ByteBuffer b,int[] budget){if(--budget[0]<0)throw invalid();double x=b.getDouble(),y=b.getDouble();if(!Double.isFinite(x)||!Double.isFinite(y))throw invalid();return List.of(x,y);}
+  private static List<GeometryCoordinate> point(ByteBuffer b,int[] budget){
+    if(--budget[0]<0)throw invalid();
+    double x=b.getDouble(),y=b.getDouble();
+    if(!Double.isFinite(x)||!Double.isFinite(y))throw invalid();
+    return List.of(new GeometryCoordinate(x),new GeometryCoordinate(y));
+  }
   private static List<Object> points(ByteBuffer b,int[] budget){int n=count(b,budget);var points=new ArrayList<Object>();for(int i=0;i<n;i++)points.add(point(b,budget));return points;}
   private static int count(ByteBuffer b,int[] budget){int n=b.getInt();if(n<1||n>budget[0]||n>b.remaining())throw invalid();return n;}
   public void close(){try{if(db!=null)db.close();}catch(SQLException ignored){}finally{try{Files.deleteIfExists(file);}catch(java.io.IOException e){throw new IllegalStateException("GPKG_TEMP_CLEANUP_FAILED");}}}

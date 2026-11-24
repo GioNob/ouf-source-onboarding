@@ -8,6 +8,25 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /prepare:
+    servers: [{url: /api/internal/v1/onboarding/source-revision-mcp}]
+    post:
+      operationId: prepareSourceRevision
+      parameters:
+        - {name: X-OUF-Source-Revision-Receipt, in: header, required: true, schema: {type: string}}
+        - {name: If-Match, in: header, description: Required for asset replacement, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Arguments]
+              properties:
+                Arguments: {$ref: '#/components/schemas/RevisionArguments'}
+      responses:
+        '200': {description: Prepared revision or reconciled command}
+        default: {$ref: '#/components/responses/Problem'}
   /sources:
     get:
       operationId: listSources
@@ -134,6 +153,205 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ManagedFilePreview'
+        default:
+          $ref: '#/components/responses/Problem'
+  /managed-file-mcp/preview:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: previewManagedFileForMcp
+      summary: Read a retained profile, profile job, column page, or tenant-owned asset list
+      x-ouf-mcp-capability: ouf.managed-source.preview
+      description: |
+        Owner route for Gateway delegation of source.file.preview. Each request requires a fresh bound
+        preview receipt. Column pages and access to retained distinct values require proven tenant and
+        subject ownership. Historical subject-owned previews without tenant proof expose counts only.
+        Profile, job-profile and COLUMNS bodies are bounded after JSON escaping in UTF-8.
+        Configure ouf.onboarding.preview.max-response-bytes (8192–786432, default 786432).
+        A shared, dedicated owner key file (ouf.onboarding.preview.cursor-key-file, 32 bytes encoded
+        as 64 hexadecimal digits) keeps cursors verifiable across replicas and restarts. With the
+        key file unset, cursors are process-local.
+        Configure ouf.onboarding.preview.cursor-ttl (minimum PT1S, default PT15M).
+      parameters:
+        - {name: X-OUF-Managed-File-Receipt, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Arguments]
+              properties:
+                Arguments:
+                  oneOf:
+                    - type: object
+                      required: [assetId, profileId]
+                      additionalProperties: false
+                      properties:
+                        assetId: {type: string, format: uuid}
+                        profileId: {type: string, format: uuid}
+                    - type: object
+                      required: [assetId, jobId]
+                      additionalProperties: false
+                      properties:
+                        assetId: {type: string, format: uuid}
+                        jobId: {type: string, format: uuid}
+                    - type: object
+                      required: [view, assetId, profileId]
+                      additionalProperties: false
+                      properties:
+                        view: {const: COLUMNS}
+                        assetId: {type: string, format: uuid}
+                        profileId: {type: string, format: uuid}
+                        layer: {type: string, minLength: 1, description: Exact layer or table name for a layered profile.}
+                        offset: {type: integer, minimum: 0, default: 0}
+                        limit: {type: integer, minimum: 1, maximum: 128, default: 128}
+                        distinctValuesCursor:
+                          $ref: '#/components/schemas/DistinctValuesCursor'
+                          description: Continue the retained values of a single column. Send only view, assetId, profileId and this cursor.
+                      if: {required: [distinctValuesCursor]}
+                      then:
+                        not:
+                          anyOf: [{required: [offset]}, {required: [limit]}, {required: [layer]}]
+                    - type: object
+                      required: [view]
+                      additionalProperties: false
+                      properties:
+                        view: {const: ASSETS}
+                        limit: {type: integer, minimum: 1, maximum: 50, default: 20}
+                        afterAssetId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: |
+            An exact profile, job, column page or asset list. A COLUMNS page can return fewer than
+            limit columns. To continue through columns, use nextOffset while hasMore is true.
+            A request with distinctValuesCursor returns one column at its original offset, with
+            hasMore false and nextOffset null. Follow its distinctValuesCursor until
+            distinctValuesComplete is true. This sequence is independent of column-page traversal.
+            A successful profile job uses resultRef as the profileId for continuations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedMcpPreviewResponse'
+        '400':
+          description: Invalid request. An invalid, expired, altered or mismatched cursor returns ONB_DISTINCT_VALUES_CURSOR_INVALID.
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        '422':
+          description: Irreducible profile metadata exceeds the configured budget (ONB_PROFILE_PREVIEW_BUDGET_EXCEEDED).
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        default:
+          $ref: '#/components/responses/Problem'
+  /ths-links/ingestion-run-recovery:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: createIngestionRunRecoveryThsLink
+      summary: Present a link to the Ingestion run recovery card hosted by Onboarding
+      x-ouf-mcp-capability: ouf.onboarding.ths-links.ingestion-run-recovery
+      description: |
+        The Gateway delegates a HUMAN read with a managed-file owner receipt bound to this route and
+        the exact JSON body. Onboarding verifies tenant and subject ownership of the managed source.
+        The THS and Ingestion verify the run and its current version before any decision.
+      parameters:
+        - {name: X-OUF-Managed-File-Receipt, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceId, runId, expectedVersion]
+              additionalProperties: false
+              properties:
+                sourceId: {type: string, minLength: 1, maxLength: 160}
+                runId: {type: string, format: uuid, pattern: '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'}
+                expectedVersion: {type: integer, minimum: 0, maximum: 9007199254740991}
+      responses:
+        '200':
+          description: Link and its presentation expiry, independent of Ingestion's decisionDeadline.
+          headers:
+            Cache-Control: {schema: {const: no-store}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reviewUrl, expiresAt]
+                additionalProperties: false
+                properties:
+                  reviewUrl: {type: string, format: uri}
+                  expiresAt: {type: string, format: date-time}
+        '400':
+          description: Invalid body (ONB_THS_LINK_ARGUMENTS_INVALID).
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        '403':
+          description: Invalid receipt or unproven managed source owner scope.
+        '503':
+          description: Missing or invalid ouf.authorization.ths.public-origin (ONB_THS_LINK_ORIGIN_REQUIRED), or owner persistence unavailable.
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        default:
+          $ref: '#/components/responses/Problem'
+  /ths-links/semantic-review:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: createSemanticReviewThsLink
+      summary: Present a link to the semantic review page hosted by Onboarding
+      x-ouf-internal-capability: ouf.onboarding.ths-links.semantic-review
+      security: [{managedFileOwnerReceipt: []}]
+      description: |
+        This internal MCP-to-Gateway operation requires a managed-file owner receipt with a HUMAN
+        tenant and subject, bound to the route and exact JSON body. The link opens the semantic
+        workflow-review page. On opening it, the THS uses the HUMAN session to fetch the current
+        challenge from Semantic Registry, which checks challenge ownership and state. Link issuance
+        carries no decision authority.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challengeId]
+              additionalProperties: false
+              properties:
+                challengeId: {type: string, format: uuid, pattern: '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'}
+      responses:
+        '200':
+          description: Link on the configured THS origin and its UTC presentation expiry, independent of the challenge expiry.
+          headers:
+            Cache-Control: {schema: {const: no-store}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reviewUrl, expiresAt]
+                additionalProperties: false
+                properties:
+                  reviewUrl: {type: string, format: uri}
+                  expiresAt: {type: string, format: date-time}
+        '400':
+          description: Invalid body (ONB_THS_LINK_ARGUMENTS_INVALID).
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        '403':
+          description: Missing or invalid HUMAN delegation (ONB_MANAGED_FILE_RECEIPT_INVALID).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code]
+                properties:
+                  code: {const: ONB_MANAGED_FILE_RECEIPT_INVALID}
+        '503':
+          description: Missing or invalid ouf.authorization.ths.public-origin (ONB_THS_LINK_ORIGIN_REQUIRED).
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
         default:
           $ref: '#/components/responses/Problem'
   /managed-files/{assetId}/create-onboarding:
@@ -328,6 +546,11 @@ paths:
       responses: {'200': {description: Relationship mapping and runtime resolution policies}, default: {$ref: '#/components/responses/Problem'}}
 components:
   securitySchemes:
+    managedFileOwnerReceipt:
+      type: apiKey
+      in: header
+      name: X-OUF-Managed-File-Receipt
+      description: Short-lived signed HUMAN delegation from Gateway, bound to method, path, capability and body.
     bearerAuth:
       type: http
       scheme: bearer
@@ -469,6 +692,130 @@ components:
         identityProposal: {type: object, additionalProperties: true}
         proposalStatus: {const: PENDING_HUMAN_REVIEW}
       additionalProperties: true
+    DistinctValuesCursor:
+      type: string
+      description: |
+        Opaque, signed, and scoped to the tenant, subject, asset, profile, schema, column and position.
+        It expires after the configured cursor TTL from the first page and contains no source values. Restart or key rotation
+        can invalidate outstanding cursors. To obtain a new one, read the profile or column page again.
+      minLength: 1
+    ManagedMcpPreviewResponse:
+      type: object
+      required: [workflowState, reasonCode, allowedActions]
+      properties:
+        workflowState: {enum: [PROFILE_AVAILABLE, PROFILE_COLUMNS, ASSETS, QUEUED, RUNNING, RETRY_WAIT, SUCCEEDED, FAILED, CANCELLED]}
+        reasonCode: {enum: [PROFILE_READY, COLUMN_PAGE, ASSET_LIST, PROFILE_PENDING, PROFILE_FAILED, PROFILE_CANCELLED]}
+        allowedActions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {enum: [READ_AGAIN, READ_DISTINCT_VALUES, NONE]}
+          description: READ_DISTINCT_VALUES is present when a returned column has a continuation cursor.
+      oneOf:
+        - $ref: '#/components/schemas/ManagedMcpColumnPage'
+        - $ref: '#/components/schemas/ManagedMcpProfilePreview'
+        - type: object
+          required: [jobId, status]
+          properties:
+            jobId: {type: string, format: uuid}
+            status: {type: string}
+            resultRef: {type: [string, 'null'], format: uuid}
+            errorCode: {type: [string, 'null']}
+            diagnosticCategory: {type: string}
+            schemaHash: {type: string}
+            columns:
+              type: array
+              items: {$ref: '#/components/schemas/ManagedMcpPreviewColumn'}
+            columnCount: {type: integer, minimum: 1}
+            offset: {type: integer, minimum: 0}
+            hasMore: {type: boolean}
+            nextOffset: {type: [integer, 'null'], minimum: 0}
+        - type: object
+          required: [items, hasMore]
+          properties:
+            items: {type: array, items: {type: object}}
+            hasMore: {type: boolean}
+    ManagedMcpPreviewColumn:
+      type: object
+      required: [name, dataType, nullable, distinctCount]
+      properties:
+        name: {type: string}
+        dataType: {type: string}
+        nullable: {type: boolean}
+        distinctCount: {type: integer, minimum: 0}
+        distinctValues:
+          type: array
+          maxItems: 2000
+          items: {type: string, maxLength: 128}
+          description: Ordered retained values for this slice of the column. An initial profile slice may be empty while a cursor is available.
+        distinctValuesComplete:
+          type: boolean
+          description: True when there are no more values in the list. Present when distinctValues is exposed.
+        distinctValuesCursor:
+          $ref: '#/components/schemas/DistinctValuesCursor'
+          description: Present when distinctValuesComplete is false.
+    ManagedMcpColumnPage:
+      type: object
+      required: [view, assetId, profileId, profileVersion, format, schemaHash, columnCount, offset, columns, hasMore, nextOffset, limitsProfile]
+      properties:
+        view: {const: COLUMNS}
+        assetId: {type: string, format: uuid}
+        profileId: {type: string, format: uuid}
+        profileVersion: {type: integer}
+        format: {type: string}
+        schemaHash: {type: string}
+        limitsProfile: {type: string}
+        layer: {type: string}
+        columnCount: {type: integer, minimum: 1, maximum: 1024}
+        offset: {type: integer, minimum: 0}
+        columns:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items: {$ref: '#/components/schemas/ManagedMcpPreviewColumn'}
+        hasMore: {type: boolean}
+        nextOffset: {type: [integer, 'null'], minimum: 0}
+    ManagedMcpProfilePreview:
+      type: object
+      required: [assetId, profileId, profileVersion, format, schemaHash, columns, candidateKeys, redactedSample, recordModel, identityProposal, proposalStatus]
+      properties:
+        assetId: {type: string, format: uuid}
+        profileId: {type: string, format: uuid}
+        profileVersion: {type: integer}
+        format: {type: string}
+        schemaHash: {type: string}
+        columns:
+          type: array
+          items: {$ref: '#/components/schemas/ManagedMcpPreviewColumn'}
+        columnCount: {type: integer, minimum: 1}
+        offset: {type: integer, minimum: 0}
+        hasMore: {type: boolean}
+        nextOffset: {type: [integer, 'null'], minimum: 0}
+        candidateKeys: {type: array, items: {type: string}}
+        candidateKeysTruncated: {const: true}
+        redactedSample: {type: array, maxItems: 5, items: {type: object}}
+        redactedSampleTruncated: {const: true}
+        metadataTruncated:
+          const: true
+          description: |
+            Layer detail was reduced to stay within the profile budget. Read columns with view COLUMNS
+            and the layer name. The direct retained-profile API provides complete layer metadata.
+        metadata:
+          type: object
+          properties:
+            layers:
+              type: array
+              items:
+                type: object
+                properties:
+                  layer: {type: string}
+                  columnCount: {type: integer, minimum: 0}
+                  columns:
+                    type: array
+                    items: {$ref: '#/components/schemas/ManagedMcpPreviewColumn'}
+        recordModel: {const: ONE_ROW_ONE_SOURCE_OBJECT}
+        identityProposal: {type: object}
+        proposalStatus: {const: PENDING_HUMAN_REVIEW}
     CreateManagedFileOnboardingRequest:
       type: object
       required: [sourceId, name, owner, targetClassIri, semanticRefs]
@@ -492,10 +839,188 @@ components:
           type: array
           items: {type: string}
           uniqueItems: true
+        layer: {type: string}
+        compositions: {$ref: '#/components/schemas/Compositions'}
         fields:
           type: array
           items: {$ref: '#/components/schemas/FieldDecision'}
       additionalProperties: false
+    ValueReader:
+      type: string
+      enum: [IDENTITY, TEXT_NFC_TRIM_V1, INTEGER_V1, INTEGER_GROUP_DOT_V1, DECIMAL_DOT_V1, DECIMAL_COMMA_V1, DECIMAL_GROUP_DOT_COMMA_V1, DECIMAL_GROUP_COMMA_DOT_V1, BOOLEAN_IT_V1, DATE_ISO_V1, DATE_DMY_V1, DATE_DMY_DASH_V1, DATETIME_ISO_OFFSET_V1, DATETIME_LOCAL_ROME_V1, GEOJSON_V1, WKT_V1, VALUE_MAP_V1]
+    TransformParams:
+      type: object
+      additionalProperties: false
+      properties:
+        crs: {type: string, pattern: '^EPSG:[0-9]+$'}
+        valueMapRef: {type: string, minLength: 1}
+    ConstructorExpression:
+      type: object
+      required: [constructorId, inputs]
+      properties:
+        constructorId: {enum: [POINT_FROM_LAT_LON_V1, TEXT_JOIN_V1, LIST_SPLIT_V1]}
+        inputs:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            type: object
+            additionalProperties: false
+            required: [role, fieldName, reader]
+            properties:
+              role: {enum: [lat, lon, part, value]}
+              fieldName: {type: string, minLength: 1}
+              reader: {$ref: '#/components/schemas/ValueReader'}
+              transformParams: {$ref: '#/components/schemas/TransformParams'}
+        params:
+          type: object
+          additionalProperties: false
+          properties:
+            separator: {type: string, minLength: 1, maxLength: 8}
+            itemReader: {$ref: '#/components/schemas/ValueReader'}
+            itemReaderParams: {$ref: '#/components/schemas/TransformParams'}
+          allOf:
+            - if: {required: [itemReader], properties: {itemReader: {const: WKT_V1}}}
+              then:
+                required: [itemReaderParams]
+                properties: {itemReaderParams: {required: [crs], maxProperties: 1}}
+            - if: {required: [itemReader], properties: {itemReader: {const: VALUE_MAP_V1}}}
+              then:
+                required: [itemReaderParams]
+                properties: {itemReaderParams: {required: [valueMapRef], maxProperties: 1}}
+            - if: {properties: {itemReader: {not: {enum: [WKT_V1, VALUE_MAP_V1]}}}}
+              then: {properties: {itemReaderParams: {maxProperties: 0}}}
+      allOf:
+        - if: {properties: {constructorId: {const: LIST_SPLIT_V1}}}
+          then: {required: [params], properties: {params: {required: [separator, itemReader]}}}
+        - if: {properties: {constructorId: {const: TEXT_JOIN_V1}}}
+          then: {required: [params], properties: {params: {required: [separator], maxProperties: 1}}}
+        - if: {properties: {constructorId: {const: POINT_FROM_LAT_LON_V1}}}
+          then: {properties: {params: {maxProperties: 0}}}
+    StructuredExpression:
+      type: object
+      required: [typeRef, components]
+      properties:
+        typeRef: {type: string, description: DATATYPE semanticId@publicationSetId}
+        components:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            type: object
+            required: [component]
+            properties:
+              component: {type: string, pattern: '^[a-z][A-Za-z0-9]{0,63}$'}
+            oneOf:
+              - {$ref: '#/components/schemas/SingleComponentBuilder'}
+              - required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SingleComponentBuilder'
+                      properties:
+                        constructor: {properties: {constructorId: {not: {const: LIST_SPLIT_V1}}}}
+                      unevaluatedProperties: false
+            unevaluatedProperties: false
+    SingleComponentBuilder:
+      type: object
+      oneOf:
+        - required: [fieldName, reader]
+          properties:
+            fieldName: {type: string, minLength: 1}
+            reader: {$ref: '#/components/schemas/ValueReader'}
+            transformParams: {$ref: '#/components/schemas/TransformParams'}
+        - required: [constructor]
+          properties:
+            constructor:
+              $ref: '#/components/schemas/ConstructorExpression'
+              unevaluatedProperties: false
+        - required: [structured]
+          properties:
+            structured:
+              $ref: '#/components/schemas/StructuredExpression'
+              unevaluatedProperties: false
+    Compositions:
+      type: array
+      maxItems: 1024
+      items:
+        type: object
+        required: [kind, targetPropertyIri, dataAccessLabel]
+        properties:
+          targetPropertyIri: {type: string, format: iri}
+          dataAccessLabel: {enum: [OPEN, ANONYMOUS, PERSONAL, SENSITIVE, RESTRICTED]}
+        oneOf:
+          - $ref: '#/components/schemas/ConstructorExpression'
+            properties: {kind: {const: CONSTRUCTOR}}
+          - $ref: '#/components/schemas/StructuredExpression'
+            properties: {kind: {const: STRUCTURED}}
+        unevaluatedProperties: false
+    RevisionArguments:
+      type: object
+      additionalProperties: false
+      required: [sourceId, parentVersionId, expectedVersion, configurationHash, publicationEffect, commandKey]
+      anyOf: [{required: [assetRef]}, {required: [changes]}, {required: [compositions]}]
+      not: {required: [assetRef, changes]}
+      dependentRequired: {newColumns: [assetRef]}
+      properties:
+        sourceId: {type: string}
+        parentVersionId: {type: string, format: uuid}
+        expectedVersion: {type: integer, minimum: 0}
+        configurationHash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        commandKey: {type: string}
+        publicationEffect: {const: NEW_PUBLICATION_MAY_START_ACQUISITION}
+        compositions: {$ref: '#/components/schemas/Compositions'}
+        changes:
+          type: array
+          minItems: 1
+          maxItems: 256
+          items:
+            type: object
+            additionalProperties: false
+            required: [propertyIri, sourceField]
+            anyOf: [{required: [reconciliation]}, {required: [transform]}, {required: [transformParams]}]
+            properties:
+              propertyIri: {type: string, format: iri}
+              sourceField: {type: string}
+              reconciliation: {type: object}
+              transform: {$ref: '#/components/schemas/ValueReader'}
+              transformParams: {$ref: '#/components/schemas/TransformParams'}
+        assetRef:
+          type: object
+          additionalProperties: false
+          required: [assetId, profileId]
+          properties:
+            assetId: {type: string, format: uuid}
+            profileId: {type: string, format: uuid}
+        newColumns:
+          type: array
+          maxItems: 1024
+          items:
+            type: object
+            additionalProperties: false
+            required: [column, decision]
+            properties:
+              column: {type: string}
+              decision: {enum: [MAP, EXCLUDE]}
+              mapping:
+                type: object
+                additionalProperties: false
+                required: [propertyIri, transform, reconciliation]
+                properties:
+                  propertyIri: {type: string, format: iri}
+                  transform: {$ref: '#/components/schemas/ValueReader'}
+                  transformParams: {$ref: '#/components/schemas/TransformParams'}
+                  reconciliation: {type: object}
+                  accessLabel: {enum: [OPEN, ANONYMOUS, PERSONAL, SENSITIVE, RESTRICTED]}
+                  authorityOrder: {type: array, items: {type: string}}
+                  comparison:
+                    type: object
+                    required: [comparator, assertionRef]
+                    additionalProperties: false
+                    properties:
+                      comparator: {enum: [TEXT_V1, DECIMAL_V1, JSON_V1, CONCEPT]}
+                      assertionRef: {type: string}
     FieldDecision:
       type: object
       required: [fieldName, extractionDecision, dataAccessLabel]
@@ -504,7 +1029,9 @@ components:
         extractionDecision: {type: string, enum: [INCLUDE, EXCLUDE]}
         dataAccessLabel: {type: string, enum: [OPEN, ANONYMOUS, PERSONAL, SENSITIVE, RESTRICTED]}
         targetPropertyIri: {type: [string, 'null']}
-        transform: {type: [string, 'null']}
+        transform:
+          anyOf: [{$ref: '#/components/schemas/ValueReader'}, {type: 'null'}]
+        transformParams: {$ref: '#/components/schemas/TransformParams'}
         vocabularyId: {type: [string, 'null']}
         vocabularyVersion: {type: [string, 'null']}
         valueMapRef: {type: [string, 'null']}

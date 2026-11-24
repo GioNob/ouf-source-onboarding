@@ -3,11 +3,13 @@ package it.comune.trieste.ouf.onboarding.api;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,6 +28,10 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/trusted-human/{flow:onboarding|semantic}")
 @ConditionalOnProperty(name="ouf.workflow.ths.gateway-base-url")
 public class WorkflowThsApi {
+  private static final int OWNER_RESPONSE_CHARS=1_048_576;
+  private static final int VALUE_MAP_CARD_BYTES=8*1_048_576;
+  private static final String SEMANTIC_CHALLENGES="/api/trusted-human/v1/semantic-approval-challenges/";
+  private record OwnerResponse(int statusCode,String body) {}
   private final OAuth2AuthorizedClientService clients;
   private final ObjectMapper json;
   private final URI gateway;
@@ -42,7 +48,7 @@ public class WorkflowThsApi {
   }
   private URI owner(String flow,UUID id,String suffix){
     String path=switch(flow){case "onboarding"->"/api/trusted-human/v1/approval-challenges/"+id+"/review";
-      case "semantic"->"/api/trusted-human/v1/semantic-approval-challenges/"+id;
+      case "semantic"->SEMANTIC_CHALLENGES+id;
       default->throw new IllegalArgumentException("THS_WORKFLOW_INVALID");};
     return URI.create(gateway.toString().replaceAll("/+$","")+path+suffix);
   }
@@ -142,12 +148,42 @@ public class WorkflowThsApi {
     if("publish".equals(action))builder.header("Idempotency-Key","ths-semantic-publish:"+id);
     return upstream(send(builder,access));
   }
-  private HttpResponse<String> send(HttpRequest.Builder builder,String access)throws IOException,InterruptedException{
-    var response=http.send(builder.header("Authorization","Bearer "+access).header("Accept","application/json")
-        .timeout(Duration.ofSeconds(builder.build().uri().getPath().endsWith("/review/activate")?55:15)).build(),HttpResponse.BodyHandlers.ofString());
-    if(response.body().length()>1048576)throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_OWNER_RESPONSE_TOO_LARGE");return response;
+  private OwnerResponse send(HttpRequest.Builder builder,String access)throws IOException,InterruptedException{
+    var request=builder.header("Authorization","Bearer "+access).header("Accept","application/json")
+        .timeout(Duration.ofSeconds(builder.build().uri().getPath().endsWith("/review/activate")?55:15)).build();
+    boolean semanticCard="GET".equals(request.method()) && request.uri().getPath().startsWith(SEMANTIC_CHALLENGES);
+    // VALUE_MAP carries the definition, labelled entries and a diff. Keep the existing character
+    // bound for every other owner response, allowing its full UTF-8 encoding during receipt.
+    int maximumBytes=semanticCard?VALUE_MAP_CARD_BYTES:3*OWNER_RESPONSE_CHARS;
+    var received=new ByteArrayOutputStream();
+    HttpResponse<Void> response;
+    try{
+      response=http.send(request,info->HttpResponse.BodySubscribers.ofByteArrayConsumer(chunk->{
+        chunk.ifPresent(bytes->{
+          if(bytes.length>maximumBytes-received.size())throw responseTooLarge();
+          received.writeBytes(bytes);
+        });
+      }));
+    }catch(IOException failure){
+      if(failure.getCause() instanceof ResponseStatusException tooLarge)throw tooLarge;
+      throw failure;
+    }
+    String body=received.toString(StandardCharsets.UTF_8);
+    if(body.length()>OWNER_RESPONSE_CHARS && !(semanticCard && response.statusCode()==200 && isValueMapCard(body)))
+      throw responseTooLarge();
+    return new OwnerResponse(response.statusCode(),body);
+  }
+  private boolean isValueMapCard(String body){
+    try{return "VALUE_MAP".equals(json.readTree(body).path("artifact_type").textValue());}
+    catch(com.fasterxml.jackson.core.JsonProcessingException failure){return false;}
+  }
+  private static ResponseStatusException responseTooLarge(){
+    return new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_OWNER_RESPONSE_TOO_LARGE");
   }
   private String token(HttpServletRequest request){
+    return token(request,clients);
+  }
+  static String token(HttpServletRequest request,OAuth2AuthorizedClientService clients){
     if(!Boolean.TRUE.equals(request.getAttribute("ouf.permissionThsSession"))
         ||!(SecurityContextHolder.getContext().getAuthentication() instanceof OAuth2AuthenticationToken authentication))
       throw new ResponseStatusException(HttpStatus.FORBIDDEN,"THS_SESSION_REQUIRED");
@@ -155,12 +191,12 @@ public class WorkflowThsApi {
     if(client==null||!"ouf-ths".equals(client.getClientRegistration().getRegistrationId()))throw new ResponseStatusException(HttpStatus.FORBIDDEN,"THS_SESSION_REQUIRED");
     return client.getAccessToken().getTokenValue();
   }
-  private static ResponseEntity<String> upstream(HttpResponse<String> response){
+  private static ResponseEntity<String> upstream(OwnerResponse response){
     int status=response.statusCode();if(status<200||status>=500||status>=300&&status<400)
       throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_WORKFLOW_OWNER_UNAVAILABLE");
     return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).cacheControl(CacheControl.noStore()).body(response.body());
   }
-  private static ResponseEntity<byte[]> asset(String name,MediaType type)throws IOException{
+  static ResponseEntity<byte[]> asset(String name,MediaType type)throws IOException{
     return ResponseEntity.ok().contentType(type).cacheControl(CacheControl.noStore())
         .header("X-Content-Type-Options","nosniff").header("Referrer-Policy","no-referrer").header("X-Frame-Options","DENY")
         .header("Content-Security-Policy","default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")

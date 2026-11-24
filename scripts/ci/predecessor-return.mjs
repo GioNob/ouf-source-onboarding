@@ -22,7 +22,7 @@ function history(last) {
   const rows = JSON.parse(sql(`select json_agg(row_to_json(h) order by installed_rank)
     from ouf_onboarding.flyway_schema_history h where version is not null`));
   assert.ok(rows.every(r => r.success));
-  assert.equal(rows.at(-1).version, last);
+  if (last) assert.equal(rows.at(-1).version, last);
   return rows;
 }
 
@@ -52,7 +52,7 @@ async function ready(container, phase) {
   const flyway = /FlywayValidateException|Validate failed|Migration of schema .* failed|applied migration not resolved locally/i.test(logs);
   if (phase === 'predecessor return on candidate data' && process.env.GITHUB_STEP_SUMMARY) {
     const reason = flyway ? 'I log indicano un errore di migrazione o validazione Flyway.' : 'La readiness non ha raggiunto UP.';
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Domande aperte\n\nIl predecessore si è fermato su V43. ${reason} La qualificazione D-080 resta aperta.\n`);
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Domande aperte\n\nIl predecessore si è fermato su V45. ${reason} La qualificazione D-080 resta aperta.\n`);
   }
   throw new Error(phase + ': readiness failed' + (flyway ? ' during Flyway migration or validation' : '') +
     '. Return proof stopped with the packaged migration settings.');
@@ -97,7 +97,7 @@ try {
   assert.equal(sql("select to_regclass('ouf_onboarding.flyway_schema_history') is null"), 't');
   const old = run(previous);
   await ready(old, 'predecessor on empty database');
-  const originalHistory = history('43');
+  const baseline = history('43');
   // Seed only the isolated IAM policy; the runtime writes every onboarding row through HTTP.
   const bundle = policy(), payload = JSON.stringify(bundle);
   assert.ok(!payload.includes("'"));
@@ -113,8 +113,17 @@ try {
 
   const next = run(candidate);
   await ready(next, 'candidate on populated database');
-  assert.deepEqual(history('43'), originalHistory, 'candidate must retain the exact deployed migration history');
+  const candidateHistory = history('45');
+  assert.deepEqual(candidateHistory.slice(0, -2), baseline, 'candidate must retain the exact deployed migration history');
+  assert.deepEqual(candidateHistory.slice(-2).map(row => row.script),
+    ['V44__managed_profile_distinct_values.sql', 'V45__managed_value_map_preparation.sql']);
   const result = await writeCandidate(fixture, seed);
+  function distinctProfile(profileId) {
+    assert.match(profileId, /^[0-9a-f-]{36}$/);
+    return sql(`select coalesce(distinct_cell_values, 'NULL') from ouf_onboarding.file_profile where profile_id='${profileId}'`);
+  }
+  const valueEvidence = distinctProfile(result.typed.profileId);
+  assert.deepEqual(JSON.parse(valueEvidence), {'': {unused: ['1']}});
   function candidateEvidence() {
     return JSON.parse(sql(`select json_build_object('outcome', d.review_outcome, 'decision', d.decision,
       'feedback', d.review_feedback, 'snapshot', s.snapshot, 'version', s.onboarding_version_id, 'challenge', d.challenge_id)
@@ -134,15 +143,17 @@ try {
   docker('start', old);
   assert.equal(docker('inspect', '-f', '{{.Image}}', old), previous);
   await ready(old, 'predecessor return on candidate data');
-  await verifyReturn(fixture, seed, result);
+  const returnedProfile = await verifyReturn(fixture, seed, result);
+  assert.equal(distinctProfile(result.typed.profileId), valueEvidence);
+  assert.equal(distinctProfile(returnedProfile.profileId), 'NULL');
   assert.equal(sql(`select parent_version_id from ouf_onboarding.onboarding_version where onboarding_version_id='${result.child.onboardingVersionId}'`),
     seed.parent.onboardingVersionId, 'child draft keeps its parent link after the return');
-  assert.deepEqual(history('43'), originalHistory);
+  assert.deepEqual(history('45'), candidateHistory);
   assert.deepEqual(candidateEvidence(), evidence);
   assert.equal(sql("select count(*) from ouf_onboarding.onboarding_version where source_id='review'"), '2');
   assert.equal(sql("select count(*) from ouf_onboarding.managed_onboarding_review where source_id='review'"), '2');
   assert.equal(sql("select count(*) from ouf_onboarding.approval_challenge where source_id='review'"), '2');
-  console.log('D-080 PASS: predecessor served closed THS card, read both generations, wrote and deduplicated review');
+  console.log('D-080 PASS: predecessor read candidate profile, wrote and reconciled profile and review, and preserved V44/V45 migration history');
 } finally {
   fixture.close();
   for (const container of containers.reverse()) docker('rm', '-f', container);

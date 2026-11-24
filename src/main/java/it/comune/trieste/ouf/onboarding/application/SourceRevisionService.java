@@ -19,12 +19,21 @@ public class SourceRevisionService {
   private final JdbcClient db; private final OnboardingService onboarding;
   private final ManagedOnboardingReviewService reviews; private final ManagedFileService files;
   private final CanonicalHash hashes; private final AuthorizationPolicyRegistry policy;
-  public record Change(String propertyIri,String sourceField,Map<String,Object> reconciliation){}
+  public record Change(String propertyIri,String sourceField,Map<String,Object> reconciliation,
+      @JsonInclude(JsonInclude.Include.NON_NULL) String transform,
+      @JsonInclude(JsonInclude.Include.NON_NULL) Map<String,Object> transformParams){
+    public Change(String propertyIri,String sourceField,Map<String,Object> reconciliation){this(propertyIri,sourceField,reconciliation,null,null);}
+  }
   public record AssetRef(UUID assetId, UUID profileId) {}
   public record Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
       String commandKey,String publicationEffect,List<Change> changes,
       @JsonInclude(JsonInclude.Include.NON_NULL) AssetRef assetRef,
-      @JsonInclude(JsonInclude.Include.NON_NULL) List<ManagedCsvRevision.NewColumn> newColumns){
+      @JsonInclude(JsonInclude.Include.NON_NULL) List<ManagedCsvRevision.NewColumn> newColumns,
+      @JsonInclude(JsonInclude.Include.NON_NULL) List<Map<String,Object>> compositions){
+    public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
+        String commandKey,String publicationEffect,List<Change> changes,AssetRef assetRef,List<ManagedCsvRevision.NewColumn> newColumns){
+      this(sourceId,parentVersionId,expectedVersion,configurationHash,commandKey,publicationEffect,changes,assetRef,newColumns,null);
+    }
     // The absent extension must serialize exactly as before for historical command fingerprints.
     public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
         String commandKey,String publicationEffect,List<Change> changes){
@@ -68,7 +77,7 @@ public class SourceRevisionService {
     out.put("sourceId",source);out.put("onboardingVersionId",version);out.put("state",current.get("state"));
     out.put("lockVersion",current.get("lock_version"));out.put("configurationHash",current.get("configuration_hash"));
     out.put("propertyRules",properties(configuration(current)));
-    out.put("publicationEffects",effects());return out;
+    out.put("publicationEffects",effects());return ManagedMcpObservation.version(out, revisionEligible(db,current));
   }
   @Transactional(timeout=8) public Map<String,Object> prepare(PrincipalContext p,Prepare r,String correlation){
     if(r==null)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
@@ -76,7 +85,8 @@ public class SourceRevisionService {
     if(r.commandKey()==null||!r.commandKey().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
         ||r.expectedVersion()<0||r.expectedVersion()>9007199254740991L
         ||r.configurationHash()==null||!r.configurationHash().matches("sha256:[a-f0-9]{64}")
-        ||!EFFECT.equals(r.publicationEffect())||(r.changes()==null)==(r.assetRef()==null)
+        ||!EFFECT.equals(r.publicationEffect())||(r.changes()!=null && r.assetRef()!=null)
+        ||(r.changes()==null && r.assetRef()==null && r.compositions()==null)
         ||(r.changes()!=null&&(r.changes().isEmpty()||r.changes().size()>256))
         ||(r.newColumns()!=null&&(r.assetRef()==null||r.newColumns().size()>ManagedFileLimits.MAX_COLUMNS))
         ||(r.assetRef()!=null&&(r.assetRef().assetId()==null||r.assetRef().profileId()==null)))
@@ -93,26 +103,29 @@ public class SourceRevisionService {
     lock(r.sourceId());
     db.sql("select source_id from ouf_onboarding.source where source_id=:s for update").param("s",r.sourceId()).query(String.class).single();
     var parent=onboarding.version(r.sourceId(),r.parentVersionId());
-    boolean initialRejection="REJECTED".equals(parent.get("state"))&&r.assetRef()!=null
-        &&db.sql("""
-            select not exists(select 1 from ouf_onboarding.published_configuration where source_id=:s)
-              and not exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s
-                and (version>:n or state in ('ACTIVE','REVOKED')))
-            """).param("s",r.sourceId()).param("n",parent.get("version")).query(Boolean.class).single();
-    if((!"ACTIVE".equals(parent.get("state"))&&!initialRejection)||((Number)parent.get("lock_version")).longValue()!=r.expectedVersion()
+    if(!revisionParent(db,parent,r.assetRef()!=null)||((Number)parent.get("lock_version")).longValue()!=r.expectedVersion()
         ||!r.configurationHash().equals(parent.get("configuration_hash"))
         ||!r.configurationHash().equals(hashes.of(parent.get("configuration"))))
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVISION_PARENT_DRIFT");
-    if(db.sql("select count(*) from ouf_onboarding.onboarding_version where source_id=:s and state in ('DRAFT','IN_REVIEW','APPROVED')")
-        .param("s",r.sourceId()).query(Long.class).single()!=0)
+    if(revisionOpen(db,r.sourceId()))
       throw fail(HttpStatus.CONFLICT,"ONB_REVISION_OPEN_VERSION_EXISTS");
     var actor=new OnboardingService.Actor(p.subjectId(),"HUMAN_USER",Set.of(PREPARE));
     var draft=onboarding.cloneVersion(r.sourceId(),r.parentVersionId(),actor,correlation);
     UUID version=(UUID)draft.get("onboarding_version_id");
     var proposed=configuration(draft);
     int number=((Number)draft.get("version")).intValue();
-    if(r.assetRef()==null)proposed=revise(proposed,r.changes());
-    else replaceAsset(p,r,proposed,number);
+    if(r.changes()!=null)proposed=revise(proposed,r.changes(),r.compositions()==null);
+    if(r.assetRef()!=null)replaceAsset(p,r,proposed,number);
+    if(r.compositions()!=null){
+      boolean same=Objects.equals(object(proposed,"semanticMapping").getOrDefault("compositions",List.of()),r.compositions());
+      if(!same)reviseCompositions(proposed,r.compositions());
+      else if(r.assetRef()==null && proposed.equals(configuration(draft)))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_NO_CHANGE");
+    }
+    if(r.changes()!=null && r.changes().stream().anyMatch(c->c.transform()!=null||c.transformParams()!=null)){
+      var profiles=files.projectedTypes(r.sourceId(),object(proposed,"extractionProfile"));
+      for(var mapping:rows(object(proposed,"semanticMapping"),"propertyMappings"))
+        if(!ManagedCsvRevision.supports((String)mapping.get("transform"),profiles.get(mapping.get("sourceField"))))throw ValueReader.invalid();
+    }
     revisionMetadata(proposed,number);
     draft=onboarding.patchVersion(r.sourceId(),version,((Number)draft.get("lock_version")).longValue(),proposed,actor,correlation);
     var frozen=onboarding.submit(r.sourceId(),version,((Number)draft.get("lock_version")).longValue(),actor,correlation);
@@ -170,13 +183,33 @@ public class SourceRevisionService {
       db.sql("update ouf_onboarding.managed_file_asset set source_id=:s where asset_id=:a and source_id is null")
           .param("s",source).param("a",ref.assetId()).update();
   }
+  private static boolean revisionParent(JdbcClient db,Map<String,Object> parent,boolean replacementAsset) {
+    if ("ACTIVE".equals(parent.get("state"))) return true;
+    return replacementAsset && "REJECTED".equals(parent.get("state")) && db.sql("""
+        select not exists(select 1 from ouf_onboarding.published_configuration where source_id=:s)
+          and not exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s
+            and (version>:n or state in ('ACTIVE','REVOKED')))
+        """).param("s",parent.get("source_id")).param("n",parent.get("version")).query(Boolean.class).single();
+  }
+
+  private static boolean revisionOpen(JdbcClient db,Object source) {
+    return db.sql("select exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s and state in ('DRAFT','IN_REVIEW','APPROVED'))")
+        .param("s",source).query(Boolean.class).single();
+  }
+
+  static boolean revisionEligible(JdbcClient db,Map<String,Object> parent) {
+    return revisionParent(db,parent,true) && !revisionOpen(db,parent.get("source_id"));
+  }
+
   /** Lost-response reconciliation is keyed by the original command, never by an unknown new version ID. */
   @Transactional public Map<String,Object> readCommand(PrincipalContext p,String source,UUID parent,String key){
     authorize(p,READ,"READ",source,parent);
     if(key==null||!key.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
     var rows=db.sql("select * from ouf_onboarding.source_property_revision where tenant_id=:t and subject_id=:u and command_key=:k and source_id=:s and parent_version_id=:p")
         .param("t",p.tenantId()).param("u",p.subjectId()).param("k",key).param("s",source).param("p",parent).query().listOfRows();
-    if(rows.isEmpty())return Map.of("sourceId",source,"parentVersionId",parent,"commandKey",key,"commandState","ABSENT","newCommandAuthorized",false);
+    if(rows.isEmpty())return ManagedMcpObservation.with(
+        Map.of("sourceId",source,"parentVersionId",parent,"commandKey",key,"commandState","ABSENT","newCommandAuthorized",false),
+        ManagedMcpObservation.State.COMMAND_ABSENT,ManagedMcpObservation.Reason.REVISION_COMMAND_ABSENT);
     var row=rows.getFirst();return receipt(onboarding.version(source,(UUID)row.get("onboarding_version_id")),row);
   }
   private void lock(String value){db.sql("select 1 from (select pg_advisory_xact_lock(hashtextextended(:s,0))) locked").param("s",value).query(Integer.class).single();}
@@ -215,19 +248,74 @@ public class SourceRevisionService {
       throw fail(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_REVISION_PROFILE_REQUIRED");
     return (List<Map<String,Object>>)(List<?>)list;
   }
-  /** Deep copy: every field except the selected reconciliation objects remains byte-for-byte JSON equivalent. */
+  @SuppressWarnings("unchecked") private static List<Map<String,Object>> rows(Map<String,Object> parent,String key){
+    var items=ValueCompositions.list(parent.get(key),0,ManagedFileLimits.MAX_COLUMNS);
+    for(Object item:items)ValueCompositions.map(item);
+    return (List<Map<String,Object>>)(List<?>)items;
+  }
+  private static void updateDatatype(Map<String,Object> config,Map<String,Object> property,String datatype){
+    property.put("datatype",datatype);
+    var resolution=object(object(object(object(config,"extractionProfile"),"runtime"),"udp"),"resolution");
+    if(resolution.containsKey("governedIdentity"))
+      for(var signal:rows(object(resolution,"governedIdentity"),"signals"))
+        if(property.get("propertyIri").equals(signal.get("id")))signal.put("comparator",ValueReader.comparator(datatype));
+  }
+  // Reuse the pinned destination's authority, reconciliation and identity assertions.
+  static void reviseCompositions(Map<String,Object> config,List<Map<String,Object>> compositions){
+    var semantic=object(config,"semanticMapping");
+    var projection=ValueCompositions.list(object(object(config,"extractionProfile"),"projection").get("FILE"),1,ManagedFileLimits.MAX_COLUMNS);
+    var fields=new HashMap<String,String>();projection.forEach(f->fields.put((String)f,null));
+    var combined=new ValueCompositions(compositions,fields,null);
+    var direct=rows(semantic,"propertyMappings");
+    Map<Object,Object> labels=new LinkedHashMap<>(ValueCompositions.map(config.getOrDefault("compositionInputLabels",Map.of())));
+    var access=rows(config,"dataAccessPolicies");
+    var priorLabels=new HashMap<Object,Object>();
+    for(var policy:access)priorLabels.put(policy.get("target"),policy.get("label"));
+    for(var row:direct)if(combined.labels.containsKey(row.get("targetPropertyIri")))
+      labels.put(row.get("sourceField"),priorLabels.get(row.get("targetPropertyIri")));
+    if(!labels.isEmpty())config.put("compositionInputLabels",labels);
+    semantic.put("propertyMappings",direct.stream().filter(row->!combined.labels.containsKey(row.get("targetPropertyIri"))).toList());
+    semantic.put("compositions",compositions);
+    for(var property:properties(config)){
+      String id=(String)property.get("propertyIri");
+      if(combined.datatypes.containsKey(id)){
+        updateDatatype(config,property,combined.datatypes.get(id));property.put("accessLabel",combined.labels.get(id));
+      }
+    }
+    for(var policy:access)
+      if(combined.labels.containsKey(policy.get("target")))policy.put("label",combined.labels.get(policy.get("target")));
+  }
   public static Map<String,Object> revise(Map<String,Object> original,List<Change> changes){
+    return revise(original,changes,true);
+  }
+  private static Map<String,Object> revise(Map<String,Object> original,List<Change> changes,boolean requireChange){
     var copy=deepCopy(original);var properties=properties(copy);var seen=new HashSet<List<String>>();boolean changed=false;
     for(var change:changes){
       if(change==null||change.propertyIri()==null||change.propertyIri().isBlank()||change.sourceField()==null||change.sourceField().isBlank()
-          ||change.reconciliation()==null||change.reconciliation().isEmpty()||!seen.add(List.of(change.propertyIri(),change.sourceField())))
+          ||(change.reconciliation()==null && change.transform()==null && change.transformParams()==null)
+          ||(change.reconciliation()!=null && change.reconciliation().isEmpty())||!seen.add(List.of(change.propertyIri(),change.sourceField())))
         throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_PROPERTY_INVALID");
       var matches=properties.stream().filter(x->change.propertyIri().equals(x.get("propertyIri"))&&change.sourceField().equals(x.get("sourceField"))).toList();
       if(matches.size()!=1)throw fail(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_REVISION_PROPERTY_NOT_UNIQUE");
-      var property=matches.getFirst();changed|=!Objects.equals(property.get("reconciliation"),change.reconciliation());
-      property.put("reconciliation",deepCopy(change.reconciliation()));
+      var property=matches.getFirst();
+      if(change.reconciliation()!=null){
+        changed|=!Objects.equals(property.get("reconciliation"),change.reconciliation());
+        property.put("reconciliation",deepCopy(change.reconciliation()));
+      }
+      if(change.transform()!=null||change.transformParams()!=null){
+        var mappings=rows(object(copy,"semanticMapping"),"propertyMappings").stream()
+            .filter(m->change.propertyIri().equals(m.get("targetPropertyIri"))).toList();
+        if(mappings.size()!=1)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_PROPERTY_INVALID");
+        var mapping=mappings.getFirst();
+        var reader=ValueReader.named(change.transform()==null?(String)mapping.get("transform"):change.transform());
+        var params=reader.parameters(change.transformParams(),null);
+        changed|=!reader.name().equals(mapping.get("transform"))||!params.equals(mapping.getOrDefault("transformParams",Map.of()));
+        mapping.put("transform",reader.name());mapping.remove("transformParams");
+        if(!params.isEmpty())mapping.put("transformParams",params);
+        updateDatatype(copy,property,ValueReader.DATATYPES.get(reader.output));
+      }
     }
-    if(!changed)throw fail(HttpStatus.CONFLICT,"ONB_REVISION_NO_CHANGE");
+    if(requireChange&&!changed)throw fail(HttpStatus.CONFLICT,"ONB_REVISION_NO_CHANGE");
     return copy;
   }
   @SuppressWarnings("unchecked") private static <T>T deepCopy(T value){

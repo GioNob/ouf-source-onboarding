@@ -10,7 +10,7 @@ import org.springframework.core.io.ClassPathResource;
  */
 final class ThsAssets {
   static final Set<String> PAGE_SCRIPTS = Set.of("workflow-review.js", "permissions.js",
-      "managed-file-picker.js", "profile-recovery.js", "resolution.js");
+      "managed-file-picker.js", "profile-recovery.js", "resolution.js", "ingestion-run-recovery.js");
 
   static byte[] read(String name) throws IOException {
     byte[] body = new ClassPathResource("ths/" + name).getContentAsByteArray();

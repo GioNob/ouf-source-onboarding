@@ -19,6 +19,7 @@ final class PublishedReviewTerms {
     var mapping=config.path("semanticMapping");
     requireMapping(mapping.path("targetClasses"),"classIri","CLASS");
     requireMapping(mapping.path("propertyMappings"),"targetPropertyIri","PROPERTY");
+    if(mapping.has("compositions"))requireMapping(mapping.path("compositions"),"targetPropertyIri","PROPERTY");
     var bindings=config.path("semanticReferenceBindings");
     if(!bindings.isArray()){valid=false;return;}
     var pinnedIris=new HashSet<String>();

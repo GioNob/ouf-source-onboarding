@@ -22,12 +22,18 @@
   }
   function semanticSummary(card, article) {
     const types = {CLASS:'della classe', PROPERTY:'della proprietà', RELATIONSHIP:'della relazione',
-      VOCABULARY:'del vocabolario', CONCEPT:'del concetto', ONTOLOGY:'dell’ontologia'};
+      DATATYPE:'del tipo strutturato', VALUE_MAP:'della mappa di valori', VOCABULARY:'del vocabolario',
+      CONCEPT:'del concetto', ONTOLOGY:'dell’ontologia'};
     const source = card.adoptionProvenance || {};
     const label = card.label_json?.it || card.local_name || card.semantic_id;
     const english = card.label_json?.en;
-    const heading = card.status === 'OPEN' && !expired(card) ? 'Stai approvando l’adozione' : 'Richiesta di adozione';
-    element('h2', `${heading} ${types[card.artifact_type] || 'della definizione'} «${label}»${english ? ' (' + english + ')' : ''}`, article);
+    const open = card.status === 'OPEN' && !expired(card);
+    const nativeType = !card.adoptionProvenance &&
+      {DATATYPE:'il tipo strutturato', VALUE_MAP:'la mappa di valori'}[card.artifact_type];
+    const heading = nativeType
+      ? (open ? 'Stai approvando ' + nativeType : 'Richiesta di approvazione ' + types[card.artifact_type])
+      : (open ? 'Stai approvando l’adozione' : 'Richiesta di adozione') + ' ' + (types[card.artifact_type] || 'della definizione');
+    element('h2', `${heading} «${label}»${english ? ' (' + english + ')' : ''}`, article);
     const facts = document.createElement('dl');
     const fact = (name, value) => { element('dt', name, facts); return element('dd', value, facts); };
     const iri = source.canonicalUri || card.semantic_id;
@@ -50,8 +56,11 @@
     const date = new Date(card.expires_at);
     fact('Scadenza della richiesta', Number.isFinite(date.valueOf()) ? date.toLocaleString('it-IT', {timeZoneName:'short'}) : card.expires_at);
     article.append(facts);
+    if (card.artifact_type === 'DATATYPE' && card.datatypeReview) datatypeSummary(card.datatypeReview, article);
+    if (card.artifact_type === 'VALUE_MAP' && hasValueMapReview(card)) valueMapSummary(card.valueMapReview, article);
     const warnings = [];
-    if (source.licenseWarning || !source.license) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
+    if (card.artifact_type === 'VALUE_MAP' && !hasValueMapReview(card)) warnings.push('Dettagli della mappa di valori non disponibili. Ricarica la richiesta per poterla approvare.');
+    if (source.licenseWarning || (!nativeType && !source.license)) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
     for (const finding of card.validationFindings || []) {
       warnings.push(typeof finding === 'string' ? finding : finding.message || finding.code || JSON.stringify(finding));
     }
@@ -65,15 +74,177 @@
     element('h3', 'Cosa comporta l’approvazione', article);
     element('p', 'Approvi questa revisione. Con il successivo comando «Pubblica» la definizione diventa pubblicata e utilizzabile nei mapping delle fonti dell’ente. Non modifica dati esistenti e può essere deprecata in seguito.', article);
   }
+  function hasValueMapReview(card) {
+    const review = card.valueMapReview;
+    return !!review?.name && !!review.targetVocabulary?.semanticId && !!review.targetVocabulary?.publicationSetId
+      && Array.isArray(review.entries) && review.entries.length > 0 && review.entryCount === review.entries.length
+      && review.entries.every(entry => typeof entry?.code === 'string' && typeof entry.concept === 'string');
+  }
+  function valueMapSummary(review, article) {
+    const section = element('section', '', article);
+    section.className = 'value-map-review';
+    element('h3', review.name, section);
+    const facts = element('dl', '', section);
+    const fact = (name, value) => { element('dt', name, facts); element('dd', value, facts); };
+    const vocabulary = review.targetVocabulary;
+    fact('Vocabolario di destinazione', vocabulary.label || vocabulary.semanticId);
+    fact('Identificativo (IRI)', vocabulary.semanticId);
+    fact('Set di pubblicazione', vocabulary.publicationSetId);
+    fact('Numero di voci', review.entryCount);
+    if (review.sourceColumn?.fieldName) {
+      fact('Colonna sorgente', review.sourceColumn.fieldName);
+      if (review.sourceColumn.sourceId) fact('Identificativo della fonte', review.sourceColumn.sourceId);
+    }
+
+    const tableBody = (title, headings, parent) => {
+      const region = element('div', '', parent);
+      region.className = 'field-scroll value-map-scroll';
+      region.tabIndex = 0;
+      region.setAttribute('role', 'region');
+      region.setAttribute('aria-label', title);
+      const table = element('table', '', region);
+      element('caption', title, table);
+      const header = element('tr', '', element('thead', '', table));
+      for (const heading of headings) element('th', heading, header).scope = 'col';
+      return element('tbody', '', table);
+    };
+    const entries = tableBody('Codici e concetti associati', ['Codice', 'Concetto'], section);
+    for (const entry of review.entries) {
+      const row = element('tr', '', entries);
+      element('th', entry.code, row).scope = 'row';
+      const concept = element('td', entry.conceptLabel || entry.concept, row);
+      if (entry.conceptLabel && entry.conceptLabel !== entry.concept) element('small', entry.concept, concept);
+    }
+    if (!review.changes) return;
+    element('h4', 'Differenze rispetto alla versione precedente', section);
+    const {added = [], removed = [], changed = []} = review.changes;
+    element('p', `${added.length} aggiunti · ${removed.length} rimossi · ${changed.length} modificati`, section);
+    if (added.length + removed.length + changed.length === 0) return;
+    const changes = tableBody('Modifiche ai codici', ['Codice', 'Modifica'], section);
+    const changeRow = (code, change) => {
+      const row = element('tr', '', changes);
+      element('th', code, row).scope = 'row';
+      return element('td', change, row);
+    };
+    for (const code of added) changeRow(code, 'Aggiunto');
+    for (const code of removed) changeRow(code, 'Rimosso');
+    for (const {code, from, to} of changed) {
+      const cell = changeRow(code, 'Modificato');
+      element('small', 'Prima · ' + from, cell);
+      element('small', 'Dopo · ' + to, cell);
+    }
+  }
+  function datatypeSummary(review, article) {
+    const title = 'Componenti del tipo strutturato';
+    const scroll = element('div', '', article);
+    scroll.className = 'field-scroll datatype-components';
+    scroll.tabIndex = 0;
+    scroll.setAttribute('role', 'region');
+    scroll.setAttribute('aria-label', title);
+    const table = element('table', '', scroll);
+    element('caption', title, table);
+    const header = element('tr', '', element('thead', '', table));
+    for (const title of ['Nome', 'Tipo', 'Cardinalità', 'Obbligatorio', 'Vincoli']) {
+      element('th', title, header).scope = 'col';
+    }
+    const body = element('tbody', '', table);
+    for (const c of review.componenti) {
+      const row = element('tr', '', body);
+      element('th', c.etichetta ? c.nome + ' · ' + c.etichetta : c.nome, row).scope = 'row';
+      for (const value of [c.tipo, c.cardinalità, c.obbligatorio, c.vincoli]) element('td', value, row);
+    }
+    element('h3', 'Differenze rispetto alla versione precedente', article);
+    element('p', review.versionePrecedente, article);
+    if (!review.differenze.length && review.versionePrecedente !== 'Prima pubblicazione') {
+      element('p', 'Nessuna differenza.', article);
+    }
+    for (const change of review.differenze) {
+      element('h4', change.campo + ' · ' + change.modifica, article);
+      for (const [key, title] of [['prima', 'Prima'], ['dopo', 'Dopo']]) {
+        if (Object.prototype.hasOwnProperty.call(change, key)) {
+          element('p', title + ' · ' + datatypeChangeText(change[key]), article);
+        }
+      }
+    }
+  }
+  function datatypeChangeText(value) {
+    if (Array.isArray(value)) return value.join(' → ');
+    if (value === null || typeof value !== 'object') return String(value);
+    if (!Object.hasOwn(value, 'cardinality')) return Object.entries(value).map(([language,label]) => language + ' · ' + label).join(', ');
+    const constraints = {minInclusive:'Minimo incluso',maxInclusive:'Massimo incluso',maxLength:'Lunghezza massima',vocabularyRef:'Vocabolario'};
+    return [value.name, typeNames[value.type] || value.type, value.cardinality === 'MANY' ? 'Più valori' : 'Un valore',
+      value.required ? 'Obbligatorio' : 'Facoltativo', value.labels && datatypeChangeText(value.labels),
+      ...Object.entries(value.constraints || {}).map(([key,bound]) => constraints[key] + ' ' + bound)].filter(Boolean).join(' · ');
+  }
   const unavailable = 'non disponibile';
   const accessNames = {OPEN:'pubblico', PERSONAL:'dato personale', SENSITIVE:'dato sensibile', RESTRICTED:'accesso riservato', ANONYMOUS:'dato anonimo'};
   const limitNames = {maxRows:'Righe massime', maxColumns:'Colonne massime', maxCellChars:'Caratteri massimi per cella'};
-  const sectionNames = {FIELD:'Campo', IDENTITY:'Identità', SEMANTIC:'Riferimento semantico', LIMITS:'Limite'};
-  function datatype(transform) {
-    if (transform === 'IDENTITY') return 'testo';
-    if (transform?.startsWith('DECIMAL_')) return 'numero';
-    if (transform?.startsWith('DATE_')) return 'data';
-    return transform || '—';
+  const sectionNames = {FIELD:'Campo', IDENTITY:'Identità', SEMANTIC:'Riferimento semantico', LIMITS:'Limite', COMPOSITION:'Composizione', DATATYPE:'Tipo strutturato'};
+  const typeNames = {string:'testo', integer:'numero intero', decimal:'numero decimale', date:'data', datetime:'data e ora',
+    geometry:'geometria', concept:'concetto di vocabolario', boolean:'valore vero o falso'};
+  const readerRules = {
+    IDENTITY:'Mantiene il testo originale, anche quando è vuoto.',
+    TEXT_NFC_TRIM_V1:'Uniforma i caratteri Unicode in forma NFC e rimuove gli spazi agli estremi.',
+    INTEGER_V1:'Legge un numero intero di sole cifre con segno facoltativo.',
+    INTEGER_GROUP_DOT_V1:'Legge un numero intero con il punto tra i gruppi di tre cifre.',
+    DECIMAL_DOT_V1:'Legge un numero con il punto decimale.',
+    DECIMAL_COMMA_V1:'Legge un numero con la virgola decimale.',
+    DECIMAL_GROUP_DOT_COMMA_V1:'Legge un numero con punti per le migliaia e virgola per i decimali.',
+    DECIMAL_GROUP_COMMA_DOT_V1:'Legge un numero con virgole per le migliaia e punto per i decimali.',
+    BOOLEAN_IT_V1:'Legge come vero sì, si, s, vero, v, true o 1 e come falso no, n, falso, f, false o 0. Ignora maiuscole e spazi esterni.',
+    DATE_ISO_V1:'Legge una data valida nel formato anno-mese-giorno.',
+    DATE_DMY_V1:'Legge una data valida nel formato giorno/mese/anno.',
+    DATE_DMY_DASH_V1:'Legge una data valida nel formato giorno-mese-anno.',
+    DATETIME_ISO_OFFSET_V1:'Legge data e ora ISO con scarto orario esplicito e le riporta al tempo universale UTC. I secondi sono facoltativi, con al massimo nove cifre decimali.',
+    DATETIME_LOCAL_ROME_V1:'Interpreta anno-mese-giorno e ora locale senza scarto nel fuso di Roma. I secondi sono facoltativi. Al cambio di ora rifiuta gli orari inesistenti o ambigui.',
+    GEOJSON_V1:'Legge una geometria GeoJSON in EPSG:4326.',
+    WKT_V1:'Legge una geometria WKT 2D o Z nel sistema di coordinate dichiarato. Le ordinate di misura M e ZM non sono ammesse',
+    VALUE_MAP_V1:'Rimuove gli spazi esterni e cerca il codice esatto nella mappa pubblicata. Un codice sconosciuto produce un errore'
+  };
+  function readerText(reader, params = {}, valueMap) {
+    if (!reader) return '—';
+    const map = reader === 'VALUE_MAP_V1' && valueMap
+      ? ['Mappa di valori ' + valueMap.name, 'Vocabolario di destinazione ' + valueMap.targetVocabulary,
+         valueMap.entryCount + (valueMap.entryCount === 1 ? ' voce' : ' voci')].join(' · ')
+      : params?.valueMapRef;
+    return [readerRules[reader] || reader, params?.crs, map].filter(Boolean).join(' · ');
+  }
+  function expressionText(node, definitions) {
+    if (node.items) return 'Elenco in ordine · ' + node.items.map(item => expressionText(item,definitions)).join(' · ');
+    if (node.structured) return expressionText(node.structured,definitions);
+    if (Object.hasOwn(node,'constructor')) return expressionText(node.constructor,definitions);
+    if (node.fieldName) return node.fieldName + ' · ' + readerText(node.reader,node.transformParams);
+    if (node.constructorId) {
+      const rule = {
+        POINT_FROM_LAT_LON_V1:'Crea un punto EPSG:4326 in ordine longitudine, latitudine. Occorrono entrambe le coordinate, entro ±180° e ±90° rispettivamente. Se entrambe mancano il punto è assente, se ne manca una sola la riga presenta un errore.',
+        TEXT_JOIN_V1:'Unisce in ordine le parti presenti con il separatore ' + JSON.stringify(node.params?.separator) + '. Se mancano tutte, il testo è assente.',
+        LIST_SPLIT_V1:'Divide il testo sul separatore ' + JSON.stringify(node.params?.separator) + ', legge ciascun elemento e scarta quelli assenti. Se non ne resta alcuno, l’elenco è assente. ' + readerText(node.params?.itemReader,node.params?.itemReaderParams)
+      }[node.constructorId];
+      return rule + ' ' + node.inputs.map(i => i.role + ' = ' + expressionText(i,definitions)).join(' · ');
+    }
+    const label = definitions[node.typeRef]?.label?.it || node.typeRef;
+    return label + ' · ' + node.components.map(c => c.component + ' ← ' +
+      expressionText(c,definitions)).join(' · ');
+  }
+  function definitionText(pin,definitions) {
+    return [pin.label?.it || pin.semanticId,...pin.definition.components.map(c =>
+      (c.labels?.it || c.name) + ' (' + c.name + ') · ' + (typeNames[c.type] || definitions[c.type]?.label?.it || c.type) +
+      ' · ' + (c.cardinality === 'MANY' ? 'più valori' : 'un valore') + ' · ' + (c.required ? 'obbligatorio' : 'facoltativo') +
+      (c.constraints ? ' · vincoli ' + JSON.stringify(c.constraints) : ''))].join(' — ');
+  }
+  function compositionsView(mapping,bindings,article) {
+    if (!mapping?.compositions?.length) return;
+    const definitions = Object.fromEntries((bindings || []).filter(b => b.definitionSha256 && !b.valueMapRef).map(b => [b.semanticId+'@'+b.publicationSetId,b]));
+    element('h3','Proprietà composte',article);
+    for (const c of mapping.compositions) {
+      element('h4',c.targetPropertyIri + ' · ' + accessNames[c.dataAccessLabel],article);
+      element('p',expressionText(c,definitions),article);
+    }
+    for (const [ref,pin] of Object.entries(definitions)) {
+      element('h4','Tipo strutturato · ' + pin.label.it,article);
+      element('p',definitionText(pin,definitions),article);
+      element('p',ref + ' · ' + pin.definitionSha256,article);
+    }
   }
   const unverified = 'etichetta non verificata dal registro';
   function termFor(card, iri) {
@@ -99,7 +270,7 @@
     return 'Criteri di confronto · ' + JSON.stringify(value);
   }
   function fieldDescription(row) {
-    return [row.included ? 'inclusa' : 'esclusa', row.property, row.transform, row.access, row.sourceKey && 'chiave della fonte', row.signal && 'segnale d’identità',row.authorityOrder?.length && 'ordine delle autorità ' + row.authorityOrder.join(', '), row.reconciliation && 'regole ' + JSON.stringify(row.reconciliation)].filter(Boolean).join(' · ');
+    return [row.included ? 'inclusa' : 'esclusa', row.property, row.transform && readerText(row.transform,row.transformParams,row.valueMap), row.access, row.sourceKey && 'chiave della fonte', row.signal && 'segnale d’identità',row.authorityOrder?.length && 'ordine delle autorità ' + row.authorityOrder.join(', '), row.reconciliation && 'regole ' + JSON.stringify(row.reconciliation)].filter(Boolean).join(' · ');
   }
   function semanticReference(card, iri, parent, warnings) {
     sourceLink(parent,iri,iri);
@@ -158,7 +329,8 @@
       const previous = card.previousReview, diff = element('section','',article); diff.className = 'warnings';
       element('h3','Differenze rispetto alla versione ' + previous.version,diff);
       const describe = (section,target,value) => value == null ? 'assente' : section === 'FIELD' ? fieldDescription(value) :
-        section === 'IDENTITY' ? identityText(target,value,label) : section === 'SEMANTIC' ? JSON.stringify(value) : String(value);
+        section === 'COMPOSITION' ? expressionText(value,snap.DATATYPE || {}) + ' · ' + value.dataAccessLabel :
+        section === 'DATATYPE' ? definitionText(value,snap.DATATYPE || {}) : section === 'IDENTITY' ? identityText(target,value,label) : section === 'SEMANTIC' ? JSON.stringify(value) : String(value);
       const changes = previous.changes.map(change => change.section === 'SEMANTIC'
         ? {...change,before:pinnedReference(change.before),after:pinnedReference(change.after)} : change)
         .filter(change => change.section !== 'SEMANTIC' || JSON.stringify(change.before) !== JSON.stringify(change.after));
@@ -190,7 +362,7 @@
       if (row.property) sourceLink(property,row.property,row.property);
       if (row.reconciliation) detail('Regole di riconciliazione della proprietà',row.reconciliation,property);
       if (row.authorityOrder?.length) element('p','Ordine delle autorità · ' + row.authorityOrder.join(', '),property);
-      element('td',datatype(row.transform),tr);
+      element('td',readerText(row.transform,row.transformParams,row.valueMap),tr);
       element('td',row.access ? row.access + ' · ' + accessNames[row.access] : 'Non indicato',tr);
       element('td',[row.sourceKey && 'chiave della fonte',row.signal && 'segnale d’identità'].filter(Boolean).join(' · ') || '—',tr);
       if (editable) flag('FIELD',name,element('td','',tr));
@@ -222,7 +394,8 @@
   const expired = card => Date.parse(card.expires_at) <= Date.now();
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
   const missingFileSnapshot = card => !card.reviewSnapshot && (card.configuration?.extractionProfile?.selection?.assetId || card.configuration?.semanticMapping?.sourceType?.typeCode === 'FILE');
-  const approvalBlocked = card => !semantic && (missingFileSnapshot(card) || card.termVerification !== 'COMPLETE');
+  const approvalBlocked = card => semantic ? card.artifact_type === 'VALUE_MAP' && !hasValueMapReview(card)
+    : missingFileSnapshot(card) || card.termVerification !== 'COMPLETE';
   const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : !item.needsRefresh && item.card.status === 'CONFIRMED' && item.card.onboardingState === 'APPROVED' && !item.card.progress?.activationProgress?.budgetExhausted && item.card.progress?.activationProgress?.counterLineageVerified !== false && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
   const canBudget = item => !semantic && !item.needsRefresh && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED' && item.card.progress?.activationProgress?.humanBudgetGrantAvailable === true && (item.reason?.value.trim().length || 0) >= 10;
   const canResume = item => !semantic && !item.needsRefresh && item.card.progress?.activationProgress?.humanRecheckAllowed === true;
@@ -313,7 +486,7 @@
         for (const value of [field, property && termLabel(card,property) + ' · ' + property, transform, labels.get(property) || labels.get(field)]) element('td', value, tr);
         table.append(tr);
       };
-      for (const row of rows) appendField(row.sourceField, row.targetPropertyIri, row.transform);
+      for (const row of rows) appendField(row.sourceField, row.targetPropertyIri, readerText(row.transform,row.transformParams,row.valueMap));
       const mapped = new Set(rows.map(row => row.sourceField));
       const projection = config.extractionProfile?.projection?.[mapping.sourceType?.typeCode || 'FILE'] || [];
       for (const field of projection) if (!mapped.has(field)) appendField(field, null, null);
@@ -331,6 +504,9 @@
       if (!excluded.length) element('p', 'La scheda della fonte non elenca campi esclusi.', article);
       for (const item of excluded) element('p', `${item.column} · Nessuna proprietà pubblicata · Accesso: ${item.accessLabel || 'non indicato'}`, article);
       }
+      if (mapping.compositions?.length || mapping.propertyMappings?.some(p => p.transform && p.transform !== 'IDENTITY'))
+        element('p','Con i lettori diversi da IDENTITY, una cella vuota o di soli spazi dà un valore assente. Un componente obbligatorio deve avere un valore.',article);
+      compositionsView(mapping,config.semanticReferenceBindings,article);
       if (card.newColumns?.length) {
         element('h3', 'Decisioni sulle colonne nuove', article);
         const decisions = document.createElement('table'), header = document.createElement('tr');

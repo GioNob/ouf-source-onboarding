@@ -71,7 +71,8 @@ public class PermissionThsSecurity {
       JwtDecoder decoder, Converter<Jwt,? extends AbstractAuthenticationToken> converter,
       ClientRegistrationRepository registrations, AuthenticationSuccessHandler thsLoginSuccess) throws Exception {
     http.securityMatcher("/trusted-human/authorization/**","/trusted-human/managed-files/**","/trusted-human/resolution/**",
-        "/trusted-human/onboarding/**","/trusted-human/semantic/**","/oauth2/**","/login/oauth2/**");
+        "/trusted-human/onboarding/**","/trusted-human/semantic/**","/trusted-human/ingestion-run-recovery/**",
+        "/oauth2/**","/login/oauth2/**");
     http.authorizeHttpRequests(a -> a.requestMatchers("/oauth2/**","/login/oauth2/**").permitAll().anyRequest().authenticated());
     var resolver = new DefaultOAuth2AuthorizationRequestResolver(registrations,"/oauth2/authorization");
     resolver.setAuthorizationRequestCustomizer(OAuth2AuthorizationRequestCustomizers.withPkce());

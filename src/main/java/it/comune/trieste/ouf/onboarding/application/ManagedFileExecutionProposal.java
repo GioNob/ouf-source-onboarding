@@ -5,8 +5,7 @@ import java.util.*;
 
 /** Pure preparation of an explicitly typed CSV execution profile. It issues no approval or runtime authority. */
 public final class ManagedFileExecutionProposal {
-  private static final Map<String,String> DATATYPES=Map.of("IDENTITY","string","DECIMAL_DOT_V1","decimal","DECIMAL_COMMA_V1","decimal","DATE_ISO_V1","date","DATE_DMY_V1","date");
-  static String datatype(String transform){return "http://www.w3.org/2001/XMLSchema#"+DATATYPES.get(transform);}
+  static String datatype(String transform){return ValueReader.DATATYPES.get(ValueReader.named(transform).output);}
   public record ReviewTerm(String iri,String labelIt,String descriptionIt,String license) {}
   public record SemanticBinding(String semanticId,String semanticVersion,String revisionId,String publicationSetId,
       @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
@@ -46,12 +45,21 @@ public final class ManagedFileExecutionProposal {
     Set<String> mapped=new LinkedHashSet<>(),mappedFields=new LinkedHashSet<>(),classes=new LinkedHashSet<>();
     Map<String,String> declaredDatatypes=new HashMap<>();
     for(Object raw:list(semantic.get("targetClasses"),1,32))classes.add(iri(text(map(raw),"classIri")));
-    for(Object raw:list(semantic.get("propertyMappings"),1,ManagedFileLimits.MAX_COLUMNS)){
+    var inputs=new HashMap<String,String>();
+    fields.forEach(field->inputs.put(string(field),null));
+    var combined=new ValueCompositions(semantic.getOrDefault("compositions",List.of()),inputs,null);
+    var valueMapRefs=new HashSet<>(combined.valueMapRefs);
+    mapped.addAll(combined.datatypes.keySet());declaredDatatypes.putAll(combined.datatypes);
+    for(Object raw:list(semantic.get("propertyMappings"),0,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> mapping=map(raw);String field=text(mapping,"sourceField");
-      require(fields.contains(field) && mappedFields.add(field) && DATATYPES.containsKey(text(mapping,"transform"))
+      require(fields.contains(field) && mappedFields.add(field) && Arrays.stream(ValueReader.values()).anyMatch(r->r.name().equals(mapping.get("transform")))
           && mapped.add(iri(text(mapping,"targetPropertyIri"))));
+      var reader=ValueReader.named(text(mapping,"transform"));
+      var params=reader.mappingParameters(mapping);
+      if(reader==ValueReader.VALUE_MAP_V1)valueMapRefs.add((String)params.get("valueMapRef"));
       declaredDatatypes.put(text(mapping,"targetPropertyIri"),datatype(text(mapping,"transform")));
     }
+    mappedFields.addAll(combined.used);
     require(mappedFields.equals(new HashSet<>(fields)));
     require(!semantic.containsKey("vocabularyMappings") || list(semantic.get("vocabularyMappings"),0,0).isEmpty());
     require(!config.containsKey("relationshipMappings") || list(config.get("relationshipMappings"),0,0).isEmpty());
@@ -61,9 +69,14 @@ public final class ManagedFileExecutionProposal {
     Set<String> refs=new LinkedHashSet<>();List<Map<String,Object>> bindings=new ArrayList<>();
     for(SemanticBinding binding:proposal.semanticBindings()){
       require(binding!=null);String id=atom(binding.semanticId()),version=atom(binding.semanticVersion());
-      require(refs.add(id+"@"+version) && publication.equals(uuid(binding.publicationSetId())));
+      String set=uuid(binding.publicationSetId());
+      String coordinate=id+"@"+set;
+      // A nested type can be part of the published definition without an item builder.
+      // Preparation verifies the artifact kind of additional pins from other sets.
+      require(refs.add(id+"@"+version) && (publication.equals(set) || !combined.typeRefs.isEmpty()
+          || valueMapRefs.contains(coordinate) || valueMapRefs.contains(id)));
       var pinned=new LinkedHashMap<String,Object>(Map.of("semanticId",id,"semanticVersion",version,
-          "revisionId",uuid(binding.revisionId()),"publicationSetId",publication));
+          "revisionId",uuid(binding.revisionId()),"publicationSetId",set));
       if(binding.reviewTerms()!=null){
         require(binding.reviewTerms().size()<=classes.size()+mapped.size());
         for(var term:binding.reviewTerms()){
@@ -75,6 +88,7 @@ public final class ManagedFileExecutionProposal {
       }
       bindings.add(pinned);
     }
+    for(String target:combined.labels.keySet())require(bindings.stream().anyMatch(b->target.equals(b.get("semanticId"))));
     config.remove("semanticReviewTerms");
     if(!descriptions.isEmpty())config.put("semanticReviewTerms",descriptions);
     List<?> expectedRefs=list(semantic.get("semanticRefs"),1,32);
@@ -88,7 +102,8 @@ public final class ManagedFileExecutionProposal {
     GovernedIdentityProposal.validate(resolution,policy,sourceId,classes,mapped);
     require(tenant.equals(policy.get("tenantId")));
     for(Object raw:list(policy.get("signals"),1,ManagedFileLimits.MAX_COLUMNS)){
-      Map<String,Object> signal=map(raw);require((text(signal,"id")+"@"+publication).equals(signal.get("semanticRef")));
+      Map<String,Object> signal=map(raw);require((text(signal,"id")+"@"+publication).equals(signal.get("semanticRef"))
+          && ValueReader.comparator(declaredDatatypes.get(text(signal,"id"))).equals(signal.get("comparator")));
     }
     Map<String,Object> materialization=object(udp,"materialization");
     keys(materialization,"policyRef","properties","bitemporalProperties","checkpointInterval");
@@ -99,7 +114,7 @@ public final class ManagedFileExecutionProposal {
       Map<String,Object> label=map(raw);require("PROPERTY".equals(label.get("scope")));
       require(labels.put(text(label,"target"),text(label,"label"))==null);
     }
-    require(labels.keySet().equals(mapped));Set<String> properties=new HashSet<>();
+    require(labels.entrySet().containsAll(combined.labels.entrySet()) && labels.keySet().equals(mapped));Set<String> properties=new HashSet<>();
     for(Object raw:list(materialization.get("properties"),1,ManagedFileLimits.MAX_COLUMNS)){
       Map<String,Object> property=map(raw);keys(property,"sourceField","propertyIri","datatype","accessLabel","authorityOrder");
       String iri=text(property,"propertyIri");

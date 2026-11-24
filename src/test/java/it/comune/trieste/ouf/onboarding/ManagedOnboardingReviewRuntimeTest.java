@@ -3,19 +3,39 @@ package it.comune.trieste.ouf.onboarding;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.authorization.*;
+import it.comune.trieste.ouf.onboarding.api.ManagedOnboardingReviewApi;
+import it.comune.trieste.ouf.onboarding.api.PermissionDelegationVerifier;
+import it.comune.trieste.ouf.onboarding.api.ProblemHandler;
 import it.comune.trieste.ouf.onboarding.application.*;
 import it.comune.trieste.ouf.onboarding.authorization.AuthorizationPolicyRegistry;
 import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
+import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Answers;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.support.GenericApplicationContext;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Real lifecycle/PG transactions; authorization allow/deny is a TEST fixture, never a deployment grant. */
 @SpringBootTest(properties="ouf.authorization.ths.public-origin=https://review.example")
@@ -59,6 +79,428 @@ class ManagedOnboardingReviewRuntimeTest {
     var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"review:edicole",proposal);
     return new Governed(mapper,command,reviews.prepare(mapper,command,"prepare"));
   }
+  @MockitoBean DatatypeResolver registryReader;
+  @Test void task50bV02ConditionalReadDetectsExpiryAndReadinessAtTheSameLockVersion(){
+    var fixture=governed(new PublishedSnapshots().publish("https://example.org/onto/Place","1.0.0","Prima"));
+    var p=fixture.mapper();
+    String source=fixture.command().sourceId();
+    UUID version=fixture.command().onboardingVersionId();
+    var initial=reviews.readLatest(p,source);
+    String validator=(String)initial.get("observationVersion");
+    UUID challenge=(UUID)initial.get("challengeId");
+    assertThat(initial.get("allowedActions")).isEqualTo(List.of(ManagedMcpObservation.Action.WAIT_HUMAN_REVIEW,
+        ManagedMcpObservation.Action.READ_AGAIN));
+    assertThat(reviews.readLatest(p,source,validator)).containsEntry("unchanged",true)
+        .doesNotContainKeys("reviewUrl","activationProgress");
+    assertThatThrownBy(()->reviews.readLatest(principal("other-tenant","test-human"),source,validator))
+        .hasMessage("ONB_REVIEW_OWNER_SCOPE_UNPROVEN");
+    db.sql("update ouf_onboarding.approval_challenge set expires_at=clock_timestamp()-interval '1 second' where challenge_id=:c")
+        .param("c",challenge).update();
+    var expired=reviews.read(p,source,version,validator);
+    assertThat(expired).isEqualTo(reviews.read(p,source,version)).doesNotContainKey("unchanged")
+        .containsEntry("lockVersion",initial.get("lockVersion"))
+        .containsEntry("allowedActions",List.of(ManagedMcpObservation.Action.RENEW_REVIEW));
+    var renewed=reviews.prepare(p,new ManagedOnboardingReviewService.Prepare(source,version,
+        ((Number)expired.get("lockVersion")).longValue(),"new-review",null),"renew");
+    var approved=reviews.humanAction(p,(UUID)renewed.get("challengeId"),"confirm",
+        new ManagedOnboardingReviewService.Decision((String)renewed.get("configurationHash"),
+            ((Number)renewed.get("lockVersion")).longValue()),"test-auth");
+    db.sql("""
+        update ouf_onboarding.managed_onboarding_review set readiness_phase='BLOCKED',
+          readiness_generation=1,readiness_attempts=1,readiness_started_at=clock_timestamp(),
+          readiness_last_code='ONB_READINESS_DEPENDENCY_422' where onboarding_version_id=:v
+        """).param("v",version).update();
+    var blocked=reviews.read(p,source,version,(String)approved.get("observationVersion"));
+    assertThat(blocked).containsEntry("lockVersion",approved.get("lockVersion")).doesNotContainKey("unchanged")
+        .containsEntry("allowedActions",List.of(ManagedMcpObservation.Action.HUMAN_RECHECK));
+    assertThat(reviews.readLatest(p,source,(String)blocked.get("observationVersion"))).containsEntry("unchanged",true);
+  }
+  @Test @SuppressWarnings("unchecked") void d084_11_failedLookupLeavesDraftThenFreezesPublishedDefinitionBeforeReview(){
+    String type="urn:fixture:Postal",nested="urn:fixture:Location",property="urn:fixture:address",cls="urn:fixture:Place",source="typed",tenant="test-tenant";
+    String set=UUID.randomUUID().toString(),rev=UUID.randomUUID().toString();
+    String nestedSet=UUID.randomUUID().toString(),nestedRev=UUID.randomUUID().toString();
+    byte[] csv="name\nEdicola\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.registerOwned(null,"object://fixture/typed.csv",hashes.ofBytes(csv),"text/csv",csv.length,human.subject(),"retention://test",tenant).get("asset_id");
+    UUID profile=(UUID)files.profile(asset,csv,"object://fixture/sample").get("profile_id");
+    var comp=Map.<String,Object>of("kind","STRUCTURED","targetPropertyIri",property,"dataAccessLabel","OPEN","typeRef",type+"@"+set,
+        "components",List.of(Map.of("component","name","fieldName","name","reader","TEXT_NFC_TRIM_V1"),
+            Map.of("component","locations","items",List.of())));
+    var draft=files.onboardIdempotent(asset,profile,source,"Sede","Comune",cls,List.of(cls+"@1",property+"@1",type+"@1",nested+"@1"),List.of("name"),
+        List.of(new ManagedFileService.FieldDecision("name","INCLUDE","OPEN",null,null,null,null,null)),null,human,"create","create",tenant,null,List.of(comp));
+    UUID version=(UUID)draft.get("onboardingVersionId");
+    var signal=Map.of("id",property,"semanticRef",property+"@"+set,"comparator","JSON_V1","excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","urn:assertion");
+    var identity=Map.of("ref","policy","version","1","tenantId",tenant,"sourceId",source,"canonicalClass",cls,"allowAutoNew",false,"maxCandidates",10,
+        "signals",List.of(signal),"sufficientRules",List.of(Map.of("id","rule","signalIds",List.of(property),"assertionRef","urn:rule")));
+    var udp=Map.<String,Object>of("resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1","policyRef","policy","governedIdentity",identity),
+        "materialization",Map.of("policyRef","policy","properties",List.of(Map.of("sourceField",property,"propertyIri",property,"datatype",type,
+            "accessLabel","OPEN","authorityOrder",List.of(source))),"bitemporalProperties",List.of(),"checkpointInterval",1));
+    var bindings=List.of(
+        new ManagedFileExecutionProposal.SemanticBinding(cls,"1",UUID.randomUUID().toString(),set),
+        new ManagedFileExecutionProposal.SemanticBinding(property,"1",UUID.randomUUID().toString(),set),
+        new ManagedFileExecutionProposal.SemanticBinding(type,"1",rev,set),
+        new ManagedFileExecutionProposal.SemanticBinding(nested,"1",nestedRev,nestedSet));
+    var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"typed-review",new ManagedFileExecutionProposal.Proposal(bindings,set,udp,new ManagedFileExecutionProposal.Limits(100,2,100)));
+    var principal=principal(tenant,human.subject());
+    for(var pin:bindings.subList(0,2))
+      when(registryReader.resolve(pin.semanticId(),pin.revisionId(),set)).thenReturn(Map.of("semantic_id",pin.semanticId(),"semantic_version","1",
+          "revision_id",pin.revisionId(),"publication_set_id",set,"artifact_type",pin.semanticId().equals(cls)?"CLASS":"PROPERTY","status","ACTIVE"));
+    var definition=Map.of("components",List.of(
+        Map.of("name","name","type","string","required",true,"cardinality","ONE"),
+        Map.of("name","locations","type",nested+"@"+nestedSet,"required",false,"cardinality","MANY")));
+    when(registryReader.resolve(type,rev,set)).thenReturn(Map.of("semantic_id",type,"semantic_version","1","revision_id",rev,"publication_set_id",set,
+        "artifact_type","DATATYPE","status","ACTIVE","definition",definition,"definitionSha256",hashes.ofDefinition(definition).substring(7),"label",Map.of("it","Recapito")));
+    var nestedDefinition=Map.of("components",List.of(Map.of("name","name","type","string","required",true,"cardinality","ONE")));
+    var nestedPin=new LinkedHashMap<>(Map.<String,Object>of("semantic_id",nested,"semantic_version","1","revision_id",nestedRev,"publication_set_id",nestedSet,
+        "artifact_type","DATATYPE","status","DEPRECATED","definition",nestedDefinition,
+        "definitionSha256",hashes.ofDefinition(nestedDefinition).substring(7),"label",Map.of("it","Posizione")));
+    when(registryReader.resolve(nested,nestedRev,nestedSet)).thenReturn(nestedPin);
+    assertThatThrownBy(()->reviews.prepare(principal,command,"prepare")).isInstanceOfSatisfying(
+        it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_DATATYPE_UNRESOLVED"));
+    assertThat(onboarding.version(source,version)).containsEntry("state","DRAFT");
+    assertThat(db.sql("select count(*) from ouf_onboarding.approval_challenge where onboarding_version_id=:v").param("v",version).query(Long.class).single()).isZero();
+    nestedPin.put("status","ACTIVE");
+    var review=reviews.prepare(principal,command,"retry");
+    assertThat(reviews.prepare(principal,command,"replay")).isEqualTo(review);
+    verify(registryReader,times(2)).resolve(type,rev,set);
+    verify(registryReader,times(2)).resolve(nested,nestedRev,nestedSet);
+    var card=reviews.humanCard(principal,(UUID)review.get("challengeId"));
+    assertThat(hashes.of(card.get("configuration"))).isEqualTo(review.get("configurationHash"));
+    var snapshot=(Map<String,Object>)card.get("reviewSnapshot");
+    assertThat(snapshot).containsEntry("COMPOSITION",Map.of(property,comp));
+    var datatypes=(Map<?,?>)snapshot.get("DATATYPE");
+    assertThat(((Map<?,?>)datatypes.get(type+"@"+set)).get("definition")).isEqualTo(definition);
+    assertThat(((Map<?,?>)datatypes.get(nested+"@"+nestedSet)).get("definition")).isEqualTo(nestedDefinition);
+  }
+  private record ValueMapFixture(PrincipalContext actor,ManagedOnboardingReviewService.Prepare command,
+      Map<String,Object> mapResponse,Map<String,Object> propertyResponse,String ref,String vocabulary,
+      Function<ManagedFileService,Map<String,Object>> create) {
+    UUID version(){return command.onboardingVersionId();}
+    ManagedFileExecutionProposal.SemanticBinding mapPin(){return command.executionProposal().semanticBindings().getFirst();}
+    ManagedFileExecutionProposal.SemanticBinding propertyPin(){return command.executionProposal().semanticBindings().getLast();}
+  }
+
+  private ValueMapFixture valueMapDraft(){
+    String source="colours",tenant="test-tenant",cls="urn:fixture:Place",property="urn:fixture:colour",map="urn:fixture:map";
+    String set=UUID.randomUUID().toString(),mapSet=UUID.randomUUID().toString(),ref=map+"@"+mapSet;
+    String vocabulary="urn:fixture:colours@"+UUID.randomUUID();
+    byte[] csv="code\nprivate-fixture-code\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.registerOwned(null,"object://fixture/codes.csv",hashes.ofBytes(csv),"text/csv",
+        csv.length,human.subject(),"retention://test",tenant).get("asset_id");
+    UUID profile=(UUID)files.profile(asset,csv,"object://fixture/codes-sample").get("profile_id");
+    var fields=List.of(new ManagedFileService.FieldDecision("code","INCLUDE","OPEN",property,"VALUE_MAP_V1",
+        null,null,null,Map.of("valueMapRef",ref)));
+    // Verify the map before the later property read can fail with a transient response.
+    var ids=List.of(map,cls,property);
+    Function<ManagedFileService,Map<String,Object>> create=service->service.onboardIdempotent(asset,profile,source,
+        "Colori","Comune",cls,ids.stream().map(id->id+"@1").toList(),
+        List.of("code"),fields,null,human,"create","create",tenant);
+    UUID version=(UUID)create.apply(files).get("onboardingVersionId");
+    var signal=Map.of("id",property,"semanticRef",property+"@"+set,"comparator","CONCEPT",
+        "excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","urn:assertion");
+    var identity=Map.of("ref","policy","version","1","tenantId",tenant,"sourceId",source,"canonicalClass",cls,
+        "allowAutoNew",false,"maxCandidates",10,"signals",List.of(signal),
+        "sufficientRules",List.of(Map.of("id","rule","signalIds",List.of(property),"assertionRef","urn:rule")));
+    var udp=Map.<String,Object>of("resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1",
+        "policyRef","policy","governedIdentity",identity),"materialization",Map.of("policyRef","policy","properties",List.of(
+            Map.of("sourceField",property,"propertyIri",property,"datatype","http://www.w3.org/2001/XMLSchema#anyURI",
+                "accessLabel","OPEN","authorityOrder",List.of(source))),"bitemporalProperties",List.of(),"checkpointInterval",1));
+    var bindings=ids.stream().map(id->new ManagedFileExecutionProposal.SemanticBinding(id,"1",
+        UUID.randomUUID().toString(),map.equals(id)?mapSet:set)).toList();
+    var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"map-review",
+        new ManagedFileExecutionProposal.Proposal(bindings,set,udp,new ManagedFileExecutionProposal.Limits(100,2,100)));
+    var actor=principal(tenant,human.subject());
+    var definition=Map.of("targetVocabulary",vocabulary,"labels",Map.of("it","Colori pubblicati"),
+        "entries",List.of(Map.of("code","private-fixture-code","concept","urn:fixture:red")));
+    var mapResponse=new LinkedHashMap<String,Object>();
+    var propertyResponse=new LinkedHashMap<String,Object>();
+    for(var pin:bindings){
+      String kind=cls.equals(pin.semanticId())?"CLASS":property.equals(pin.semanticId())?"PROPERTY":"VALUE_MAP";
+      var response=new LinkedHashMap<String,Object>(Map.of("semantic_id",pin.semanticId(),"semantic_version","1",
+          "revision_id",pin.revisionId(),"publication_set_id",pin.publicationSetId(),"artifact_type",kind,"status","ACTIVE"));
+      if("VALUE_MAP".equals(kind)){
+        response.put("definition",definition);
+        response.put("definitionSha256",hashes.ofDefinition(definition).substring(7));
+        mapResponse.putAll(response);
+      }
+      if("PROPERTY".equals(kind))propertyResponse.putAll(response);
+      when(registryReader.resolve(pin.semanticId(),pin.revisionId(),pin.publicationSetId()))
+          .thenReturn("VALUE_MAP".equals(kind)?mapResponse:response);
+    }
+    return new ValueMapFixture(actor,command,mapResponse,propertyResponse,ref,vocabulary,create);
+  }
+
+  @Test void d084_24_valueMapIsFrozenBeforeReviewAndTheCardExposesOnlyItsSummary(){
+    var fixture=valueMapDraft();
+    var review=reviews.prepare(fixture.actor(),fixture.command(),"prepare");
+    assertValueMapReview(fixture,review);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans={false,true})
+  void d084_37_valueMapPauseResumesExactlyOnceWithOrWithoutRestart(boolean restart){
+    var fixture=valueMapDraft();
+    pauseValueMap(fixture);
+    clearInvocations(registryReader);
+    assertThatThrownBy(()->reviews.prepare(fixture.actor(),fixture.command(),"early"))
+        .isInstanceOfSatisfying(DomainFailure.class,e->assertThat(e.properties()).containsEntry("preparationPhase","RETRY_WAIT"));
+    verifyNoInteractions(registryReader);
+    makeValueMapRetryDue(fixture);
+    if(restart){
+      try(var fresh=freshReviewContext()){
+        var reloaded=fresh.getBean(ManagedOnboardingReviewService.class);
+        assertThat(reloaded).isNotSameAs(reviews);
+        assertThat(fresh.getBean(OnboardingService.class)).isNotSameAs(onboarding);
+        resumeValueMap(fixture,reloaded,fresh.getBean(ManagedFileService.class));
+      }
+    }else resumeValueMap(fixture,reviews,files);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings={"RETIRED","DEPRECATED","MISSING","REPLACED","DIGEST_CHANGED","BAD_DIGEST"})
+  void d084_38_valueMapRetryRejectsRevocationReplacementAndDigestDrift(String change)throws Exception{
+    var fixture=valueMapDraft();
+    pauseValueMap(fixture);
+    makeValueMapRetryDue(fixture);
+    var pin=fixture.mapPin();
+    var response=fixture.mapResponse();
+    switch(change){
+      case "RETIRED","DEPRECATED" -> response.put("status",change);
+      case "MISSING" -> doThrow(DatatypeResolver.unresolved()).when(registryReader)
+          .resolve(pin.semanticId(),pin.revisionId(),pin.publicationSetId());
+      case "REPLACED" -> response.put("revision_id",UUID.randomUUID().toString());
+      case "DIGEST_CHANGED" -> {
+        var changed=Map.of("targetVocabulary",fixture.vocabulary(),
+            "entries",List.of(Map.of("code","private-fixture-code","concept","urn:fixture:blue")));
+        response.put("definition",changed);
+        response.put("definitionSha256",hashes.ofDefinition(changed).substring(7));
+      }
+      case "BAD_DIGEST" -> response.put("definitionSha256","0".repeat(64));
+      default -> throw new AssertionError(change);
+    }
+    clearInvocations(registryReader);
+    assertValueMapBlocked(fixture,fixture.command());
+    verify(registryReader).resolve(pin.semanticId(),pin.revisionId(),pin.publicationSetId());
+    clearInvocations(registryReader);
+    assertValueMapProblem(fixture);
+    var newKey=new ManagedOnboardingReviewService.Prepare(fixture.command().sourceId(),fixture.version(),0,
+        "same-selection-new-key",fixture.command().executionProposal());
+    assertValueMapBlocked(fixture,newKey);
+    verifyNoInteractions(registryReader);
+    assertPausedDraft(fixture);
+  }
+
+  private void assertValueMapProblem(ValueMapFixture fixture)throws Exception{
+    String path="/api/internal/v1/onboarding/managed-file-mcp/review-prepare";
+    var json=new ObjectMapper();
+    var raw=json.writeValueAsBytes(Map.of("Arguments",fixture.command()));
+    var receipts=mock(PermissionDelegationVerifier.class);
+    when(receipts.verifyManagedFile(null,path,ManagedOnboardingReviewService.PREPARE,raw))
+        .thenReturn(new PermissionDelegationVerifier.Delegated(fixture.actor(),fixture.command().commandKey()));
+    var mvc=MockMvcBuilders.standaloneSetup(new ManagedOnboardingReviewApi(receipts,reviews,json))
+        .setControllerAdvice(new ProblemHandler()).build();
+    mvc.perform(post(path).contentType("application/json").content(raw))
+        .andExpect(status().is(422)).andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+        .andExpect(jsonPath("$.code").value("ONB_VALUE_MAP_UNRESOLVED"))
+        .andExpect(jsonPath("$.state").value("DRAFT"))
+        .andExpect(jsonPath("$.preparationPhase").value("BLOCKED"))
+        .andExpect(jsonPath("$.detail").value(DatatypeResolver.unresolvedValueMap().getMessage()));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans={false,true})
+  void d084_39_valueMapRetryBudgetStaysExhausted(boolean expireTime){
+    var fixture=valueMapDraft();
+    pauseValueMap(fixture);
+    db.sql("update ouf_onboarding.managed_value_map_preparation set "+
+        (expireTime?"deadline=clock_timestamp()-interval '1 second'":"attempts=128")+" where onboarding_version_id=:v")
+        .param("v",fixture.version()).update();
+    clearInvocations(registryReader);
+    for(int replay=0;replay<2;replay++){
+      assertThatThrownBy(()->reviews.prepare(fixture.actor(),fixture.command(),"exhausted"))
+          .isInstanceOfSatisfying(DomainFailure.class,e->{
+            assertThat(e.code()).isEqualTo("ONB_VALUE_MAP_RETRY_EXHAUSTED");
+            assertThat(e.properties()).containsEntry("state","DRAFT").containsEntry("preparationPhase","EXHAUSTED");
+          });
+    }
+    verifyNoInteractions(registryReader);
+    assertPausedDraft(fixture);
+  }
+
+  @Test void d084_40_valueMapRetryFencesAConcurrentLateResult()throws Exception{
+    var fixture=valueMapDraft();
+    pauseValueMap(fixture);
+    makeValueMapRetryDue(fixture);
+    var reading=new CountDownLatch(1);
+    var release=new CountDownLatch(1);
+    var property=fixture.propertyPin();
+    doAnswer(call->{
+      reading.countDown();
+      assertThat(release.await(10,TimeUnit.SECONDS)).isTrue();
+      return fixture.propertyResponse();
+    }).doReturn(fixture.propertyResponse()).when(registryReader)
+        .resolve(property.semanticId(),property.revisionId(),property.publicationSetId());
+    try(var executor=Executors.newFixedThreadPool(2)){
+      var late=executor.submit(()->assertThatThrownBy(()->reviews.prepare(fixture.actor(),fixture.command(),"late"))
+          .isInstanceOfSatisfying(DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_VALUE_MAP_PREPARATION_LEASE_LOST")));
+      try{
+        assertThat(reading.await(5,TimeUnit.SECONDS)).isTrue();
+        executor.submit(()->assertThatThrownBy(()->reviews.prepare(fixture.actor(),fixture.command(),"concurrent"))
+            .isInstanceOfSatisfying(DomainFailure.class,e->assertThat(e.properties()).containsEntry("preparationPhase","CHECKING")))
+            .get(3,TimeUnit.SECONDS);
+        db.sql("update ouf_onboarding.managed_value_map_preparation set lease_until=clock_timestamp()-interval '1 second' where onboarding_version_id=:v")
+            .param("v",fixture.version()).update();
+        var review=reviews.prepare(fixture.actor(),fixture.command(),"after-lease");
+        assertValueMapReview(fixture,review);
+      }finally{release.countDown();}
+      late.get(5,TimeUnit.SECONDS);
+    }
+    assertThat(challengeCount(fixture.version())).isOne();
+  }
+
+  @Test void d084_41_withdrawalCancelsPausedValueMapPreparation(){
+    var fixture=valueMapDraft();
+    pauseValueMap(fixture);
+    clearInvocations(registryReader);
+    var withdraw=new ManagedOnboardingReviewService.Prepare(fixture.command().sourceId(),fixture.version(),0,
+        "withdraw-paused-map",null,"WITHDRAW");
+    assertThat(reviews.prepare(fixture.actor(),withdraw,"withdraw")).containsEntry("candidateDisposition","WITHDRAWN");
+    assertThatThrownBy(()->reviews.prepare(fixture.actor(),fixture.command(),"retry"))
+        .isInstanceOfSatisfying(DomainFailure.class,e->{
+          assertThat(e.code()).isEqualTo("ONB_REVIEW_STALE_VERSION");
+          assertThat(e.properties()).containsEntry("state","REJECTED").containsEntry("preparationPhase","CANCELLED");
+        });
+    verifyNoInteractions(registryReader);
+    assertThat(challengeCount(fixture.version())).isZero();
+  }
+
+  private ConfigurableApplicationContext freshReviewContext(){
+    return new SpringApplicationBuilder(OnboardingApplication.class).web(WebApplicationType.SERVLET)
+        .properties("server.port=-1","ouf.authorization.ths.public-origin=https://review.example")
+        .initializers(context->{
+          var beans=(GenericApplicationContext)context;
+          beans.registerBean("testRegistry",DatatypeResolver.class,()->registryReader,definition->definition.setPrimary(true));
+          beans.registerBean("testPolicy",AuthorizationPolicyRegistry.class,()->policy,definition->definition.setPrimary(true));
+        }).run();
+  }
+
+  private void pauseValueMap(ValueMapFixture fixture){
+    var property=fixture.propertyPin();
+    doAnswer(call->{
+      assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+      throw new DomainFailure(HttpStatus.SERVICE_UNAVAILABLE,"ONB_DATATYPE_LOOKUP_UNAVAILABLE",
+          "Fixture unavailable",Map.of("retryAfterSeconds",90));
+    }).doReturn(fixture.propertyResponse()).when(registryReader)
+        .resolve(property.semanticId(),property.revisionId(),property.publicationSetId());
+    assertThatThrownBy(()->reviews.prepare(fixture.actor(),fixture.command(),"prepare"))
+        .isInstanceOfSatisfying(DomainFailure.class,e->{
+          assertThat(e.code()).isEqualTo("ONB_DATATYPE_LOOKUP_UNAVAILABLE");
+          assertThat(e.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+          assertThat(e.properties()).containsEntry("state","DRAFT").containsEntry("preparationPhase","RETRY_WAIT")
+              .containsEntry("retryAfterSeconds",90);
+        });
+    assertThat(db.sql("""
+        select attempts,phase,digests->>cast(:ref as text) digest,lease_until
+        from ouf_onboarding.managed_value_map_preparation where onboarding_version_id=:v
+        """).param("ref",fixture.ref()).param("v",fixture.version()).query().singleRow())
+        .containsEntry("attempts",1).containsEntry("phase","RETRY_WAIT").containsEntry("lease_until",null)
+        .containsEntry("digest",fixture.mapResponse().get("definitionSha256"));
+    assertPausedDraft(fixture);
+  }
+
+  private void makeValueMapRetryDue(ValueMapFixture fixture){
+    db.sql("""
+        update ouf_onboarding.managed_value_map_preparation
+        set next_at=clock_timestamp()-interval '1 second',deadline=deadline-interval '3 hours'
+        where onboarding_version_id=:v
+        """).param("v",fixture.version()).update();
+  }
+
+  private void resumeValueMap(ValueMapFixture fixture,ManagedOnboardingReviewService service,ManagedFileService createService){
+    assertThat(fixture.create().apply(createService)).containsEntry("onboardingVersionId",fixture.version())
+        .containsEntry("state","DRAFT");
+    var review=service.prepare(fixture.actor(),fixture.command(),"retry");
+    assertThat(service.prepare(fixture.actor(),fixture.command(),"lost-response")).isEqualTo(review);
+    var pin=fixture.mapPin();
+    verify(registryReader).resolve(pin.semanticId(),pin.revisionId(),pin.publicationSetId());
+    assertThat(db.sql("select attempts,phase from ouf_onboarding.managed_value_map_preparation where onboarding_version_id=:v")
+        .param("v",fixture.version()).query().singleRow()).containsEntry("attempts",2).containsEntry("phase","COMPLETED");
+    assertThat(challengeCount(fixture.version())).isOne();
+    assertValueMapReview(fixture,review);
+  }
+
+  private void assertValueMapBlocked(ValueMapFixture fixture,ManagedOnboardingReviewService.Prepare command){
+    assertThatThrownBy(()->reviews.prepare(fixture.actor(),command,"retry")).isInstanceOfSatisfying(DomainFailure.class,e->{
+      assertThat(e.code()).isEqualTo("ONB_VALUE_MAP_UNRESOLVED");
+      assertThat(e.status()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+      assertThat(e.properties()).containsEntry("state","DRAFT").containsEntry("preparationPhase","BLOCKED");
+      assertThat(e).hasMessageContaining("published ACTIVE value map revision").hasMessageContaining("new commandKey");
+    });
+  }
+
+  private void assertPausedDraft(ValueMapFixture fixture){
+    var draft=onboarding.version(fixture.command().sourceId(),fixture.version());
+    assertThat(draft).containsEntry("state","DRAFT").containsEntry("lock_version",0L);
+    assertThat(((Map<?,?>)draft.get("configuration")).containsKey("semanticReferenceBindings")).isFalse();
+    assertThat(challengeCount(fixture.version())).isZero();
+    assertThat(versionCount(fixture.command().sourceId())).isOne();
+  }
+
+  private long challengeCount(UUID version){
+    return db.sql("select count(*) from ouf_onboarding.approval_challenge where onboarding_version_id=:v")
+        .param("v",version).query(Long.class).single();
+  }
+
+  private long versionCount(String source){
+    return db.sql("select count(*) from ouf_onboarding.onboarding_version where source_id=:source")
+        .param("source",source).query(Long.class).single();
+  }
+
+  private void assertValueMapReview(ValueMapFixture fixture,Map<String,Object> review){
+    String source=fixture.command().sourceId();
+    UUID version=fixture.version();
+    assertThat(review).containsEntry("state","IN_REVIEW").containsEntry("onboardingVersionId",version);
+    assertThat(versionCount(source)).isOne();
+    var json=new com.fasterxml.jackson.databind.ObjectMapper();
+    var frozen=json.valueToTree(onboarding.version(source,version).get("configuration"));
+    var embedded=frozen.path("semanticReferenceBindings").get(0);
+    assertThat(embedded.path("definition")).isEqualTo(json.valueToTree(fixture.mapResponse().get("definition")));
+    assertThat(embedded.path("definitionSha256").asText()).isEqualTo(fixture.mapResponse().get("definitionSha256"));
+    assertThat(embedded.path("revisionId").asText()).isEqualTo(fixture.mapPin().revisionId());
+    assertThat(hashes.of(onboarding.version(source,version).get("configuration"))).isEqualTo(review.get("configurationHash"));
+    var card=json.valueToTree(reviews.humanCard(fixture.actor(),(UUID)review.get("challengeId")));
+    assertThat(card.path("reviewSnapshot").path("FIELD").path("code").path("valueMap")).isEqualTo(json.valueToTree(
+        Map.of("valueMapRef",fixture.ref(),"name","Colori pubblicati","targetVocabulary",fixture.vocabulary(),"entryCount",1)));
+    assertThat(card.toString()).doesNotContain("private-fixture-code");
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"ACTIVE","DEPRECATED","RETIRED"})
+  void d084_17_historicalBundleReturnsFrozenDatatypeWithoutLiveStatusGate(String currentStatus)throws Exception{
+    String source="history",id="urn:test:historical",set=UUID.randomUUID().toString(),rev=UUID.randomUUID().toString();
+    onboarding.createSource(source,"Storico","INTERNAL_MANAGED","MANAGED","owner",Map.of(),human,"history");
+    var draft=onboarding.createVersion(source,Map.of(),human,"history");
+    UUID version=(UUID)draft.get("onboarding_version_id");
+    var definition=Map.of("components",List.of(Map.of("name","name","type","string","required",true,"cardinality","ONE")));
+    var pin=Map.of("semanticId",id,"publicationSetId",set,"revisionId",rev,"semanticVersion","1",
+        "definition",definition,"definitionSha256",hashes.ofDefinition(definition).substring(7));
+    String map="urn:test:historical-map",ref=map+"@"+set,vocabulary="urn:test:vocabulary@"+set;
+    var mapDefinition=Map.of("targetVocabulary",vocabulary,
+        "entries",List.of(Map.of("code","historical-code","concept","urn:test:concept")));
+    var mapPin=Map.of("semanticId",map,"semanticVersion","1","publicationSetId",set,"valueMapRef",ref,
+        "revisionId",rev,"targetVocabulary",vocabulary,"definition",mapDefinition,
+        "definitionSha256",hashes.ofDefinition(mapDefinition).substring(7));
+    var bundle=Map.of("semanticReferenceBindings",List.of(pin,mapPin));
+    db.sql("""
+        insert into ouf_onboarding.published_configuration(publication_id,source_id,onboarding_version_id,bundle_version,bundle,checksum,active,effective_from)
+        values(:id,:s,:v,1,cast(:b as jsonb),:h,false,transaction_timestamp())
+        """).param("id",UUID.randomUUID()).param("s",source).param("v",version)
+        .param("b",new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(bundle)).param("h",hashes.of(bundle)).update();
+    when(registryReader.resolve(id,rev,set)).thenReturn(Map.of("status",currentStatus));
+    when(registryReader.resolve(map,rev,set)).thenReturn(Map.of("status",currentStatus));
+    assertThat(onboarding.historicalBundle(source,version)).containsEntry("bundle",bundle).containsEntry("checksum",hashes.of(bundle));
+    verifyNoInteractions(registryReader);
+  }
+
   @Test void preparedMappingReadsAdoptedBytesAfterAnotherSemanticPublicationBecomesActive(){
     String semanticId="https://example.org/onto/Place";
     var registry=new PublishedSnapshots();
@@ -107,6 +549,8 @@ class ManagedOnboardingReviewRuntimeTest {
     var result=reviews.humanAction(p,challenge,changes?"changes":"reject",decision,"test-auth");
     assertThat(result).containsEntry("state",changes?"CHANGES_REQUESTED":"REJECTED").containsEntry("challengeStatus","CANCELLED");
     var read=reviews.readLatest(p,source);
+    assertThat(read.get("allowedActions")).isEqualTo(List.of(ManagedMcpObservation.Action.REDRAFT_SAME_FILE,
+        ManagedMcpObservation.Action.CREATE_REVISION));
     assertThat(read.get("reviewFeedback")).isEqualTo(changes?List.of(Map.of("section","FIELD","target","unused","comment","È personale")):List.of());
     assertThatThrownBy(()->reviews.humanAction(p,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,expected),"test-auth"))
         .hasMessage("ONB_REVIEW_STALE_CARD");
@@ -117,6 +561,10 @@ class ManagedOnboardingReviewRuntimeTest {
     java.util.function.Function<String,Map<String,Object>> create=key->files.onboardIdempotent(asset,profile,source,"Edicole","Mapper",
         type,List.of(type+"@1"),List.of("name"),decisions,null,human,"redraft",key,p.tenantId());
     var draft=create.apply("redraft:1");UUID child=(UUID)draft.get("onboardingVersionId");
+    assertThat(reviews.readLatest(p,source,(String)read.get("observationVersion")))
+        .containsEntry("onboardingVersionId",child).doesNotContainKey("unchanged");
+    assertThat(reviews.read(p,source,version,(String)read.get("observationVersion")))
+        .containsEntry("allowedActions",List.of(ManagedMcpObservation.Action.NONE)).doesNotContainKey("unchanged");
     assertThat(onboarding.version(source,child)).containsEntry("parent_version_id",version).containsEntry("version",2);
     assertThat(create.apply("redraft:1")).isEqualTo(draft);
     assertThatThrownBy(()->create.apply("redraft:duplicate")).isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class);

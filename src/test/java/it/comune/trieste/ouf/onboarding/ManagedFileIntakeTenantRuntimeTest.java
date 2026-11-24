@@ -21,6 +21,7 @@ class ManagedFileIntakeTenantRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->System.getenv("OUF_ONB_DB_URL"));r.add("spring.datasource.username",()->System.getenv("OUF_ONB_DB_USER"));r.add("spring.datasource.password",()->System.getenv("OUF_ONB_DB_PASSWORD"));}
   @Autowired ManagedFileService files;@Autowired ManagedProfileJobs jobs;@Autowired JdbcClient db;
   @Autowired CanonicalHash hashes;@Autowired ManagedFileProfiler profiler;@Autowired OnboardingService onboarding;@Autowired TransactionTemplate tx;
+  @Autowired ManagedPreviewPaging previewPaging;
   final byte[] csv="\uFEFFid;label\r\nA;Alpha\r\n".getBytes(StandardCharsets.UTF_8);
   @BeforeEach void clean(){db.sql("truncate ouf_onboarding.source,ouf_onboarding.managed_file_asset restart identity cascade").update();}
   Map<String,Object> owned(String ref,String tenant){return files.registerOwned(null,ref,hashes.ofBytes(csv),"text/csv",csv.length,"alice","retention://30d",tenant);}
@@ -32,7 +33,7 @@ class ManagedFileIntakeTenantRuntimeTest {
   String assetState(UUID asset){return db.sql("select to_jsonb(a)::text from ouf_onboarding.managed_file_asset a where asset_id=:a").param("a",asset).query(String.class).single();}
   @Test void nativeIntakeOwnershipSurvivesNewServiceInstanceWithoutUploadOrReviewReceipt(){
     UUID asset=(UUID)owned("object://fixture/native","tenant-a").get("asset_id");
-    var restarted=new ManagedFileService(db,new ObjectMapper(),hashes,profiler,tx,onboarding,jobs);
+    var restarted=new ManagedFileService(db,new ObjectMapper(),hashes,profiler,tx,onboarding,jobs,previewPaging);
     restarted.requireTenantOwner(asset,"tenant-a","alice");
     assertThat(restarted.ownedAssets("tenant-a","alice",20,null).get("items")).asList().hasSize(1);
     assertThat(db.sql("select count(*) from ouf_onboarding.managed_file_upload_attempt").query(Long.class).single()).isZero();

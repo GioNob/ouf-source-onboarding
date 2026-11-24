@@ -13,7 +13,7 @@ public class ManagedOnboardingReviewApi {
   private final PermissionDelegationVerifier receipts;
   private final ManagedOnboardingReviewService reviews;
   private final ObjectMapper json;
-  public record Read(String sourceId,UUID onboardingVersionId){}
+  public record Read(String sourceId,UUID onboardingVersionId,String ifObservationVersion){}
   public ManagedOnboardingReviewApi(PermissionDelegationVerifier receipts,ManagedOnboardingReviewService reviews,ObjectMapper json){
     this.receipts=receipts;this.reviews=reviews;this.json=json.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).disable(MapperFeature.ALLOW_COERCION_OF_SCALARS);
   }
@@ -32,13 +32,19 @@ public class ManagedOnboardingReviewApi {
     var caller=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),ManagedOnboardingReviewService.READ,raw);
     try{
       var args=json.readTree(raw).required("Arguments");
+      var validator=args.path("ifObservationVersion");
+      if(!validator.isMissingNode()&&(!validator.isTextual()||!validator.textValue().matches("sha256:[a-f0-9]{64}")))
+        throw new IllegalArgumentException("ONB_REVIEW_ARGUMENTS_INVALID");
       if(args.has("view")){
-        if(!args.isObject()||args.size()!=2||!args.path("sourceId").isTextual()||!args.path("view").isTextual()
+        if(!args.isObject()||args.size()!=(validator.isMissingNode()?2:3)||!args.path("sourceId").isTextual()||!args.path("view").isTextual()
             ||!"LATEST".equals(args.path("view").asText()))throw new IllegalArgumentException("ONB_REVIEW_ARGUMENTS_INVALID");
-        return reviews.readLatest(caller.principal(),args.path("sourceId").asText());
+        return validator.isMissingNode()?reviews.readLatest(caller.principal(),args.path("sourceId").asText())
+            :reviews.readLatest(caller.principal(),args.path("sourceId").asText(),validator.textValue());
       }
     }catch(java.io.IOException e){throw new IllegalArgumentException("ONB_REVIEW_ARGUMENTS_INVALID",e);}
-    var command=arguments(raw,Read.class);return reviews.read(caller.principal(),command.sourceId(),command.onboardingVersionId());
+    var command=arguments(raw,Read.class);
+    return command.ifObservationVersion()==null?reviews.read(caller.principal(),command.sourceId(),command.onboardingVersionId())
+        :reviews.read(caller.principal(),command.sourceId(),command.onboardingVersionId(),command.ifObservationVersion());
   }
   @ExceptionHandler(IllegalArgumentException.class) ResponseEntity<?> invalid(){return ResponseEntity.unprocessableEntity().body(Map.of("code","ONB_REVIEW_ARGUMENTS_INVALID"));}
   @ExceptionHandler(SecurityException.class) ResponseEntity<?> denied(){return ResponseEntity.status(403).body(Map.of("code","ONB_MANAGED_FILE_RECEIPT_INVALID"));}

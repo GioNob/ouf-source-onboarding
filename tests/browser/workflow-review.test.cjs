@@ -5,7 +5,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {chromium}=require('playwright');
 
-test('workflow HUMAN UI makes no automatic decisions and resumes exact approval before publication',async()=>{
+test('workflow HUMAN UI makes no automatic decisions and resumes exact approval before publication',async t=>{
   const root=path.resolve('src/main/resources/ths');
   let sessionExpired=false,returnPage;
   const server=http.createServer((req,res)=>{
@@ -69,6 +69,87 @@ test('workflow HUMAN UI makes no automatic decisions and resumes exact approval 
     semantic={...semantic,target_content_hash:'d'.repeat(64)};
     await page.getByRole('button',{name:'Accedi di nuovo'}).click();await page.locator('article.card').waitFor();
     assert.equal(await page.locator('article input').isChecked(),false);assert.equal(posts.length,2);
+    await t.test('d084_16 mostra la scheda DATATYPE restituita dal Semantic', async () => {
+      const component = {nome:'strade', etichetta:'Strade <img>', tipo:'Testo', cardinalità:'Più valori',
+        obbligatorio:'Sì', vincoli:'Lunghezza massima 80'};
+      const review = {componenti:[component], versionePrecedente:'Prima pubblicazione', differenze:[]};
+      semantic = {...semantic, artifact_type:'DATATYPE', label_json:{it:'Indirizzo'}, datatypeReview:review,
+        validationFindings:['Il componente «strade» è senza etichetta italiana.']};
+      delete semantic.adoptionProvenance;
+      await page.reload();
+      await page.getByRole('heading', {name:'Stai approvando il tipo strutturato «Indirizzo»'}).waitFor();
+      const table = page.getByRole('table', {name:'Componenti del tipo strutturato'});
+      await table.waitFor();
+      assert.deepEqual(await table.locator('thead th').allTextContents(), ['Nome','Tipo','Cardinalità','Obbligatorio','Vincoli']);
+      assert.deepEqual(await table.locator('tbody tr > *').allTextContents(), ['strade · Strade <img>','Testo','Più valori','Sì','Lunghezza massima 80']);
+      assert.equal(await table.locator('img').count(), 0);
+      assert.match(await page.locator('.warnings').innerText(), /Il componente «strade»/);
+      assert.doesNotMatch(await page.locator('.warnings').innerText(), /Licenza/);
+      await page.getByText('Prima pubblicazione', {exact:true}).waitFor();
+      review.versionePrecedente = '1.0';
+      const old = {name:'strade',type:'string',cardinality:'MANY',required:false};
+      review.differenze = [
+        {campo:'strade', modifica:'Modificato', prima:old, dopo:{...old,required:true,constraints:{maxLength:80}}},
+        {campo:'cap', modifica:'Aggiunto', dopo:{...old,name:'cap'}},
+        {campo:'civico', modifica:'Rimosso', prima:{...old,name:'civico'}},
+        {campo:'Ordine dei componenti', modifica:'Modificato', prima:['a','b'], dopo:['b','a']}
+      ];
+      await page.reload();
+      await page.getByText('1.0', {exact:true}).waitFor();
+      for (const change of review.differenze) {
+        await page.getByRole('heading', {name:change.campo + ' · ' + change.modifica}).waitFor();
+      }
+      for (const text of ['Prima · strade · testo · Più valori · Facoltativo',
+        'Dopo · strade · testo · Più valori · Obbligatorio · Lunghezza massima 80',
+        'Dopo · cap · testo · Più valori · Facoltativo','Prima · civico · testo · Più valori · Facoltativo',
+        'Prima · a → b','Dopo · b → a']) await page.getByText(text, {exact:true}).waitFor();
+      review.differenze = [];
+      await page.reload();
+      await page.getByText('Nessuna differenza.', {exact:true}).waitFor();
+      const viewport = page.viewportSize();
+      await page.setViewportSize({width:375,height:720});
+      const region = page.getByRole('region', {name:'Componenti del tipo strutturato'});
+      await region.focus();
+      assert.equal(await region.evaluate(el => el === document.activeElement && el.scrollWidth > el.clientWidth), true);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+      await page.setViewportSize(viewport);
+      assert.equal(posts.length, 2);
+    });
+    await t.test('d084_31 presenta e rende scorrevole la mappa di valori semantica a 375 px', async () => {
+      const viewport = page.viewportSize();
+      await page.setViewportSize({width:375,height:720});
+      const review = {name:'Stati <img>', targetVocabulary:{label:'Stato di apertura',semanticId:'urn:test:vocabolario',publicationSetId:id},
+        entryCount:2000, sourceColumn:{fieldName:'codice_stato',sourceId:'source-1'},
+        entries:Array.from({length:2000}, (_, i) => ({code:'C'+String(i).padStart(4,'0'),
+          concept:'urn:test:concetto:'+('x'.repeat(120))+i, conceptLabel:'Etichetta <img> '+i})),
+        changes:{added:['C1999'],removed:['COLD'],changed:[{code:'C0000',from:'urn:before',to:'urn:after'}]}};
+      semantic = {...semantic, artifact_type:'VALUE_MAP', label_json:{it:review.name}, valueMapReview:review, validationFindings:[]};
+      await page.reload();
+      await page.getByRole('heading', {name:'Stai approvando la mappa di valori «Stati <img>»'}).waitFor();
+      const view = page.locator('.value-map-review');
+      for (const text of ['Stato di apertura','urn:test:vocabolario','2000','codice_stato','source-1','1 aggiunti · 1 rimossi · 1 modificati',
+        'Prima · urn:before','Dopo · urn:after','COLD']) await view.getByText(text, {exact:true}).waitFor({state:'attached'});
+      const region = view.getByRole('region', {name:'Codici e concetti associati'});
+      const rows = region.locator('tbody tr');
+      assert.equal(await rows.count(),2000);
+      assert.equal(await rows.first().getByRole('rowheader').innerText(),'C0000');
+      assert.match(await rows.first().getByRole('cell').innerText(),/Etichetta <img> 0/);
+      assert.equal(await view.locator('img').count(),0);
+      await region.focus();
+      assert.equal(await region.evaluate(el => el === document.activeElement && el.scrollHeight > el.clientHeight && el.scrollWidth === el.clientWidth),true);
+      await rows.last().scrollIntoViewIfNeeded();
+      assert.ok(await region.evaluate(el => el.scrollTop > 0));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),true);
+      await page.locator('article input[type=checkbox]').check();
+      assert.equal(await page.locator('#approve').isEnabled(),true);
+      delete semantic.valueMapReview;
+      await page.reload();
+      await page.getByText(/Dettagli della mappa di valori non disponibili/).waitFor();
+      await page.locator('article input[type=checkbox]').check();
+      assert.equal(await page.locator('#approve').isDisabled(),true);
+      assert.equal(posts.length,2);
+      await page.setViewportSize(viewport);
+    });
     let sourcePosts=0,budgetPosts=0,budgetCommand,dependencyCorrected=false;
     const blocked={readiness_phase:'BLOCKED',readiness_generation:1,readiness_last_code:'ONB_READINESS_DEPENDENCY_422',
       sessionAttempts:1,cumulativeAttempts:1,maximumAttempts:128,budgetExpiresAt:'2999-01-01T00:00:00Z',

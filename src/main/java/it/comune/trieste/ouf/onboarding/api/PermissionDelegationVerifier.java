@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.onboarding.api;
 import com.fasterxml.jackson.databind.*;
 import it.comune.trieste.ouf.authorization.PrincipalContext;
 import it.comune.trieste.ouf.onboarding.authorization.BootstrapAdministrator;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileLimits;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.*;
@@ -16,6 +17,9 @@ import org.springframework.stereotype.Component;
 /** A separate, purpose-bound owner receipt. The signing key is never distributed to MCP. */
 @Component
 public class PermissionDelegationVerifier {
+ static final String MANAGED_CREATE_CAPABILITY="ouf.managed-source.onboarding.create";
+ private static final String MANAGED_CREATE_PATH="/api/internal/v1/onboarding/managed-file-mcp/create";
+ private static final int DEFAULT_MAX_BODY_BYTES=65_536;
  private final ObjectMapper json;private final String issuer,audience,workload;private final byte[] key;
  public record Delegated(PrincipalContext principal,String idempotencyKey){}
  public record Receipt(int v,String purpose,String method,String path,String bodyHash,String capability,long iat,long exp,String issuer,String audience,String workload,String subject,String tenant,String acr,String roles,String scope,String idempotencyKey){}
@@ -28,15 +32,17 @@ public class PermissionDelegationVerifier {
  }
  private SecurityException denied(){return new SecurityException("AUTH_OWNER_RECEIPT_INVALID");}
  public Delegated verify(String proof,String path,String capability,byte[] body){
-  return verifyBound(proof,path,capability,body,"authorization-proposal-owner","ouf-authorization-owner-v1.");
+  return verifyBound(proof,path,capability,body,"authorization-proposal-owner","ouf-authorization-owner-v1.",DEFAULT_MAX_BODY_BYTES);
  }
  /** Managed-file receipts use a distinct purpose and MAC domain. */
  public Delegated verifyManagedFile(String proof,String path,String capability,byte[] body){
-  return verifyBound(proof,path,capability,body,"managed-file-owner","ouf-managed-file-owner-v1.");
+  int limit=MANAGED_CREATE_CAPABILITY.equals(capability) && MANAGED_CREATE_PATH.equals(path)
+      ? ManagedFileLimits.MAX_MAPPING_ENVELOPE_BYTES : DEFAULT_MAX_BODY_BYTES;
+  return verifyBound(proof,path,capability,body,"managed-file-owner","ouf-managed-file-owner-v1.",limit);
  }
  /** Generic source revisions cannot reuse a managed-file or authorization receipt. */
  public Delegated verifySourceRevision(String proof,String path,String capability,byte[] body){
-  return verifyBound(proof,path,capability,body,"source-revision-owner","ouf-source-revision-owner-v1.");
+  return verifyBound(proof,path,capability,body,"source-revision-owner","ouf-source-revision-owner-v1.",DEFAULT_MAX_BODY_BYTES);
  }
  /** A distinct MAC domain prevents JSON-command receipts from authorizing a CSV stream. */
  public DelegatedUpload verifyManagedUpload(String proof,String path){
@@ -69,9 +75,9 @@ public class PermissionDelegationVerifier {
    return new DelegatedUpload(principal,r.idempotencyKey(),r.fileId(),r.expectedHash(),r.expectedLength());
   }catch(Exception e){throw denied();}
  }
- private Delegated verifyBound(String proof,String path,String capability,byte[] body,String purpose,String macDomain){
+ private Delegated verifyBound(String proof,String path,String capability,byte[] body,String purpose,String macDomain,int maxBodyBytes){
   try{
-   if(key.length!=64||issuer.isBlank()||audience.isBlank()||proof==null||proof.length()>16384||body.length>65536)throw denied();
+   if(key.length!=64||issuer.isBlank()||audience.isBlank()||proof==null||proof.length()>16384||body.length>maxBodyBytes)throw denied();
    var parts=proof.split("\\.",-1);if(parts.length!=2||!parts[0].matches("[A-Za-z0-9_-]+")||!parts[1].matches("[A-Za-z0-9_-]+"))throw denied();
    var mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(key,"HmacSHA256"));
    if(!MessageDigest.isEqual(mac.doFinal((macDomain+parts[0]).getBytes(StandardCharsets.US_ASCII)),Base64.getUrlDecoder().decode(parts[1])))throw denied();

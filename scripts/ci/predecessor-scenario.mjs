@@ -53,12 +53,18 @@ async function profile(fixture, sourceId) {
     stagingRef: 'object://ci/' + sourceId + '.csv', contentHash: 'sha256:' + sha256(csv),
     mediaType: 'text/csv', sizeBytes: csv.length, retentionRef: 'retention://ci',
   })});
-  const {job_id: job} = await json(`${files}/${assetId}/profile`, {method: 'POST', status: 202,
+  const request = () => json(`${files}/${assetId}/profile`, {method: 'POST', status: 202,
     headers: {...headers, 'Idempotency-Key': 'profile-' + sourceId}});
+  const {job_id: job} = await request();
   for (let n = 0; n < 45; n++) {
     const result = await json(`${files}/${assetId}/profile-jobs/${job}`, {headers});
     if (result.status === 'SUCCEEDED') {
       assert.ok(result.resultRef);
+      if (sourceId === 'return-profile') {
+        const replay = await request();
+        assert.equal(replay.job_id, job);
+        assert.equal(replay.resultRef, result.resultRef);
+      }
       return {sourceId, assetId, profileId: result.resultRef};
     }
     assert.ok(['QUEUED', 'RUNNING'].includes(result.status), 'Unexpected profile state: ' + result.status);
@@ -180,10 +186,28 @@ export async function writeCandidate(fixture, {legacyReview, parent, file}) {
   assert.equal(row.state, 'DRAFT');
   assert.equal(row.version, 2);
   assert.equal(row.parent_version_id, parent.onboardingVersionId);
-  return {review, child, readiness};
+  const typedFile = await profile(fixture, 'value-types');
+  const result = await command(fixture, 'preview', caps.preview,
+    {assetId: typedFile.assetId, profileId: typedFile.profileId}, 'candidate-profile-read');
+  const [redacted, eligible] = result.columns;
+  assert.equal(redacted.distinctValues, undefined);
+  assert.equal(redacted.distinctCount, 1);
+  assert.deepEqual(eligible.distinctValues, ['1']);
+  assert.equal(result.redactedSample[0].name, '[REDACTED]');
+  const typed = await command(fixture, 'create', caps.create, {...typedFile, name:'CI value types', owner:'CI',
+    targetClassIri:type, semanticRefs:[type+'@1',property+'@1'], sourceObjectKeyFields:['name'],
+    fields:[{fieldName:'name',extractionDecision:'INCLUDE',dataAccessLabel:'OPEN'},
+      {fieldName:'unused',extractionDecision:'INCLUDE',dataAccessLabel:'OPEN'}],
+    compositions:[{kind:'CONSTRUCTOR',constructorId:'TEXT_JOIN_V1',targetPropertyIri:property,dataAccessLabel:'OPEN',
+      inputs:[{role:'part',fieldName:'name',reader:'TEXT_NFC_TRIM_V1'},{role:'part',fieldName:'unused',reader:'IDENTITY'}],
+      params:{separator:' / '}}]}, 'create-typed');
+  const mapping = (await version(fixture, typed)).configuration.semanticMapping;
+  assert.equal(mapping.compositions[0].inputs[0].reader,'TEXT_NFC_TRIM_V1');
+  return {review, child, readiness, typed, mapping};
 }
 
-export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child, readiness}) {
+export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child, readiness, typed, mapping}) {
+  assert.deepEqual((await version(fixture, typed)).configuration.semanticMapping, mapping);
   const original = await version(fixture, legacy);
   assert.equal(original.configuration_hash, legacyReview.configurationHash);
   assert.equal(original.state, 'APPROVED');
@@ -194,7 +218,7 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.equal(rejected.state, 'REJECTED');
   assert.equal(rejected.configuration_hash, review.configurationHash);
   const {card} = await openCard(fixture, review);
-  // The predecessor in production (b3f33586, V43) projects a rejection with review notes as CHANGES_REQUESTED,
+  // The V43 predecessors (b3f33586 and 9eeff596) project a rejection with review notes as CHANGES_REQUESTED,
   // both in the progress and in the card state derived from it (the version row stays REJECTED, checked above).
   assert.equal(card.onboardingState, 'CHANGES_REQUESTED');
   assert.equal(card.progress.state, 'CHANGES_REQUESTED');
@@ -203,11 +227,19 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.equal(row.parent_version_id, parent.onboardingVersionId);
   assert.equal(row.state, 'DRAFT');
   // Reconcile a candidate command, then exercise a new predecessor write and its identical retry.
-  assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'), child);
+  // The candidate adds the D-085 observation fields; the predecessor replays the same command with its V43 shape.
+  const additive = new Set(['workflowState', 'reasonCode', 'allowedActions', 'lockVersion']);
+  assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'),
+    Object.fromEntries(Object.entries(child).filter(([key]) => !additive.has(key))));
   const prepared = await prepare(fixture, child, 'return-review');
   assert.equal(prepared.state, 'IN_REVIEW');
   assert.equal(prepared.challengeStatus, 'CREATED');
   assert.notEqual(prepared.challengeId, review.challengeId);
   assert.deepEqual(await prepare(fixture, child, 'return-review'), prepared);
   assert.equal((await version(fixture, child)).configuration_hash, prepared.configurationHash);
+  const headers = {Authorization: 'Bearer ' + fixture.bearer()};
+  const retained = await json(`${files}/${typed.assetId}/profiles/${typed.profileId}`, {headers});
+  assert.deepEqual(retained.inferred_schema.map(c => c.distinctValues), [1, 1]);
+  assert.equal(retained.distinct_cell_values, undefined);
+  return profile(fixture, 'return-profile');
 }

@@ -76,20 +76,17 @@ public class ConfigurationValidator {
         if(!Set.of("policyRef","cardinality","normalizerRef","normalizerVersion","validity","revisionField","deletionField").containsAll(rule.keySet()))throw new IllegalArgumentException();
         for(String field:List.of("propertyIri","sourceField","datatype","accessLabel"))if(!(property.get(field) instanceof String s)||s.isBlank())throw new IllegalArgumentException();
         String datatype=Objects.toString(property.get("datatype"),"");
-        datatype=switch(datatype){
-          case "http://www.w3.org/2001/XMLSchema#string" -> "string";
-          case "http://www.w3.org/2001/XMLSchema#decimal" -> "number";
-          case "http://www.w3.org/2001/XMLSchema#date" -> "date";
-          default -> datatype;
-        };
+        boolean supported=ValueReader.DATATYPES.containsValue(datatype) || Set.of("string","number","integer","boolean","object","date","list").contains(datatype)
+            || configuration.get("semanticReferenceBindings") instanceof List<?> pins && pins.stream()
+                .anyMatch(pin->pin instanceof Map<?,?> binding && datatype.equals(binding.get("semanticId")) && !binding.containsKey("valueMapRef") && binding.get("definition") instanceof Map<?,?>);
         if(!"urn:ouf:policy:linked-object-property-reconciliation:v1".equals(rule.get("policyRef"))
             ||!Set.of("SINGLE","MULTI").contains(Objects.toString(rule.get("cardinality"),""))
             ||!Set.of("EXACT_TYPED","NFC_TRIM").contains(Objects.toString(rule.get("normalizerRef"),""))
             ||!(rule.get("normalizerVersion") instanceof Number n)||new java.math.BigDecimal(n.toString()).compareTo(java.math.BigDecimal.ONE)!=0
             ||!Set.of("UNBOUNDED","SOURCE_INTERVAL").contains(Objects.toString(rule.get("validity"),""))
-            ||!Set.of("string","number","integer","boolean","object","date").contains(datatype))throw new IllegalArgumentException();
+            ||!supported)throw new IllegalArgumentException();
         for(String field:List.of("revisionField","deletionField"))if(rule.get(field)!=null&&(!(rule.get(field) instanceof String s)||s.isBlank()))throw new IllegalArgumentException();
-        if("NFC_TRIM".equals(rule.get("normalizerRef"))&&!"string".equals(datatype))throw new IllegalArgumentException();
+        if("NFC_TRIM".equals(rule.get("normalizerRef"))&&!"string".equals(datatype)&&!ValueReader.DATATYPES.get("string").equals(datatype))throw new IllegalArgumentException();
         if(!(property.get("authorityOrder") instanceof List<?> order)||new HashSet<>(order).size()!=order.size()||order.stream().anyMatch(v->!(v instanceof String s)||s.isBlank()))throw new IllegalArgumentException();
         if(rule.get("deletionField")!=null&&(!"SINGLE".equals(rule.get("cardinality"))||rule.get("revisionField")==null||order.isEmpty()))throw new IllegalArgumentException();
         if(profile.get("bitemporalProperties") instanceof List<?> temporal&&temporal.contains(property.get("propertyIri"))&&("MULTI".equals(rule.get("cardinality"))||rule.get("deletionField")!=null))throw new IllegalArgumentException();
@@ -158,6 +155,8 @@ public class ConfigurationValidator {
       var materialization=object(udp,"materialization").orElse(Map.of());
       if(materialization.get("properties") instanceof List<?> properties)for(Object property:properties)
         if(property instanceof Map<?,?> entry && entry.get("propertyIri") instanceof String iri)materialized.add(iri);
+      if(semantic.get("compositions") instanceof List<?> compositions)for(var composition:compositions)
+        if(composition instanceof Map<?,?> entry && entry.get("targetPropertyIri") instanceof String iri)mapped.add(iri);
       if(!mapped.equals(materialized))throw new IllegalArgumentException("ONB_CANONICAL_MAPPING_INCOMPLETE");
       GovernedIdentityProposal.validate(resolution,resolution.get("governedIdentity"),sourceId,classes,mapped);
       out.add(new Finding("INFO","ONB_GOVERNED_IDENTITY_PROPOSAL",path,
