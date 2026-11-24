@@ -1,8 +1,16 @@
 # Managed CSV execution proposal
 
-`ManagedFileExecutionProposal.compile` completes an owner-retained managed CSV DRAFT for human review. The caller supplies exact published semantic bindings, one selected publication set, an explicit governed UDP resolution/materialization policy and finite parser limits. The owner derives source, immutable asset, profile, staging/hash/size, mapping and adapter references. Neither configuration state nor runtime authority changes in this pure compiler.
+`ManagedFileExecutionProposal.compile` completes an owner-retained managed CSV DRAFT for human review. The caller supplies exact published semantic bindings, one selected publication set, an explicit governed UDP resolution/materialization policy. The caller may restrict the parser limits. The owner derives source, immutable asset, profile, staging/hash/size, mapping and adapter references. Neither configuration state nor runtime authority changes in this pure compiler.
 
 Preparation accepts `TEXT_NFC_TRIM_V1` on profiled `STRING` columns. Its materialization datatype is `xsd:string` and its governed identity comparator is `TEXT_V1`. The owner verifies the projected types and looks up the published pins before freezing this configuration. Execution and compatibility attestation remain separate lifecycle steps.
+
+### Acquisition limits
+
+Onboarding reads the selected profile. Rows count data records and columns count the complete header, including excluded fields. For CSV, the optional integer `metadata.maxCellChars` measures the longest decoded data cell before trimming, in UTF-16 units. The profiler skips the UTF-8 BOM and uses RFC 4180 with the selected delimiter. Header-only files and files with only empty data cells have a measured maximum cell length of zero. Historical profiles without this key and XLSX profiles have no cell measurement.
+
+For each dimension, the ceiling is `min(installationMaximum, max(1, observed + minHeadroom, ceil(observed × (100 + marginPercent) / 100)))`. An unmeasured cell uses the installation maximum. Both `executionProposal.limits` and its individual integer fields are optional. An omitted field takes the ceiling. A supplied field takes the smaller of the request and the ceiling. Only the effective numbers enter the execution configuration.
+
+HTTP 422 identifies the first failed dimension in row, column, cell order. A measured count above installation capacity returns `ONB_ACQUISITION_LIMIT_INSTALLATION_EXCEEDED` with `limit`, `observed` and `installationMaximum`. A requested limit below the measurement returns `ONB_ACQUISITION_LIMIT_BELOW_PROFILE` with `limit`, `observed` and `ceiling`. Invalid shapes or values outside the absolute integer ranges (1–1,000,000 rows or cell units, 1–10,000 columns) return `ONB_MANAGED_EXECUTION_PROPOSAL_INVALID`.
 
 ### Draft reader checks and recovery
 
@@ -28,7 +36,7 @@ Draft responses list missing proposal sections in this order.
 | `udp.materialization` | Materialization policy in the same UDP object |
 | `limits` | Finite `maxRows`, `maxColumns` and `maxCellChars` in execution |
 
-The retained version-1 exact-key CSV profiles used before governed proposals can prepare with their historical limits. The list reports missing inputs. Compilation still verifies the complete submitted proposal against the asset, profile, owner and mapping.
+The retained version-1 exact-key CSV profiles used before governed proposals can prepare with their historical limits. The list reports missing execution sections. Onboarding supplies missing parser limits when compiling a proposal. Compilation still verifies the complete submitted proposal against the asset, profile, owner and mapping.
 
 Every `create.semanticRefs` entry uses `semanticId@semanticVersion`. A UUID suffix returns HTTP 422 with `ONB_SEMANTIC_REF_FORM_INVALID` and the zero-based `index`. Supply the publication set UUID in the separate proposal fields. A binding set that differs from the retained references returns HTTP 422 with `ONB_SEMANTIC_REF_VERSION_MISMATCH` and `semanticRef`. It identifies the first missing retained coordinate, or the first retained coordinate if all are covered and the proposal contains surplus bindings. The draft can be prepared again with corrected bindings.
 
