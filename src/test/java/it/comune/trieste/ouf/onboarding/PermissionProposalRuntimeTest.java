@@ -74,7 +74,16 @@ class PermissionProposalRuntimeTest {
  }
  PermissionProposalService.Change change(){return new PermissionProposalService.Change("UPSERT","status-grant",new Grant("status-grant","ouf.system.status","tenant-a","giovanni",null,null,now.minusSeconds(5),now.plusSeconds(3600)),"Concedere lettura stato");}
  @Test void capabilityViewEnumeratesTheActiveHumanDescriptorSet()throws Exception{
-  byte[] body=json.writeValueAsBytes(Map.of("Arguments",Map.of("view","CAPABILITIES")));
+  var envelope=json.createObjectNode();
+  envelope.put("GatewayBindingRef","capability://"+PermissionProposalService.READ);
+  envelope.put("CapabilityID",PermissionProposalService.READ).put("Owner","authorization").put("OperationClass","READ");
+  envelope.putObject("Arguments").put("view","CAPABILITIES");
+  envelope.putObject("Identity").put("PrincipalID",proposer.subjectId()).put("TenantID",proposer.tenantId())
+      .put("ActorType","HUMAN").put("AuthenticationContextRef","1").put("ServicePrincipalID","fixture-client");
+  envelope.put("AuthorizationDecisionRef","decision-read").put("CorrelationID","read-catalogue")
+      .put("IdempotencyKey","tool-attempt").put("AttemptID",UUID.randomUUID().toString())
+      .put("RequestHash","a".repeat(64)).put("MaxResultBytes",1048576);
+  byte[] body=json.writeValueAsBytes(envelope);
   http.perform(post(API+"read").header("X-OUF-Authorization-Receipt",receipt("read",PermissionProposalService.READ,body,now.plusSeconds(30).getEpochSecond()))
       .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk())
       .andExpect(jsonPath("$.length()").value(descriptors.size()))
@@ -257,6 +266,130 @@ class PermissionProposalRuntimeTest {
  PermissionProposalService.Change discoveryRole(){
   return adminRole(DISCOVERY_DESCRIPTORS.stream().map(CapabilityDescriptor::capabilityId).toList());
  }
+ private static final GrantConstraints LABELS_AND_LEVELS=new GrantConstraints("ALLOW",null,null,null,Map.of(),
+     Set.of("ANONYMOUS","OPEN","PERSONAL","RESTRICTED","SENSITIVE"),
+     Set.of("PUBLIC_OPERATIONAL","RESTRICTED_OPERATIONAL","SECURITY_SENSITIVE","TENANT_OPERATIONAL"),null,Set.of(),null);
+
+ private PermissionProposalService.Change semanticRole(List<OufRoleCatalogue.Permission> permissions){
+  var role=new OufRoleCatalogue.Role("admin","Amministratore",permissions);
+  var assignment=new OufRoleCatalogue.Assignment("reader","admin",proposer.subjectId(),null,
+      now.minusSeconds(5),now.plusSeconds(3600));
+  return new PermissionProposalService.Change("REPLACE_ROLES",null,null,"Aggiornare i permessi di ricerca",
+      new OufRoleCatalogue.Snapshot(ISSUER,List.of(role),List.of(assignment)));
+ }
+
+ private org.springframework.test.web.servlet.ResultActions delegatedPost(String path,String capability,Object arguments)throws Exception{
+  byte[] body=json.writeValueAsBytes(Map.of("Arguments",arguments));
+  return http.perform(post(API+path).contentType(MediaType.APPLICATION_JSON).content(body)
+      .header("X-OUF-Authorization-Receipt",receipt(path,capability,body,now.plusSeconds(30).getEpochSecond())));
+ }
+
+ @Test void batchConstraintsRejectBothFieldsBeforeWritingAndTheSameKeyCanBeCorrected()throws Exception{
+  release.run(null);
+  var invalid=semanticRole(List.of(new OufRoleCatalogue.Permission(BATCH_SEARCH.capabilityId(),LABELS_AND_LEVELS)));
+  for(int i=0;i<2;i++){
+   var result=delegatedPost("propose",PermissionProposalService.PROPOSE,invalid)
+       .andExpect(status().isUnprocessableEntity()).andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+       .andExpect(jsonPath("$.code").value("AUTH_GRANT_CONSTRAINTS_INAPPLICABLE"))
+       .andExpect(jsonPath("$.title").isNotEmpty()).andExpect(jsonPath("$.truncated").value(false)).andReturn();
+   var violations=json.readTree(result.getResponse().getContentAsByteArray()).required("violations");
+   assertThat(violations.size()).isEqualTo(2);
+   for(var violation:violations){
+    assertThat(violation.required("role").asText()).isEqualTo("admin");
+    assertThat(violation.required("grantId").isNull()).isTrue();
+    assertThat(violation.required("capabilityId").asText()).isEqualTo(BATCH_SEARCH.capabilityId());
+    assertThat(violation.has("kind")).isFalse();
+   }
+   assertThat(violations.get(0).required("field").asText()).isEqualTo("allowedDataLabels");
+   assertThat(violations.get(0).required("missingResourceAttribute").asText()).isEqualTo("dataAccessLabel");
+   assertThat(violations.get(1).required("field").asText()).isEqualTo("allowedDetailLevels");
+   assertThat(violations.get(1).required("missingResourceAttribute").asText()).isEqualTo("detailLevel");
+  }
+  assertThat(db.sql("select count(*) from ouf_authorization.permission_proposal").query(Long.class).single()).isZero();
+  var corrected=semanticRole(List.of(new OufRoleCatalogue.Permission(BATCH_SEARCH.capabilityId(),null)));
+  delegatedPost("propose",PermissionProposalService.PROPOSE,corrected).andExpect(status().isOk())
+      .andExpect(jsonPath("$.constraintWarnings.length()").value(0));
+  assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
+ }
+
+ @Test void unchangedRoleConstraintIsVisibleOnReceiptReplayStatusAndThsCard()throws Exception{
+  release.run(null);
+  var legacy=new OufRoleCatalogue.Permission(SEARCH,LABELS_AND_LEVELS);
+  var base=semanticRole(List.of(legacy)).roleCatalogue();
+  // Import a role catalogue and its compiled grants as published by an earlier release.
+  var caps=new ArrayList<>(descriptors);
+  caps.add(new CapabilityDescriptor(SEARCH,"READ",SEARCH,Set.of(PrincipalContext.ActorType.HUMAN)));
+  db.sql("insert into ouf_authorization.role_catalogue(tenant_id,payload,policy_ref,changed_by) values(:t,cast(:p as jsonb),'permissions:2','fixture')")
+      .param("t",proposer.tenantId()).param("p",json.writeValueAsString(base)).update();
+  var grants=new ArrayList<>(registry.load("permissions",1).grants());
+  grants.addAll(OufRoleCatalogue.compile(base,proposer.tenantId(),ISSUER,caps));
+  var draft=admin.create(new PolicyBundle("permissions",2,now,caps,grants),actor(root));
+  admin.publish(draft.id(),draft.revision(),actor(root));
+  var invalid=semanticRole(List.of(legacy,new OufRoleCatalogue.Permission(BATCH_SEARCH.capabilityId(),LABELS_AND_LEVELS)));
+  delegatedPost("propose",PermissionProposalService.PROPOSE,invalid).andExpect(status().isUnprocessableEntity())
+      .andExpect(jsonPath("$.violations.length()").value(2))
+      .andExpect(jsonPath("$.violations[0].capabilityId").value(BATCH_SEARCH.capabilityId()))
+      .andExpect(jsonPath("$.violations[1].capabilityId").value(BATCH_SEARCH.capabilityId()));
+  var proposed=semanticRole(List.of(legacy,new OufRoleCatalogue.Permission(BATCH_SEARCH.capabilityId(),null)));
+  var response=delegatedPost("propose",PermissionProposalService.PROPOSE,proposed).andExpect(status().isOk()).andReturn();
+  var receipt=json.readTree(response.getResponse().getContentAsByteArray());
+  var warnings=receipt.required("constraintWarnings");
+  assertThat(warnings.size()).isEqualTo(2);
+  for(var warning:warnings){
+   assertThat(warning.required("kind").asText()).isEqualTo("INERT_UNCHANGED");
+   assertThat(warning.required("capabilityId").asText()).isEqualTo(SEARCH);
+   assertThat(warning.required("role").asText()).isEqualTo("admin");
+  }
+  String id=receipt.required("proposalId").asText();
+  var replay=delegatedPost("propose",PermissionProposalService.PROPOSE,proposed).andExpect(status().isOk()).andReturn();
+  assertThat(json.readTree(replay.getResponse().getContentAsByteArray())).isEqualTo(receipt);
+  var status=delegatedPost("status",PermissionProposalService.STATUS,Map.of("proposalId",id)).andExpect(status().isOk()).andReturn();
+  assertThat(json.readTree(status.getResponse().getContentAsByteArray()).required("constraintWarnings")).isEqualTo(warnings);
+  var card=http.perform(get(THS+id).with(oauth2Login().clientRegistration(registration))).andExpect(status().isOk()).andReturn();
+  assertThat(json.readTree(card.getResponse().getContentAsByteArray()).required("card").required("constraintWarnings")).isEqualTo(warnings);
+  assertThat(registry.active().orElseThrow().version()).isEqualTo(2);
+ }
+
+ private PermissionProposalService.Change constrainedGrant(String capability){
+  var grant=new Grant("direct",capability,proposer.tenantId(),proposer.subjectId(),null,null,
+      now.minusSeconds(1),now.plusSeconds(3600),LABELS_AND_LEVELS);
+  return new PermissionProposalService.Change("UPSERT",grant.grantId(),grant,"Aggiornare i vincoli");
+ }
+
+ @Test void pendingGrantFromEarlierReleaseCanBeRejectedButCannotPublishAnInertConstraint()throws Exception{
+  var change=constrainedGrant(PermissionProposalService.READ);
+  var active=registry.load("permissions",1);
+  var grants=new ArrayList<>(active.grants());
+  grants.add(change.grant());
+  var candidate=new PolicyBundle("permissions",2,now,active.capabilities(),grants);
+  var hash=new CanonicalHash(json);
+  var id=UUID.randomUUID();
+  db.sql("""
+      insert into ouf_authorization.permission_proposal(proposal_id,tenant_id,proposed_by,idempotency_key,
+        request_hash,base_active_ref,base_hash,proposed_hash,proposed_policy,change_payload,expires_at)
+      values(:id,:tenant,:subject,'legacy',:request,'permissions:1',:base,:hash,
+        cast(:policy as jsonb),cast(:change as jsonb),clock_timestamp()+interval '15 minutes')
+      """).param("id",id).param("tenant",proposer.tenantId()).param("subject",proposer.subjectId())
+      .param("request",hash.of(change)).param("base",hash.of(active)).param("hash",hash.of(candidate))
+      .param("policy",json.writeValueAsString(candidate)).param("change",json.writeValueAsString(change)).update();
+  var card=proposals.card(root,id);
+  assertThat(card.constraintViolations()).hasSize(2);
+  var confirmation=new PermissionProposalService.Confirmation(card.proposedHash());
+  assertThatThrownBy(()->proposals.decide(root,id,0,confirmation,true)).hasMessageContaining("Correggere i vincoli");
+  assertThat(proposals.decide(root,id,0,confirmation,false).state()).isEqualTo("REJECTED");
+  assertThat(registry.active().orElseThrow().version()).isEqualTo(1);
+ }
+
+ @Test void directGrantRejectsKnownMissingAttributesAndWarnsForUndeclaredCapability()throws Exception{
+  delegatedPost("propose",PermissionProposalService.PROPOSE,constrainedGrant(PermissionProposalService.READ))
+      .andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.code").value("AUTH_GRANT_CONSTRAINTS_INAPPLICABLE"))
+      .andExpect(jsonPath("$.violations[0].grantId").value("direct")).andExpect(jsonPath("$.violations[0].role").isEmpty());
+  delegatedPost("propose",PermissionProposalService.PROPOSE,constrainedGrant("ouf.system.status")).andExpect(status().isOk())
+      .andExpect(jsonPath("$.constraintWarnings.length()").value(2))
+      .andExpect(jsonPath("$.constraintWarnings[0].grantId").value("direct"))
+      .andExpect(jsonPath("$.constraintWarnings[0].kind").value("UNVERIFIABLE"));
+ }
+
  @Test void releaseRegistersOnlyNewDescriptorsAndSecondStartupIsReadOnly()throws Exception{
   for(String manifest:List.of("chatbot-source-review-capabilities.json","r4a-semantic-human-capabilities.json")){
    try(var input=new org.springframework.core.io.ClassPathResource("catalogue/"+manifest).getInputStream()){

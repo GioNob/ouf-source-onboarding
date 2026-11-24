@@ -1,5 +1,9 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OUF · Revisione permessi</title><link rel="stylesheet" href="permissions.css"><script src="permissions.js" defer></script></head><body><main><p class="eyebrow">OUF · Amministrazione</p><h1>Revisione dei permessi</h1><p id="status" role="status">Caricamento della proposta…</p><section id="review" hidden><dl id="context"></dl><p id="reason"></p><section id="catalogue-additions" aria-labelledby="catalogue-heading" hidden>
 <h2 id="catalogue-heading">Capability aggiunte al catalogo attivo</h2>
 <div id="added-capabilities"></div>
+</section><section id="constraint-warnings" aria-labelledby="warnings-heading" hidden>
+<h2 id="warnings-heading">Vincoli che non si applicheranno</h2>
+<table><thead><tr><th scope="col">Ruolo</th><th scope="col">Grant</th><th scope="col">Capability</th><th scope="col">Vincolo</th><th scope="col">Attributo mancante o da verificare</th><th scope="col">Spiegazione</th></tr></thead>
+<tbody id="warning-rows"></tbody></table><p id="correction" hidden></p>
 </section><div class="comparison"><section><h2>Prima</h2><div id="before"></div></section><section><h2>Dopo la conferma</h2><div id="after"></div></section></div><details><summary>Vincoli e riferimenti completi</summary><pre id="details"></pre></details><form id="decision"><label><input id="checked" type="checkbox" required> Ho verificato destinatario, permessi, vincoli e durata.</label><p id="decision-status" role="status" aria-atomic="true" tabindex="-1"></p><div class="actions"><button id="confirm" type="submit" disabled>Conferma modifica</button><button id="reject" type="button" disabled>Rifiuta proposta</button></div></form></section></main></body></html>
 

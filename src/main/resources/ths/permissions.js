@@ -27,7 +27,24 @@
   }
   $('catalogue-additions').hidden=descriptors.length===0;
  }
- function controls(enabled){$('confirm').disabled=!enabled||!$('checked').checked;$('reject').disabled=!enabled;$('checked').disabled=!enabled;}
+ function constraintWarnings(){
+  const rows=$('warning-rows');
+  rows.replaceChildren();
+  const violations=card.constraintViolations||[];
+  const findings=[...violations,...(card.constraintWarnings||[])];
+  for(const finding of findings){
+   const row=document.createElement('tr');
+   rows.append(row);
+   for(const value of [finding.role||'—',finding.grantId||'—',finding.capabilityId,finding.field,finding.missingResourceAttribute])text('td',value,row);
+   text('td',finding.kind==='UNVERIFIABLE'
+    ? 'Non verificabile. Manca la dichiarazione degli attributi per questa capability.'
+    : 'L’owner non fornisce questo attributo: il permesso con questo vincolo non concederà mai accesso.',row);
+  }
+  $('constraint-warnings').hidden=findings.length===0;
+  $('correction').hidden=violations.length===0||card.state!=='PENDING';
+  $('correction').textContent=(card.truncated?'Sono mostrate le prime 64 violazioni. ':'')+'Rifiuta la proposta e richiedi la correzione dei vincoli.';
+ }
+ function controls(enabled){$('confirm').disabled=!enabled||!$('checked').checked||Boolean(card?.constraintViolations?.length);$('reject').disabled=!enabled;$('checked').disabled=!enabled;}
  $('checked').onchange=()=>controls(!busy&&card?.state==='PENDING');
  async function load(){
   if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id||''))throw new Error('Apri il collegamento associato alla proposta.');
@@ -37,11 +54,12 @@
   if(card.proposalId!==id||!csrfHeader||!csrfToken)throw new Error('Risposta di revisione non valida.');
   ThsSession.bind(JSON.stringify([id, card.proposedHash, card.revision, card.state]), [$('checked')]); context();
   catalogueAdditions(card.addedCapabilities||[]);
+  constraintWarnings();
   $('reason').textContent=`Motivo: ${card.reason}`;if(card.afterRoles){catalogue(card.beforeRoles,$('before'));catalogue(card.afterRoles,$('after'));}else{grant(card.before,$('before'));grant(card.after,$('after'));}$('details').textContent=JSON.stringify(card,null,2);$('review').hidden=false;
   controls(card.state==='PENDING');message(card.state==='PENDING'?'Verifica la modifica. Nessun permesso è ancora stato cambiato.':outcome());
  }
  async function decide(action){
-  if(busy||card?.state!=='PENDING'||(action==='confirm'&&!$('checked').checked))return;
+  if(busy||card?.state!=='PENDING'||(action==='confirm'&&(!$('checked').checked||card.constraintViolations?.length)))return;
   busy=true;controls(false);$('decision').setAttribute('aria-busy','true');
   message(action==='confirm'?'Pubblicazione in corso… Attendi l’esito.':'Rifiuto in corso… Attendi l’esito.');
   const slow=setTimeout(()=>message('La risposta sta richiedendo più tempo. Non ripetere la conferma; attendi l’esito oppure ricarica la pagina per verificarlo.'),8000);
@@ -50,7 +68,7 @@
    if(!r.ok||r.redirected){if([409,410,412].includes(r.status))throw new Error('La proposta è scaduta o il contesto è cambiato. Richiedi una nuova proposta al chatbot.');throw new Error('Esito non verificato. Ricarica la pagina per leggere lo stato della proposta; se necessario accedi nuovamente con IAM. Non ripetere la conferma senza verificarlo.');}
    const result=await r.json();
    if(!['PUBLISHED','REJECTED'].includes(result.state)||(result.state==='PUBLISHED'&&!result.finalPolicyRef))throw new Error('Esito non verificato. Ricarica la pagina per leggere lo stato della proposta.');
-   Object.assign(card,result);context();$('details').textContent=JSON.stringify(card,null,2);message(outcome());
+   Object.assign(card,result);context();constraintWarnings();$('details').textContent=JSON.stringify(card,null,2);message(outcome());
   }catch(e){message(e instanceof TypeError?'Connessione interrotta: esito non verificato. Ricarica la pagina per leggere lo stato della proposta. Non ripetere la conferma senza verificarlo.':e.message);}
   finally{clearTimeout(slow);$('decision').setAttribute('aria-busy','false');$('decision-status').focus();} // Never automatically retry a possibly completed state change.
  }
