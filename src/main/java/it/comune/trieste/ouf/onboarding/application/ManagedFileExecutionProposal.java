@@ -64,7 +64,7 @@ public final class ManagedFileExecutionProposal {
     require(!semantic.containsKey("vocabularyMappings") || list(semantic.get("vocabularyMappings"),0,0).isEmpty());
     require(!config.containsKey("relationshipMappings") || list(config.get("relationshipMappings"),0,0).isEmpty());
     String publication=uuid(proposal.semanticPublicationSetRef());
-    require(proposal.semanticBindings()!=null && !proposal.semanticBindings().isEmpty() && proposal.semanticBindings().size()<=32);
+    require(proposal.semanticBindings()!=null && !proposal.semanticBindings().isEmpty());
     var descriptions=new LinkedHashMap<String,Object>();
     Set<String> refs=new LinkedHashSet<>();List<Map<String,Object>> bindings=new ArrayList<>();
     for(SemanticBinding binding:proposal.semanticBindings()){
@@ -91,7 +91,7 @@ public final class ManagedFileExecutionProposal {
     for(String target:combined.labels.keySet())require(bindings.stream().anyMatch(b->target.equals(b.get("semanticId"))));
     config.remove("semanticReviewTerms");
     if(!descriptions.isEmpty())config.put("semanticReviewTerms",descriptions);
-    List<?> expectedRefs=list(semantic.get("semanticRefs"),1,32);
+    List<?> expectedRefs=list(semantic.get("semanticRefs"),1,Integer.MAX_VALUE);
     require(new HashSet<>(expectedRefs).size()==expectedRefs.size() && refs.equals(new HashSet<>(expectedRefs)));
     for(Object raw:list(semantic.get("targetClasses"),1,32)){
       Map<String,Object> target=map(raw);require(refs.contains(text(target,"ontologyId")+"@"+text(target,"ontologyVersion")));

@@ -36,10 +36,13 @@ class ManagedFileMcpApiTest {
         new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
     when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.file.upload",raw))
         .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
-    when(handoffs.result(id,"human:alice")).thenReturn(Map.of("assetId",asset,"status","STAGED"));
+    var observation=Map.<String,Object>of("assetId",asset,"status","STAGED","state","STAGED","observationVersion","2",
+        "issuedAt","2030-03-01T08:00:00Z","waitUntil","2030-03-01T09:00:00Z");
+    when(handoffs.result(id,"tenant-a","human:alice")).thenReturn(observation);
     var result=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),handoffs).handoff(raw,request);
-    assertThat(result).containsOnlyKeys("assetId","status","workflowState","reasonCode","allowedActions");
-    verify(handoffs).result(id,"human:alice");
+    assertThat(result).containsAllEntriesOf(observation)
+        .containsOnlyKeys("assetId","status","state","observationVersion","issuedAt","waitUntil","workflowState","reasonCode","allowedActions");
+    verify(handoffs).result(id,"tenant-a","human:alice");
     verifyNoInteractions(files);
   }
   @Test void jobStatusExposesOnlyBoundedFieldsAndChecksAssetOwner(){
@@ -138,7 +141,8 @@ class ManagedFileMcpApiTest {
     assertThat(result).containsEntry("columnCount",1024);
   }
 
-  @Test void delegatedCreateAccepts1024FieldsAndRejects1025BeforeOwnerWrite()throws Exception{
+  @Test @org.junit.jupiter.api.DisplayName("task51e-01: delegated create accepts 1024 fields and references")
+  void delegatedCreateAccepts1024FieldsAndRejects1025BeforeOwnerWrite()throws Exception{
     var files=mock(ManagedFileService.class);var receipts=mock(PermissionDelegationVerifier.class);var json=new ObjectMapper();
     var request=new MockHttpServletRequest("POST","/api/internal/v1/onboarding/managed-file-mcp/create");
     var p=new PrincipalContext("alice","tenant-a",PrincipalContext.ActorType.HUMAN,"mcp","1","issuer","aud",Set.of("ouf.managed-source.onboarding.create"),new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
@@ -147,6 +151,8 @@ class ManagedFileMcpApiTest {
     var fields=new java.util.ArrayList<Map<String,Object>>();
     for(int i=0;i<1024;i++)fields.add(Map.of("fieldName","campo_"+i,"extractionDecision","INCLUDE","dataAccessLabel","OPEN","targetPropertyIri","https://example.org/campo_"+i));
     var args=new java.util.LinkedHashMap<String,Object>(Map.of("assetId",UUID.randomUUID(),"profileId",UUID.randomUUID(),"sourceId","sue-test","name","Synthetic SUE","owner","Synthetic","targetClassIri","https://example.org/Entity","semanticRefs",java.util.List.of("synthetic@1"),"sourceObjectKeyFields",java.util.List.of(),"fields",fields));
+    var refs=java.util.stream.IntStream.range(0,1024).mapToObj(i->"urn:ref:"+i+"@1").toList();
+    args.put("semanticRefs",refs);
     Map<String,Object> category=Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept");
     args.put("category",category);
     fields.set(0,Map.of("fieldName","campo_0","extractionDecision","INCLUDE","dataAccessLabel","OPEN",
@@ -160,7 +166,7 @@ class ManagedFileMcpApiTest {
         anyList(),anyList(),anyList(),isNull(),any(),anyString(),anyString(),anyString(),eq(category),eq(compositions)))
         .thenReturn(Map.of("state","DRAFT","lockVersion",0));
     api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request);
-    verify(files).onboardIdempotent(any(),any(),eq("sue-test"),any(),any(),any(),any(),any(),argThat(x->x.size()==1024 && x.getFirst().transformParams().equals(Map.of("crs","EPSG:4326"))),isNull(),any(),eq("wide"),eq("wide-command"),eq("tenant-a"),eq(category),eq(compositions));
+    verify(files).onboardIdempotent(any(),any(),eq("sue-test"),any(),any(),any(),eq(refs),any(),argThat(x->x.size()==1024 && x.getFirst().transformParams().equals(Map.of("crs","EPSG:4326"))),isNull(),any(),eq("wide"),eq("wide-command"),eq("tenant-a"),eq(category),eq(compositions));
     fields.add(Map.of("fieldName","overflow","extractionDecision","EXCLUDE","dataAccessLabel","OPEN"));
     assertThatThrownBy(()->api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request)).hasMessageContaining("explicit field");
     verifyNoMoreInteractions(files);

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {appendFileSync, chmodSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {app, policy, sha256, startFixture} from './predecessor-fixture.mjs';
-import {verifyReturn, writePredecessor, writeCandidate} from './predecessor-scenario.mjs';
+import {issuePicker, readPicker, verifyReturn, writePredecessor, writeCandidate} from './predecessor-scenario.mjs';
 
 const [previous, candidate] = process.argv.slice(2);
 for (const id of [previous, candidate]) assert.match(id, /^sha256:[0-9a-f]{64}$/);
@@ -52,7 +53,7 @@ async function ready(container, phase) {
   const flyway = /FlywayValidateException|Validate failed|Migration of schema .* failed|applied migration not resolved locally/i.test(logs);
   if (phase === 'predecessor return on candidate data' && process.env.GITHUB_STEP_SUMMARY) {
     const reason = flyway ? 'I log indicano un errore di migrazione o validazione Flyway.' : 'La readiness non ha raggiunto UP.';
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Domande aperte\n\nIl predecessore si è fermato su V45. ${reason} La qualificazione D-080 resta aperta.\n`);
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Domande aperte\n\nIl predecessore si è fermato su V46. ${reason} La qualificazione D-080 resta aperta.\n`);
   }
   throw new Error(phase + ': readiness failed' + (flyway ? ' during Flyway migration or validation' : '') +
     '. Return proof stopped with the packaged migration settings.');
@@ -97,7 +98,9 @@ try {
   assert.equal(sql("select to_regclass('ouf_onboarding.flyway_schema_history') is null"), 't');
   const old = run(previous);
   await ready(old, 'predecessor on empty database');
-  const baseline = history('43');
+  const baseline = history();
+  const predecessorHasDistinctValues = baseline.at(-1).version === '45';
+  assert.ok(predecessorHasDistinctValues || baseline.at(-1).version === '43');
   // Seed only the isolated IAM policy; the runtime writes every onboarding row through HTTP.
   const bundle = policy(), payload = JSON.stringify(bundle);
   assert.ok(!payload.includes("'"));
@@ -113,10 +116,25 @@ try {
 
   const next = run(candidate);
   await ready(next, 'candidate on populated database');
-  const candidateHistory = history('45');
-  assert.deepEqual(candidateHistory.slice(0, -2), baseline, 'candidate must retain the exact deployed migration history');
-  assert.deepEqual(candidateHistory.slice(-2).map(row => row.script),
-    ['V44__managed_profile_distinct_values.sql', 'V45__managed_value_map_preparation.sql']);
+  const candidateHistory = history('46');
+  assert.deepEqual(candidateHistory.slice(0, baseline.length), baseline, 'candidate must retain the exact deployed migration history');
+  const expected = predecessorHasDistinctValues ? [] :
+    ['V44__managed_profile_distinct_values.sql', 'V45__managed_value_map_preparation.sql'];
+  assert.deepEqual(candidateHistory.slice(baseline.length).map(row => row.script), [...expected, 'V46__managed_file_handoff.sql']);
+  const commandKey = randomUUID();
+  const issued = await issuePicker(fixture, commandKey);
+  const pending = await readPicker(fixture, issued.handoffId);
+  assert.equal(pending.state, 'PENDING');
+  assert.equal(pending.waitUntil, issued.waitUntil);
+  assert.equal(pending.observationVersion, '1');
+  docker('restart', next);
+  await ready(next, 'candidate restarted with pending picker');
+  assert.deepEqual(await issuePicker(fixture, commandKey), issued);
+  assert.deepEqual(await readPicker(fixture, issued.handoffId), pending);
+  // Only the candidate writes this table. Compare every field across the predecessor return.
+  const pickerRow = () => sql('select to_jsonb(h)::text from ouf_onboarding.managed_file_handoff h');
+  const pickerEvidence = pickerRow();
+  assert.equal(JSON.parse(pickerEvidence).handoff_id, issued.handoffId);
   const result = await writeCandidate(fixture, seed);
   function distinctProfile(profileId) {
     assert.match(profileId, /^[0-9a-f-]{36}$/);
@@ -143,17 +161,25 @@ try {
   docker('start', old);
   assert.equal(docker('inspect', '-f', '{{.Image}}', old), previous);
   await ready(old, 'predecessor return on candidate data');
-  const returnedProfile = await verifyReturn(fixture, seed, result);
+  const oldObservation = await readPicker(fixture, issued.handoffId);
+  assert.equal(oldObservation.status, 'PENDING');
+  for (const field of ['state', 'issuedAt', 'waitUntil', 'observationVersion']) {
+    assert.ok(!(field in oldObservation), 'predecessor uses its original handoff reader');
+  }
+  const returnedProfile = await verifyReturn(fixture, seed, result, predecessorHasDistinctValues);
   assert.equal(distinctProfile(result.typed.profileId), valueEvidence);
-  assert.equal(distinctProfile(returnedProfile.profileId), 'NULL');
+  const returnedValues = distinctProfile(returnedProfile.profileId);
+  if (predecessorHasDistinctValues) assert.deepEqual(JSON.parse(returnedValues), JSON.parse(valueEvidence));
+  else assert.equal(returnedValues, 'NULL');
   assert.equal(sql(`select parent_version_id from ouf_onboarding.onboarding_version where onboarding_version_id='${result.child.onboardingVersionId}'`),
     seed.parent.onboardingVersionId, 'child draft keeps its parent link after the return');
-  assert.deepEqual(history('45'), candidateHistory);
+  assert.deepEqual(history('46'), candidateHistory);
+  assert.equal(pickerRow(), pickerEvidence);
   assert.deepEqual(candidateEvidence(), evidence);
   assert.equal(sql("select count(*) from ouf_onboarding.onboarding_version where source_id='review'"), '2');
   assert.equal(sql("select count(*) from ouf_onboarding.managed_onboarding_review where source_id='review'"), '2');
   assert.equal(sql("select count(*) from ouf_onboarding.approval_challenge where source_id='review'"), '2');
-  console.log('D-080 PASS: predecessor read candidate profile, wrote and reconciled profile and review, and preserved V44/V45 migration history');
+  console.log('D-080 PASS: predecessor reconciled profile and review, preserving the picker and migration history through V46');
 } finally {
   fixture.close();
   for (const container of containers.reverse()) docker('rm', '-f', container);

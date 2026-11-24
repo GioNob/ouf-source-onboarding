@@ -23,6 +23,40 @@ import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
 import org.springframework.security.web.csrf.*;
 
 class WorkflowThsApiTest {
+  @Test void task51e06WideTermVerificationRequiresAllBatches(){
+    var card=new ObjectMapper().createObjectNode();
+    var configuration=card.putObject("configuration");
+    var mapping=configuration.putObject("semanticMapping");
+    var props=mapping.putArray("propertyMappings");
+    var pins=configuration.putArray("semanticReferenceBindings");
+    var terms=new LinkedHashMap<String,ObjectNode>();
+    for(int i=0;i<1025;i++){
+      String iri="urn:fixture:term:"+i,revision=UUID.randomUUID().toString();
+      if(i==0)mapping.putArray("targetClasses").addObject().put("classIri",iri);
+      else props.addObject().put("targetPropertyIri",iri);
+      var pin=pins.addObject().put("semanticId",iri).put("semanticVersion","1")
+          .put("revisionId",revision).put("publicationSetId","set");
+      var term=pin.deepCopy().put("status","ACTIVE").put("artifactType",i==0?"CLASS":"PROPERTY");
+      term.putObject("label").put("it","Termine "+i);
+      terms.put(revision,term);
+    }
+    var lookup=new PublishedReviewTerms(card);
+    var batches=lookup.batches();
+    assertThat(batches).hasSize(17).allSatisfy(batch->assertThat(batch).hasSizeBetween(1,64));
+    assertThat(batches.stream().flatMap(List::stream).toList()).containsExactlyElementsOf(terms.keySet());
+    for(var batch:batches.subList(0,16)){
+      // Even a response containing terms from a later batch can only verify the requested revisions.
+      var registry=card.objectNode();registry.putArray("missing");registry.putArray("terms").addAll(terms.values());
+      lookup.read(registry,batch);
+    }
+    assertThat(lookup.attachTo(card)).isFalse();
+    assertThat(card.path("verifiedTerms").size()).isEqualTo(1024);
+    var last=batches.getLast();var registry=card.objectNode();
+    registry.putArray("missing");registry.putArray("terms").add(terms.get(last.getFirst()));
+    lookup.read(registry,last);
+    assertThat(lookup.attachTo(card)).isTrue();
+  }
+
   @Test void ownerRoutingAndFrozenHashAreBoundWithoutExposingBearerOrRetryingDecision()throws Exception{
     var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
     var posts=new AtomicInteger();var path=new AtomicReference<String>();var body=new AtomicReference<String>();

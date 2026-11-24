@@ -394,11 +394,23 @@
   const expired = card => Date.parse(card.expires_at) <= Date.now();
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
   const missingFileSnapshot = card => !card.reviewSnapshot && (card.configuration?.extractionProfile?.selection?.assetId || card.configuration?.semanticMapping?.sourceType?.typeCode === 'FILE');
+  const envelopeBlock = card => card.progress?.publicationEnvelopeBlock;
   const approvalBlocked = card => semantic ? card.artifact_type === 'VALUE_MAP' && !hasValueMapReview(card)
-    : missingFileSnapshot(card) || card.termVerification !== 'COMPLETE';
-  const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : !item.needsRefresh && item.card.status === 'CONFIRMED' && item.card.onboardingState === 'APPROVED' && !item.card.progress?.activationProgress?.budgetExhausted && item.card.progress?.activationProgress?.counterLineageVerified !== false && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
+    : !!envelopeBlock(card) || missingFileSnapshot(card) || card.termVerification !== 'COMPLETE';
+  const canComplete = item => semantic ? item.card.status === 'APPROVED' && item.card.lifecycleStatus !== 'ACTIVE' && !!item.card.approvalDecisionId : !item.needsRefresh && !envelopeBlock(item.card) && item.card.status === 'CONFIRMED' && item.card.onboardingState === 'APPROVED' && !item.card.progress?.activationProgress?.budgetExhausted && item.card.progress?.activationProgress?.counterLineageVerified !== false && !['BLOCKED','EXHAUSTED'].includes(item.card.progress?.activationProgress?.readiness_phase) && !(Date.parse(item.card.progress?.activationProgress?.readiness_lease_until) > Date.now()) && !(Date.parse(item.card.progress?.activationProgress?.readiness_next_at) > Date.now());
   const canBudget = item => !semantic && !item.needsRefresh && item.card.onboardingState === 'APPROVED' && item.card.status === 'CONFIRMED' && item.card.progress?.activationProgress?.humanBudgetGrantAvailable === true && (item.reason?.value.trim().length || 0) >= 10;
   const canResume = item => !semantic && !item.needsRefresh && item.card.progress?.activationProgress?.humanRecheckAllowed === true;
+  function blockedPublication(card) {
+    const {bytes, limitBytes} = envelopeBlock(card);
+    const guidance = document.createElement('section'); guidance.className = 'warnings';
+    const format = new Intl.NumberFormat('it-IT');
+    element('h3', 'Pubblicazione troppo grande', guidance);
+    element('p', `La pubblicazione occupa fino a ${format.format(bytes)} byte. I servizi che acquisiscono i dati e aggiornano gli oggetti possono leggere fino a ${format.format(limitBytes)} byte. Questa revisione non può essere attivata.`, guidance);
+    element('p', canApprove({card})
+      ? 'Scegli “Rifiuta” per chiudere questa proposta. Torna nella chat e chiedi all’agente di preparare una revisione più piccola.'
+      : 'Torna nella chat e chiedi all’agente di ritirare questa proposta e preparare una revisione più piccola. Potrai esaminare la nuova revisione prima di attivarla.', guidance);
+    return guidance;
+  }
   function blockedReadiness(card, progress) {
     const guidance = document.createElement('section'); guidance.className = 'warnings';
     const code = progress.readiness_last_code;
@@ -448,7 +460,7 @@
       if (missingFileSnapshot(card)) element('p','La tabella completa del proprietario non è disponibile. Aggiorna la scheda prima di approvare.',article).className = 'warnings';
     }
     const states = {IN_REVIEW:'in revisione', APPROVED:'approvata', ACTIVE:'attiva', REJECTED:'rifiutata', CHANGES_REQUESTED:'modifiche richieste', SUPERSEDED:'sostituita', REVOKED:'revocata'};
-    const state = semantic ? card.lifecycleStatus || card.status : card.reviewSnapshot ? states[card.onboardingState] || card.onboardingState : card.onboardingState;
+    const state = semantic ? card.lifecycleStatus || card.status : card.reviewSnapshot || envelopeBlock(card) ? states[card.onboardingState] || card.onboardingState : card.onboardingState;
     element('p','Stato: ' + state,article).className = 'state';
     if (card.progress?.reviewFeedback?.length) {
       element('h3','Modifiche richieste all’agente',article);
@@ -459,6 +471,8 @@
       const definition = card.definition_json || {};
       detail('Definizione, ambito e vincoli', definition, article);
       if (card.interchangeSnapshot) detail('Contenuto semantico esatto', card.interchangeSnapshot, article);
+    } else if (envelopeBlock(card)) {
+      article.querySelector('h2').after(blockedPublication(card));
     } else {
       const config = card.configuration || {}, mapping = config.semanticMapping || {};
       if (card.termVerification !== 'COMPLETE') {
@@ -539,7 +553,7 @@
       if (activation?.readiness_phase === 'BLOCKED' && card.onboardingState === 'APPROVED')
         article.querySelector('h2').after(blockedReadiness(card, activation));
       if (activation) detail('Avanzamento delle verifiche e tentativi disponibili', activation, article);
-      if(card.progress?.activationProgress?.budgetExhausted && card.onboardingState === 'APPROVED') {
+      if(activation?.budgetExhausted && card.onboardingState === 'APPROVED') {
         element('p', 'Il tempo o i tentativi disponibili per le verifiche sono terminati. La configurazione resta approvata.', article);
         if(card.progress.activationProgress.humanBudgetGrantAvailable === true) {
           element('p', `Puoi concedere fino a 3 nuovi tentativi entro 15 minuti. I ${card.progress.activationProgress.cumulativeAttempts} tentativi già registrati e lo storico restano conservati. Poi potrai scegliere separatamente “Verifica e attiva”, che può pubblicare la configurazione e avviare un’acquisizione.`, article);
@@ -620,7 +634,7 @@
           const failure = await response.json().catch(() => null);
           const code = failure?.code || failure?.detail;
           const reason = typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,159}$/.test(code) ? ' · ' + code : '';
-          if (readinessAction) await load(id).catch(() => {});
+          if (readinessAction || code === 'ONB_PUBLICATION_ENVELOPE_TOO_LARGE') await load(id).catch(() => {});
           throw new Error(`Operazione non completata (HTTP ${response.status}${reason}).`);
         }
         await load(id); completed++;

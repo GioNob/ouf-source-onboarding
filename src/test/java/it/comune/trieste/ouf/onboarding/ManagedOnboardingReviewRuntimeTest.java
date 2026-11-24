@@ -80,6 +80,109 @@ class ManagedOnboardingReviewRuntimeTest {
     return new Governed(mapper,command,reviews.prepare(mapper,command,"prepare"));
   }
   @MockitoBean DatatypeResolver registryReader;
+  @Autowired ObjectMapper runtimeJson;
+
+  @ParameterizedTest @ValueSource(booleans={false,true})
+  void task51e02and03WideEnvelopePublishesOrBlocksBeforeReadiness(boolean oversized)throws Exception{
+    String tenant="test-tenant",source="wide-publication",cls="urn:fixture:Place",policyRef="urn:fixture:identity";
+    String set=UUID.randomUUID().toString();
+    byte[] csv=ManagedWideProfileTest.csv(1024,3,"value");
+    UUID asset=(UUID)files.registerOwned(null,"object://fixture/wide-publication.csv",hashes.ofBytes(csv),"text/csv",
+        csv.length,human.subject(),"retention://test",tenant).get("asset_id");
+    UUID profile=(UUID)files.profile(asset,csv,"object://fixture/wide-sample.json").get("profile_id");
+    var fields=new ArrayList<ManagedFileService.FieldDecision>();
+    var properties=new ArrayList<Map<String,Object>>();
+    var signals=new ArrayList<Map<String,Object>>();
+    var bindings=new ArrayList<ManagedFileExecutionProposal.SemanticBinding>();
+    bindings.add(new ManagedFileExecutionProposal.SemanticBinding(cls,"1",UUID.randomUUID().toString(),set));
+    for(int i=0;i<1024;i++){
+      String iri="urn:fixture:property:"+(oversized?"x".repeat(600):"")+i;
+      fields.add(new ManagedFileService.FieldDecision("campo_"+i,"INCLUDE","OPEN",iri,"TEXT_NFC_TRIM_V1",null,null,null));
+      properties.add(Map.of("sourceField",iri,"propertyIri",iri,"datatype","http://www.w3.org/2001/XMLSchema#string",
+          "accessLabel","OPEN","authorityOrder",List.of(source)));
+      signals.add(Map.of("id",iri,"semanticRef",iri+"@"+set,"comparator","TEXT_V1",
+          "excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","urn:fixture:signal"));
+      bindings.add(new ManagedFileExecutionProposal.SemanticBinding(iri,"1",UUID.randomUUID().toString(),set));
+    }
+    var refs=bindings.stream().map(pin->pin.semanticId()+"@"+pin.semanticVersion()).toList();
+    var draft=files.onboardIdempotent(asset,profile,source,"Wide source","Fixture",cls,refs,List.of("campo_0"),
+        fields,null,human,"create","wide-create",tenant);
+    UUID version=(UUID)draft.get("onboardingVersionId");
+    String property=fields.getFirst().targetPropertyIri();
+    var rule=Map.of("id","name-rule","signalIds",List.of(property),"assertionRef","urn:fixture:rule");
+    var identity=Map.of("ref",policyRef,"version","1","tenantId",tenant,"sourceId",source,"canonicalClass",cls,
+        "allowAutoNew",false,"maxCandidates",10,"signals",signals,"sufficientRules",List.of(rule));
+    var udp=Map.<String,Object>of("resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1",
+        "policyRef",policyRef,"governedIdentity",identity),"materialization",Map.of("policyRef","urn:fixture:authority",
+        "properties",properties,"bitemporalProperties",List.of(),"checkpointInterval",1));
+    when(registryReader.resolve(anyString(),anyString(),eq(set))).thenAnswer(call->Map.of(
+        "semantic_id",call.getArgument(0),"semantic_version","1","publication_set_id",set,
+        "revision_id",call.getArgument(1),"artifact_type",cls.equals(call.getArgument(0))?"CLASS":"PROPERTY"));
+    var mapper=principal(tenant,human.subject());
+    var proposal=new ManagedFileExecutionProposal.Proposal(bindings,set,udp,new ManagedFileExecutionProposal.Limits(100,1024,1000));
+    var prepared=reviews.prepare(mapper,new ManagedOnboardingReviewService.Prepare(source,version,0,"wide-review",proposal),"prepare");
+    UUID challenge=(UUID)prepared.get("challengeId");
+    String hash=(String)prepared.get("configurationHash");
+    long lock=((Number)prepared.get("lockVersion")).longValue();
+    if(oversized){
+      var observed=reviews.read(mapper,source,version);
+      assertThat(observed).containsEntry("workflowState",ManagedMcpObservation.State.IN_REVIEW)
+          .containsEntry("reasonCode",ManagedMcpObservation.Reason.ONB_PUBLICATION_ENVELOPE_TOO_LARGE)
+          .containsEntry("allowedActions",List.of(ManagedMcpObservation.Action.WITHDRAW_CANDIDATE));
+      assertThat(runtimeJson.valueToTree(observed).path("nextAction").path("candidateAction").asText()).isEqualTo("WITHDRAW");
+      var size=(RuntimePublicationEnvelope.Size)observed.get("publicationEnvelopeBlock");
+      assertThat(size.bytes()).isGreaterThan(size.limitBytes());
+      assertThat(size.limitBytes()).isEqualTo(2097152);
+      assertThat(reviews.humanCard(mapper,challenge)).doesNotContainKeys("configuration","reviewSnapshot");
+      assertThatThrownBy(()->reviews.humanAction(mapper,challenge,"confirm",
+          new ManagedOnboardingReviewService.Decision(hash,lock),"test-auth"))
+          .isInstanceOfSatisfying(DomainFailure.class,failure->assertThat(failure.code()).isEqualTo(RuntimePublicationEnvelope.TOO_LARGE));
+      assertThat(onboarding.approvalCard(challenge)).containsEntry("status","CREATED");
+      // Reproduce an approval carried over from the predecessor, which did not check envelope size.
+      db.sql("update ouf_onboarding.approval_challenge set status='CONFIRMED',confirmed_at=clock_timestamp() where challenge_id=:c")
+          .param("c",challenge).update();
+      db.sql("update ouf_onboarding.onboarding_version set state='APPROVED',lock_version=lock_version+1 where onboarding_version_id=:v")
+          .param("v",version).update();
+      assertThatThrownBy(()->reviews.claimActivation(mapper,challenge,new ManagedOnboardingReviewService.Decision(hash,lock+1)))
+          .isInstanceOfSatisfying(DomainFailure.class,failure->assertThat(failure.code()).isEqualTo(RuntimePublicationEnvelope.TOO_LARGE));
+      assertThatThrownBy(()->onboarding.activate(source,version,human,"activate"))
+          .isInstanceOfSatisfying(DomainFailure.class,failure->assertThat(failure.code()).isEqualTo(RuntimePublicationEnvelope.TOO_LARGE));
+      var blocked=reviews.read(mapper,source,version);
+      assertThat(progress(blocked)).containsEntry("readiness_attempts",0).containsEntry("humanActivationAllowed",false);
+      assertThat(onboarding.bundleHistory(source)).isEmpty();
+      var withdrawn=reviews.prepare(mapper,new ManagedOnboardingReviewService.Prepare(source,version,lock+1,
+          "withdraw-wide",null,"WITHDRAW"),"withdraw");
+      assertThat(withdrawn).containsEntry("candidateDisposition","WITHDRAWN")
+          .containsEntry("allowedActions",List.of(ManagedMcpObservation.Action.REDRAFT_SAME_FILE,ManagedMcpObservation.Action.CREATE_REVISION));
+      assertThat(runtimeJson.valueToTree(withdrawn).path("nextAction").path("tool").asText()).isEqualTo("source.onboarding.create");
+      var smallerFields=fields.stream().map(field->new ManagedFileService.FieldDecision(field.fieldName(),"INCLUDE","OPEN",
+          "urn:fixture:"+field.fieldName(),"TEXT_NFC_TRIM_V1",null,null,null)).toList();
+      var smallerRefs=new ArrayList<String>(List.of(cls+"@1"));
+      smallerFields.forEach(field->smallerRefs.add(field.targetPropertyIri()+"@1"));
+      var smaller=files.onboardIdempotent(asset,profile,source,"Wide source","Fixture",cls,smallerRefs,List.of("campo_0"),
+          smallerFields,null,human,"create","smaller-create",tenant);
+      assertThat(onboarding.version(source,(UUID)smaller.get("onboardingVersionId"))).containsEntry("parent_version_id",version);
+    }else{
+      var approved=reviews.humanAction(mapper,challenge,"confirm",new ManagedOnboardingReviewService.Decision(hash,lock),"test-auth");
+      onboarding.attestIngestionCompatibilityBound(source,version,hash,true,"Fixture compatibility",
+          new OnboardingService.Actor("test-ingestion","SERVICE",Set.of("ouf.ingestion.configuration.attest")),"attest");
+      var claim=reviews.claimActivation(mapper,challenge,new ManagedOnboardingReviewService.Decision(hash,
+          ((Number)approved.get("lockVersion")).longValue()));
+      assertThat(reviews.finishActivation(mapper,claim,"test-auth")).containsEntry("state","ACTIVE");
+      var api=new it.comune.trieste.ouf.onboarding.api.RuntimePublicationApi(db,new RuntimePublicationEnvelope(runtimeJson,"tenant-a",2097152));
+      var request=new org.springframework.mock.web.MockHttpServletRequest();
+      TestAuthorization.bind(request,"test-runtime","SERVICE",Set.of("ouf.onboarding.configuration.read"));
+      byte[] bytes=api.active(source,request);
+      assertThat(bytes.length).isLessThan(2097152);
+      var envelope=runtimeJson.readTree(bytes);
+      var bundle=envelope.path("bundle");
+      assertThat(bundle.path("semanticMapping").path("propertyMappings").size()).isEqualTo(1024);
+      assertThat(bundle.path("semanticReferenceBindings").size()).isEqualTo(1025);
+      String bundleRef=bundle.path("bundleId").asText()+":"+bundle.path("bundleVersion").asText()+":"+envelope.path("checksum").asText();
+      assertThat(runtimeJson.readTree(api.resolve(bundleRef,request))).isEqualTo(envelope);
+    }
+  }
+
   @Test void task50bV02ConditionalReadDetectsExpiryAndReadinessAtTheSameLockVersion(){
     var fixture=governed(new PublishedSnapshots().publish("https://example.org/onto/Place","1.0.0","Prima"));
     var p=fixture.mapper();

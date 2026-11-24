@@ -9,23 +9,23 @@ public final class ManagedMcpObservation {
   public enum State {
     QUEUED, RUNNING, RETRY_WAIT, SUCCEEDED, FAILED, CANCELLED,
     ASSETS, PROFILE_AVAILABLE, PROFILE_COLUMNS, PENDING, STAGED, PROFILED, QUARANTINED, COMMAND_ABSENT, ERROR,
-    DRAFT, IN_REVIEW, APPROVED, ACTIVE, SUPERSEDED, REJECTED, REVOKED, CHANGES_REQUESTED
+    DRAFT, IN_REVIEW, APPROVED, ACTIVE, SUPERSEDED, REJECTED, REVOKED, CHANGES_REQUESTED, EXPIRED
   }
 
   public enum Reason {
     PROFILE_PENDING, PROFILE_READY, PROFILE_FAILED, PROFILE_CANCELLED,
-    ASSET_LIST, COLUMN_PAGE, UPLOAD_PENDING, UPLOAD_STAGED, UPLOAD_REJECTED, UPLOAD_QUARANTINED,
+    ASSET_LIST, COLUMN_PAGE, UPLOAD_PENDING, UPLOAD_STAGED, UPLOAD_REJECTED, UPLOAD_QUARANTINED, WAIT_DEADLINE_EXPIRED,
     DRAFT_READY, HUMAN_DECISION_PENDING, CHALLENGE_EXPIRED, REVIEW_UNAVAILABLE,
     HUMAN_ACTIVATION_REQUIRED, READINESS_IN_PROGRESS, READINESS_BACKOFF,
     DEPENDENCY_RECHECK_REQUIRED, READINESS_BUDGET_EXHAUSTED, READINESS_BLOCKED,
     PUBLICATION_ACTIVE, PUBLICATION_SUPERSEDED, PUBLICATION_REVOKED,
     REVIEW_REJECTED, REVIEW_CHANGES_REQUESTED, CANDIDATE_WITHDRAWN,
-    REVISION_COMMAND_ABSENT, CURRENT_REVIEW_REQUIRED, OWNER_ERROR
+    REVISION_COMMAND_ABSENT, CURRENT_REVIEW_REQUIRED, OWNER_ERROR, ONB_PUBLICATION_ENVELOPE_TOO_LARGE
   }
 
   public enum Action {
     READ_AGAIN, READ_DISTINCT_VALUES, PREPARE_REVIEW, WAIT_HUMAN_REVIEW, RENEW_REVIEW,
-    HUMAN_ACTIVATE, HUMAN_RECHECK, HUMAN_GRANT_BUDGET, CREATE_REVISION, REDRAFT_SAME_FILE, NONE
+    HUMAN_ACTIVATE, HUMAN_RECHECK, HUMAN_GRANT_BUDGET, CREATE_REVISION, REDRAFT_SAME_FILE, WITHDRAW_CANDIDATE, NONE
   }
 
   public static Map<String,Object> with(Map<String,Object> body, State state, Reason reason, Action... actions) {
@@ -64,7 +64,9 @@ public final class ManagedMcpObservation {
 
   public static Map<String,Object> handoff(Map<String,Object> body) {
     State state = State.valueOf((String) body.get("status"));
+    if (state == State.PENDING && Boolean.TRUE.equals(body.get("legacy"))) return body;
     return switch (state) {
+      case EXPIRED -> with(body, state, Reason.WAIT_DEADLINE_EXPIRED);
       case PENDING -> with(body, state, Reason.UPLOAD_PENDING, Action.READ_AGAIN);
       case STAGED -> with(body, state, Reason.UPLOAD_STAGED);
       case PROFILED -> with(body, state, Reason.PROFILE_READY, Action.READ_AGAIN);
@@ -92,6 +94,8 @@ public final class ManagedMcpObservation {
 
   public static Map<String,Object> version(Map<String,Object> body, boolean revisionAllowed) {
     State state = State.valueOf((String) body.get("state"));
+    if (body.containsKey("publicationEnvelopeBlock"))
+      return with(body, state, Reason.ONB_PUBLICATION_ENVELOPE_TOO_LARGE, Action.WITHDRAW_CANDIDATE);
     Action revision = revisionAllowed ? Action.CREATE_REVISION : Action.NONE;
     return switch (state) {
       case DRAFT -> with(body, state, Reason.DRAFT_READY, Action.PREPARE_REVIEW);

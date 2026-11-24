@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.onboarding.api;
 
 import it.comune.trieste.ouf.onboarding.application.MappingCategory;
+import it.comune.trieste.ouf.authorization.PrincipalContext;
 import it.comune.trieste.ouf.onboarding.application.ManagedMcpObservation;
 import static it.comune.trieste.ouf.onboarding.application.ManagedMcpObservation.*;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -44,14 +45,21 @@ public class ManagedFileMcpApi {
       return args;
     }catch(IOException e){throw new IllegalArgumentException("invalid managed-file arguments",e);}
   }
-  private String subject(byte[] raw,HttpServletRequest request,String capability){
+  private PrincipalContext pickerPrincipal(byte[] raw,HttpServletRequest request){
     return receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),
-        request.getRequestURI(),capability,raw).principal().subjectId();
+        request.getRequestURI(),"ouf.managed-source.file.upload",raw).principal();
+  }
+  @PostMapping("/handoff-issue") public Map<String,Object> issue(@RequestBody byte[] raw,HttpServletRequest request){
+    var principal=pickerPrincipal(raw,request);
+    String key=arguments(raw,"commandKey").get("commandKey").asText();
+    UUID commandKey=UUID.fromString(key);
+    if(!commandKey.toString().equalsIgnoreCase(key))throw new IllegalArgumentException("UUID commandKey required");
+    return handoffs.issue(commandKey,principal.tenantId(),principal.subjectId());
   }
   @PostMapping("/handoff") public Map<String,Object> handoff(@RequestBody byte[] raw,HttpServletRequest request){
-    String owner=subject(raw,request,"ouf.managed-source.file.upload");
+    var principal=pickerPrincipal(raw,request);
     UUID id=UUID.fromString(arguments(raw,"handoffId").get("handoffId").asText());
-    return ManagedMcpObservation.handoff(handoffs.result(id,owner));
+    return ManagedMcpObservation.handoff(handoffs.result(id,principal.tenantId(),principal.subjectId()));
   }
   @PostMapping("/profile") public ResponseEntity<Map<String,Object>> profile(@RequestBody byte[] raw,HttpServletRequest request){
     String cap="ouf.managed-source.file.profile";
@@ -135,7 +143,7 @@ public class ManagedFileMcpApi {
       if(draft.assetId()==null||draft.profileId()==null||draft.sourceId()==null||draft.sourceId().isBlank()
           ||draft.name()==null||draft.name().isBlank()||draft.owner()==null||draft.owner().isBlank()
           ||draft.targetClassIri()==null||draft.targetClassIri().isBlank()
-          ||draft.semanticRefs()==null||draft.semanticRefs().isEmpty()||draft.semanticRefs().size()>32
+          ||draft.semanticRefs()==null||draft.semanticRefs().isEmpty()
           ||draft.sourceObjectKeyFields()==null||draft.fields()==null||draft.fields().isEmpty()||draft.fields().size()>ManagedFileLimits.MAX_COLUMNS)
           throw new IllegalArgumentException("explicit field and identity decisions required");
       var actor=new OnboardingService.Actor(delegated.principal().subjectId(),"HUMAN_USER",Set.of(cap));

@@ -1,5 +1,16 @@
 # Registro della configurazione di Source Onboarding
 
+## Attesa umana del selettore dei file (D-065, D-089)
+
+| Parametro | Proprietà Spring | Variabile d'installazione | Default | Valori ammessi |
+|---|---|---|---:|---|
+| `waitMaxSeconds` | `ouf.onboarding.wait-max-seconds` | `OUF_ONB_WAIT_MAX_SECONDS` | 3600 s | Intero da 1 a 3600 |
+| `handoffRetentionSeconds` | `ouf.onboarding.handoff-retention-seconds` | `OUF_ONB_HANDOFF_RETENTION_SECONDS` | 86400 s | Intero positivo a 32 bit |
+
+Onboarding valida entrambi i valori all'avvio. Il primo fissa `waitUntil` per ciascuna nuova emissione. Il secondo stabilisce da quando è consentita la pulizia di una ricevuta conclusa, misurando il tempo da `completedAt`. Il link del selettore usa `ouf.authorization.ths.public-origin`, l'origine HTTPS delle challenge.
+
+Acquisire e ripristinare i due parametri e l'origine con la configurazione dell'installazione. Sono dati privi di segreti. Includere la tabella `ouf_onboarding.managed_file_handoff` nel backup coerente dello schema e della cronologia Flyway. Dopo il ripristino, verificare con un'identità autorizzata che chiave di comando, versione e scadenza di una ricevuta campione corrispondano alla cattura. La configurazione ripristinata si applica alle nuove emissioni.
+
 ## Registro delle capability di Authorization
 
 | Campo | Valore |
@@ -19,6 +30,7 @@
 |---|---|---|---|---|
 | `onboarding.semantic-mapping.v1` | Source Onboarding owns the reviewed mapping in `ouf_onboarding.onboarding_version.configuration`. The version pins source type, target classes, optional controlled category and semantic references. | The category contains two public IRIs. Treat the enclosing configuration snapshot as private. Credential references must keep their original bindings. | Capture the configuration JSON in a consistent database snapshot with source/version IDs, parentage, hashes, approval records and referenced semantic revision/publication IDs. Restore the referenced revisions and the version graph before dependent publications. | Recompute the version hash where present. Resolve the pinned semantic references and compare every target class and its optional category against the captured mapping. |
 | `onboarding.published-mapping.v1` | Source Onboarding owns the mapping embedded in `ouf_onboarding.published_configuration.bundle` for UDP consumption. Depends on `onboarding.semantic-mapping.v1`. | Same handling as the reviewed configuration. | Capture the original bundle with its publication row, version link, checksum and lifecycle state in the same snapshot. Restore the captured rows and links. | Verify checksum and version link, then compare the published mapping with the approved version, including category absence. |
+| `ouf.onboarding.publication.max-runtime-envelope-bytes` | Source Onboarding installation setting in bytes. Default `2097152` (2 MiB), the lower known runtime read limit. Set at or below the smallest installed Ingestion and UDP publication read capacity, including Gateway limits on those routes. The check counts UTF-8 JSON bytes for the whole runtime envelope, including D-084 pins, embedded definitions, value maps, the longest valid source status and the framing of the single-item discovery page. | No. | Capture and restore the effective setting with the installation configuration, alongside the runtime and Gateway read limits. | Verify that review and activation reject a body over the restored limit and that active and exact reads return the admitted envelope. A blocked candidate can be withdrawn and replaced with a smaller revision. |
 
 ## Controlled category contract (D-059)
 

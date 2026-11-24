@@ -2,6 +2,7 @@ package it.comune.trieste.ouf.onboarding.api;
 
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import it.comune.trieste.ouf.onboarding.application.RuntimePublicationEnvelope;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -29,7 +30,8 @@ import org.springframework.web.server.ResponseStatusException;
 @ConditionalOnProperty(name="ouf.workflow.ths.gateway-base-url")
 public class WorkflowThsApi {
   private static final int OWNER_RESPONSE_CHARS=1_048_576;
-  private static final int VALUE_MAP_CARD_BYTES=8*1_048_576;
+  private static final int EXPANDED_CARD_BYTES=8*1_048_576;
+  private static final Duration OWNER_TIMEOUT=Duration.ofSeconds(15);
   private static final String SEMANTIC_CHALLENGES="/api/trusted-human/v1/semantic-approval-challenges/";
   private record OwnerResponse(int statusCode,String body) {}
   private final OAuth2AuthorizedClientService clients;
@@ -64,20 +66,25 @@ public class WorkflowThsApi {
     if("onboarding".equals(flow)){
       if(!(card instanceof ObjectNode ownerCard)||!id.toString().equals(card.path("challenge_id").textValue()))
         throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_REVIEW_INVALID");
-      verifyTerms(ownerCard,access);
+      if(!ownerCard.path("progress").has("publicationEnvelopeBlock"))verifyTerms(ownerCard,access);
     }
     return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(Map.of("card",card,"csrfHeader",csrf.getHeaderName(),"csrfToken",csrf.getToken()));
   }
 
   private boolean verifyTerms(ObjectNode card,String access)throws InterruptedException{
     var terms=new PublishedReviewTerms(card);
-    if(terms.canLookUp()){
-      var uri=gateway.resolve("/api/trusted-human/v1/semantic-published-terms?revisionIds="+terms.revisionIds());
+    long deadline=System.nanoTime()+OWNER_TIMEOUT.toNanos();
+    for(var batch:terms.batches()){
+      long remaining=deadline-System.nanoTime();
+      if(remaining<=0)break;
+      var uri=gateway.resolve("/api/trusted-human/v1/semantic-published-terms?revisionIds="+String.join(",",batch));
       try{
-        var registry=send(HttpRequest.newBuilder(uri).GET(),access);
-        if(registry.statusCode()==200)terms.read(json.readTree(registry.body()));
+        var registry=send(HttpRequest.newBuilder(uri).GET(),access,Duration.ofNanos(remaining));
+        if(registry.statusCode()!=200)break;
+        terms.read(json.readTree(registry.body()),batch);
       }catch(IOException|ResponseStatusException unavailable){
         // A failed registry read must still leave the owner card and negative decisions accessible.
+        break;
       }
     }
     return terms.attachTo(card);
@@ -125,6 +132,9 @@ public class WorkflowThsApi {
             ||!card.path("lockVersion").isIntegralNumber()||!card.path("lockVersion").canConvertToLong()
             ||proposed.get("expectedVersion").longValue()!=card.path("lockVersion").longValue())
           throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,"THS_REVIEW_STALE_CARD");
+        var envelope=ownerCard.path("progress").path("publicationEnvelopeBlock");
+        if(envelope.isObject())
+          new RuntimePublicationEnvelope.Size(envelope.path("bytes").asInt(),envelope.path("limitBytes").asInt()).requireFits();
         if(!verifyTerms(ownerCard,access))
           throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,"THS_REVIEW_TERMS_UNVERIFIED");
       }
@@ -149,12 +159,15 @@ public class WorkflowThsApi {
     return upstream(send(builder,access));
   }
   private OwnerResponse send(HttpRequest.Builder builder,String access)throws IOException,InterruptedException{
+    return send(builder,access,builder.build().uri().getPath().endsWith("/review/activate")?Duration.ofSeconds(55):OWNER_TIMEOUT);
+  }
+  private OwnerResponse send(HttpRequest.Builder builder,String access,Duration timeout)throws IOException,InterruptedException{
     var request=builder.header("Authorization","Bearer "+access).header("Accept","application/json")
-        .timeout(Duration.ofSeconds(builder.build().uri().getPath().endsWith("/review/activate")?55:15)).build();
+        .timeout(timeout).build();
     boolean semanticCard="GET".equals(request.method()) && request.uri().getPath().startsWith(SEMANTIC_CHALLENGES);
-    // VALUE_MAP carries the definition, labelled entries and a diff. Keep the existing character
-    // bound for every other owner response, allowing its full UTF-8 encoding during receipt.
-    int maximumBytes=semanticCard?VALUE_MAP_CARD_BYTES:3*OWNER_RESPONSE_CHARS;
+    boolean onboardingCard="GET".equals(request.method()) && request.uri().getPath().endsWith("/review");
+    // Review details can repeat configuration as field rows, verified pins and a diff.
+    int maximumBytes=semanticCard||onboardingCard?EXPANDED_CARD_BYTES:3*OWNER_RESPONSE_CHARS;
     var received=new ByteArrayOutputStream();
     HttpResponse<Void> response;
     try{
@@ -169,7 +182,7 @@ public class WorkflowThsApi {
       throw failure;
     }
     String body=received.toString(StandardCharsets.UTF_8);
-    if(body.length()>OWNER_RESPONSE_CHARS && !(semanticCard && response.statusCode()==200 && isValueMapCard(body)))
+    if(body.length()>OWNER_RESPONSE_CHARS && !(response.statusCode()==200 && (onboardingCard||semanticCard&&isValueMapCard(body))))
       throw responseTooLarge();
     return new OwnerResponse(response.statusCode(),body);
   }

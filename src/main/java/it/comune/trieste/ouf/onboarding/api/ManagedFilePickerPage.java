@@ -28,6 +28,8 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileStagingStore;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileChatHandoff;
+import it.comune.trieste.ouf.authorization.PrincipalContext;
+import it.comune.trieste.ouf.authorization.ServletAuthorization;
 
 /** Session-backed browser adapter to the existing governed upload capability. */
 @RestController
@@ -55,10 +57,11 @@ public class ManagedFilePickerPage {
     this.handoffs = handoffs;
   }
 
-  private void requireSession(HttpServletRequest request) {
+  private PrincipalContext requireSession(HttpServletRequest request) {
     if (!Boolean.TRUE.equals(request.getAttribute("ouf.permissionThsSession")))
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "THS_SESSION_REQUIRED");
     actors.requireHuman(request, "ouf.managed-source.file.upload");
+    return ServletAuthorization.principal(request).context();
   }
 
   @GetMapping("/trusted-human/managed-files/")
@@ -87,10 +90,10 @@ public class ManagedFilePickerPage {
   @PostMapping("/trusted-human/managed-files/rejection")
   public ResponseEntity<Void> reject(@RequestParam("handoff") UUID handoff,
       @org.springframework.web.bind.annotation.RequestBody Rejection rejection, HttpServletRequest request) {
-    requireSession(request);
+    var principal = requireSession(request);
     if (rejection == null || rejection.code() == null || !java.util.Set.of("FORMAT_UNSUPPORTED", "SIZE_INVALID").contains(rejection.code()))
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UPLOAD_REJECTION_INVALID");
-    handoffs.reject(handoff, actors.requireHuman(request, "ouf.managed-source.file.upload").subject(), rejection.code());
+    handoffs.reject(handoff, principal.tenantId(), principal.subjectId(), rejection.code());
     return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
   }
 
@@ -99,12 +102,13 @@ public class ManagedFilePickerPage {
   public ResponseEntity<Map<String,String>> upload(HttpServletRequest request,
       @RequestHeader("X-Content-SHA256") String hash,
       @RequestParam(value="handoff",required=false) UUID handoff) throws IOException {
-    requireSession(request);
+    var principal = requireSession(request);
     long declaredSize = request.getContentLengthLong();
     if (declaredSize > MAX_BYTES)
       throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "UPLOAD_SIZE_INVALID");
     if (declaredSize == 0 || !hash.matches("sha256:[0-9a-f]{64}"))
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UPLOAD_METADATA_INVALID");
+    if (handoff != null) handoffs.checkUpload(handoff, principal.tenantId(), principal.subjectId());
     var auth = SecurityContextHolder.getContext().getAuthentication();
     if (!(auth instanceof OAuth2AuthenticationToken session))
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "THS_SESSION_REQUIRED");
@@ -137,8 +141,7 @@ public class ManagedFilePickerPage {
         var result = json.readTree(bounded);
         var id = result.path("asset_id").asText();
         if (!id.matches("[0-9a-f-]{36}")) throw new IOException("Gateway upload result missing asset ID");
-        if (handoff != null) handoffs.complete(handoff, UUID.fromString(id), actors.requireHuman(request,
-            "ouf.managed-source.file.upload").subject());
+        if (handoff != null) handoffs.complete(handoff, UUID.fromString(id), principal.tenantId(), principal.subjectId());
         return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore())
             .body(Map.of("assetId", id, "status", "STAGED"));
       }

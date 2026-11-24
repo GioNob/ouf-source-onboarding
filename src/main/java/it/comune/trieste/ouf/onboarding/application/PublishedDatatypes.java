@@ -50,14 +50,14 @@ final class PublishedDatatypes {
   static void prepare(Map<String,Object> config,Map<String,String> profiles,DatatypeResolver registry,CanonicalHash hashes,
       BiConsumer<String,String> verifiedValueMap){
     var mapping=map(config.get("semanticMapping"));
-    var refs=list(mapping.get("semanticRefs"),1,32);
+    var refs=list(mapping.get("semanticRefs"),1,Integer.MAX_VALUE);
     Map<String,Map<String,Object>> pins=new LinkedHashMap<>();
     Map<String,Object> retainedVocabularies=new HashMap<>();
     Map<String,Object> retainedTargets=new HashMap<>();
     Map<String,Object> retainedDigests=new HashMap<>();
     Map<String,Object> retainedDefinitions=new HashMap<>();
     Set<String> versions=new HashSet<>();
-    for(Object raw:list(config.get("semanticReferenceBindings"),1,32)){
+    for(Object raw:list(config.get("semanticReferenceBindings"),1,Integer.MAX_VALUE)){
       var binding=map(raw);
       var pin=new LinkedHashMap<String,Object>();
       for(String key:List.of("semanticId","semanticVersion","revisionId","publicationSetId"))pin.put(key,text(binding,key));
