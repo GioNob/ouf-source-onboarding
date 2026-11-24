@@ -841,6 +841,10 @@ components:
         metadata:
           type: object
           properties:
+            maxCellChars:
+              type: integer
+              minimum: 0
+              description: Maximum raw CSV data-cell length in UTF-16 units, excluding the header. Absent for unmeasured profiles.
             layers:
               type: array
               items:

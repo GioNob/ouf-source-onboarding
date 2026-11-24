@@ -15,6 +15,14 @@ management:
   endpoint.health.probes.enabled: true
 ouf:
   onboarding:
+    acquisition-limits:
+      max-rows: ${OUF_ONB_ACQUISITION_LIMITS_MAX_ROWS:1000000}
+      max-columns: ${OUF_ONB_ACQUISITION_LIMITS_MAX_COLUMNS:1024}
+      max-cell-chars: ${OUF_ONB_ACQUISITION_LIMITS_MAX_CELL_CHARS:1000000}
+      margin-percent: ${OUF_ONB_ACQUISITION_LIMITS_MARGIN_PERCENT:25}
+      min-headroom-rows: ${OUF_ONB_ACQUISITION_LIMITS_MIN_HEADROOM_ROWS:100}
+      min-headroom-columns: ${OUF_ONB_ACQUISITION_LIMITS_MIN_HEADROOM_COLUMNS:8}
+      min-headroom-cell-chars: ${OUF_ONB_ACQUISITION_LIMITS_MIN_HEADROOM_CELL_CHARS:1024}
     wait-max-seconds: ${OUF_ONB_WAIT_MAX_SECONDS:3600}
     handoff-retention-seconds: ${OUF_ONB_HANDOFF_RETENTION_SECONDS:86400}
     approval-challenge-ttl: PT10M
