@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {app, policy, sha256, startFixture} from './predecessor-fixture.mjs';
-import {issuePicker, readPicker, verifyReturn, writePredecessor, writeCandidate} from './predecessor-scenario.mjs';
+import {createReturnSource, issuePicker, readPicker, verifyReturn, writePredecessor, writeCandidate} from './predecessor-scenario.mjs';
 
 const [previous, candidate] = process.argv.slice(2);
 for (const id of [previous, candidate]) assert.match(id, /^sha256:[0-9a-f]{64}$/);
@@ -17,11 +17,15 @@ assert.ok(process.env.OUF_ONB_DB_PASSWORD);
 const docker = (...args) => execFileSync('docker', args, {encoding: 'utf8', timeout: 45_000}).trim();
 const user = 'ouf_onboarding';
 // The candidate's migrations come from the source tree under test, never from a hand-kept list (task-62h).
-const MIGRATIONS = readdirSync('src/main/resources/db/migration')
+const MIGRATIONS = readdirSync(new URL('../../src/main/resources/db/migration/', import.meta.url))
   .map(script => ({script, match: /^V([0-9]+)__.+\.sql$/.exec(script)}))
   .filter(item => item.match).map(item => ({script: item.script, version: Number(item.match[1])}))
   .sort((a, b) => a.version - b.version);
 const LATEST = String(MIGRATIONS.at(-1).version);
+// The known ordered history after V43 stays pinned; later scripts extend it.
+assert.deepEqual(MIGRATIONS.filter(item => item.version >= 44 && item.version <= 47).map(item => item.script),
+  ['V44__managed_profile_distinct_values.sql', 'V45__managed_value_map_preparation.sql',
+    'V46__managed_file_handoff.sql', 'V47__managed_file_unit_binding.sql']);
 function sql(query) {
   return docker('exec', db, 'psql', '-XAtq', '-v', 'ON_ERROR_STOP=1', '-U', user, '-d', user, '-c', query);
 }
@@ -175,6 +179,7 @@ try {
   if (predecessorHasPicker) {
     // The exact deployed predecessor already reads the durable picker: the observation is unchanged.
     for (const field of ['state', 'issuedAt', 'waitUntil', 'observationVersion']) {
+      assert.ok(typeof pending[field] === 'string' && pending[field] !== '', 'candidate exposes the durable picker field ' + field);
       assert.equal(oldObservation[field], pending[field], 'predecessor keeps the durable picker field ' + field);
     }
   } else {
@@ -189,18 +194,22 @@ try {
   else assert.equal(returnedValues, 'NULL');
   assert.equal(sql(`select parent_version_id from ouf_onboarding.onboarding_version where onboarding_version_id='${result.child.onboardingVersionId}'`),
     seed.parent.onboardingVersionId, 'child draft keeps its parent link after the return');
+  // The predecessor creates a new source after the return; it knows nothing of the V47 binding table.
+  const returnSource = await createReturnSource(fixture, returnedProfile);
+  assert.match(returnSource.assetId, /^[0-9a-f-]{36}$/);
   assert.deepEqual(history(LATEST), candidateHistory);
-  if (MIGRATIONS.some(item => item.script === 'V47__managed_file_unit_binding.sql')) {
-    // V47 (task-62b): the binding table and view survive the return and read every predecessor CSV write as table:0.
-    assert.equal(sql(`select to_regclass('ouf_onboarding.managed_file_unit_binding') is not null
-      and to_regclass('ouf_onboarding.managed_file_effective_binding') is not null`), 't');
-    assert.equal(sql(`select count(*) from ouf_onboarding.managed_file_asset a
-      where a.media_type='text/csv' and a.source_id is not null and not exists(
-        select 1 from ouf_onboarding.managed_file_effective_binding b
-        where b.asset_id=a.asset_id and b.source_id=a.source_id and b.unit_ref='table:0')`), '0');
-    assert.ok(Number(sql(`select count(*) from ouf_onboarding.managed_file_effective_binding where unit_ref='table:0'`)) > 0,
-      'the scenario binds at least one CSV source');
-  }
+  // V47 (task-62b): the binding table and view survive the return and read every predecessor CSV write as table:0.
+  assert.equal(sql(`select to_regclass('ouf_onboarding.managed_file_unit_binding') is not null
+    and to_regclass('ouf_onboarding.managed_file_effective_binding') is not null`), 't');
+  assert.equal(sql(`select count(*) from ouf_onboarding.managed_file_unit_binding where asset_id='${returnSource.assetId}'`), '0');
+  assert.equal(sql(`select unit_ref || ' ' || source_id from ouf_onboarding.managed_file_effective_binding
+    where asset_id='${returnSource.assetId}'`), 'table:0 return-profile', 'the view reads the post-return predecessor source as table:0');
+  assert.equal(sql(`select count(*) from ouf_onboarding.managed_file_asset a
+    where a.media_type='text/csv' and a.source_id is not null and not exists(
+      select 1 from ouf_onboarding.managed_file_effective_binding b
+      where b.asset_id=a.asset_id and b.source_id=a.source_id and b.unit_ref='table:0')`), '0');
+  assert.ok(Number(sql(`select count(*) from ouf_onboarding.managed_file_effective_binding where unit_ref='table:0'`)) > 0,
+    'the scenario binds at least one CSV source');
   assert.equal(pickerRow(), pickerEvidence);
   assert.deepEqual(candidateEvidence(), evidence);
   assert.equal(sql("select count(*) from ouf_onboarding.onboarding_version where source_id='review'"), '2');

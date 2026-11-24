@@ -238,11 +238,13 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   // The older V43 predecessor replays the command without the additive D-085 observation fields.
   const additive = new Set(['workflowState', 'reasonCode', 'allowedActions', 'lockVersion']);
   // task-52c derives the proposal requirement from the retained configuration (nothing is stored), so a
-  // predecessor replays the same draft as DRAFT_READY without the derived fields.
+  // predecessor without it replays the same draft as DRAFT_READY without the derived fields. A predecessor
+  // with task-52c (the exact deployed 20e90de) already declared them on its own draft: its replay is unchanged.
   const derived = new Set(['executionProposalRequired', 'missingSections']);
+  const predecessorDerivesProposal = 'executionProposalRequired' in parent;
   const replayed = Object.fromEntries(Object.entries(child)
-    .filter(([key]) => !derived.has(key) && (predecessorHasDistinctValues || !additive.has(key))));
-  if (replayed.reasonCode === 'EXECUTION_PROPOSAL_REQUIRED') replayed.reasonCode = 'DRAFT_READY';
+    .filter(([key]) => (predecessorDerivesProposal || !derived.has(key)) && (predecessorHasDistinctValues || !additive.has(key))));
+  if (!predecessorDerivesProposal && replayed.reasonCode === 'EXECUTION_PROPOSAL_REQUIRED') replayed.reasonCode = 'DRAFT_READY';
   assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'), replayed);
   const prepared = await prepare(fixture, child, 'return-review');
   assert.equal(prepared.state, 'IN_REVIEW');
@@ -255,4 +257,12 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   assert.deepEqual(retained.inferred_schema.map(c => c.distinctValues), [1, 1]);
   assert.equal(retained.distinct_cell_values, undefined);
   return profile(fixture, 'return-profile');
+}
+
+// A new source written by the predecessor after the return, on the file it profiled after the return (task-62h).
+export async function createReturnSource(fixture, file) {
+  const draft = await createDraft(fixture, file, 'OPEN', 'create-return');
+  assert.equal(draft.sourceId, file.sourceId);
+  assert.equal((await version(fixture, draft)).state, 'DRAFT');
+  return draft;
 }
