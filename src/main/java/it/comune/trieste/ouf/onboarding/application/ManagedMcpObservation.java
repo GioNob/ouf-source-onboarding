@@ -15,7 +15,7 @@ public final class ManagedMcpObservation {
   public enum Reason {
     PROFILE_PENDING, PROFILE_READY, PROFILE_FAILED, PROFILE_CANCELLED,
     ASSET_LIST, COLUMN_PAGE, UPLOAD_PENDING, UPLOAD_STAGED, UPLOAD_REJECTED, UPLOAD_QUARANTINED, WAIT_DEADLINE_EXPIRED,
-    DRAFT_READY, HUMAN_DECISION_PENDING, CHALLENGE_EXPIRED, REVIEW_UNAVAILABLE,
+    DRAFT_READY, EXECUTION_PROPOSAL_REQUIRED, HUMAN_DECISION_PENDING, CHALLENGE_EXPIRED, REVIEW_UNAVAILABLE,
     HUMAN_ACTIVATION_REQUIRED, READINESS_IN_PROGRESS, READINESS_BACKOFF,
     DEPENDENCY_RECHECK_REQUIRED, READINESS_BUDGET_EXHAUSTED, READINESS_BLOCKED,
     PUBLICATION_ACTIVE, PUBLICATION_SUPERSEDED, PUBLICATION_REVOKED,
@@ -80,6 +80,12 @@ public final class ManagedMcpObservation {
     return "DRAFT".equals(version.get("state"));
   }
 
+  static void describeDraft(Map<String,Object> body, Map<String,Object> version) {
+    var missing=ManagedFileExecutionProposal.missingSections(ManagedReviewSnapshot.object(version.get("configuration")));
+    body.put("executionProposalRequired",!missing.isEmpty());
+    body.put("missingSections",missing);
+  }
+
   public static Map<String,Object> created(Map<String,Object> body) {
     if (draftState(body)) return version(body, false);
     // An idempotent create replay returns only the identity, even after the review advances:
@@ -98,7 +104,8 @@ public final class ManagedMcpObservation {
       return with(body, state, Reason.ONB_PUBLICATION_ENVELOPE_TOO_LARGE, Action.WITHDRAW_CANDIDATE);
     Action revision = revisionAllowed ? Action.CREATE_REVISION : Action.NONE;
     return switch (state) {
-      case DRAFT -> with(body, state, Reason.DRAFT_READY, Action.PREPARE_REVIEW);
+      case DRAFT -> with(body, state, Boolean.TRUE.equals(body.get("executionProposalRequired"))
+          ? Reason.EXECUTION_PROPOSAL_REQUIRED : Reason.DRAFT_READY, Action.PREPARE_REVIEW);
       case IN_REVIEW -> review(body, state);
       case APPROVED -> activation(body, state);
       case ACTIVE -> with(body, state, Reason.PUBLICATION_ACTIVE, revision);

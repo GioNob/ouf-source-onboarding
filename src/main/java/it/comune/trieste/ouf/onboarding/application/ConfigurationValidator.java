@@ -161,7 +161,7 @@ public class ConfigurationValidator {
       GovernedIdentityProposal.validate(resolution,resolution.get("governedIdentity"),sourceId,classes,mapped);
       out.add(new Finding("INFO","ONB_GOVERNED_IDENTITY_PROPOSAL",path,
           "Complete canonical comparison proposal accepted for human review; UDP execution remains an activation gate."));
-    }catch(IllegalArgumentException failure){error(out,"ONB_GOVERNED_IDENTITY_INVALID",path,
+    }catch(ReviewValidationFailure | IllegalArgumentException failure){error(out,"ONB_GOVERNED_IDENTITY_INVALID",path,
         "Require a versioned source/class-scoped policy comparing every mapped canonical property, without field uniqueness or exclusion. UDP execution remains unavailable.");}
   }
 

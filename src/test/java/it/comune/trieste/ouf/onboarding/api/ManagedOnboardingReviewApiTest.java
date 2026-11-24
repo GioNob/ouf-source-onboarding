@@ -13,6 +13,51 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class ManagedOnboardingReviewApiTest {
+  @Test void task52cErrorsLogOnlySchemaPathsAndExceptionClasses()throws Exception{
+    var receipts=mock(PermissionDelegationVerifier.class);
+    var service=mock(ManagedOnboardingReviewService.class);
+    when(receipts.verifyManagedFile(any(),anyString(),anyString(),any()))
+        .thenReturn(new PermissionDelegationVerifier.Delegated(null,"test-key"));
+    var json=new ObjectMapper();
+    var http=MockMvcBuilders.standaloneSetup(new ManagedOnboardingReviewApi(receipts,service,json))
+        .setControllerAdvice(new ProblemHandler()).addFilters(new CorrelationFilter()).build();
+    var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(ManagedOnboardingReviewApi.class);
+    var logs=new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    logs.start();
+    logger.addAppender(logs);
+    try{
+      String correlation=UUID.randomUUID().toString();
+      String path="/api/internal/v1/onboarding/managed-file-mcp/review-prepare";
+      http.perform(post(path).contentType(MediaType.APPLICATION_JSON).header("X-Correlation-ID",correlation))
+          .andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.code").value("ONB_REVIEW_ARGUMENTS_INVALID"));
+      var args=new LinkedHashMap<String,Object>(Map.of("sourceId","fixture","onboardingVersionId",UUID.randomUUID().toString(),
+          "expectedVersion",0,"commandKey","test-key"));
+      for(var bad:List.of(Map.of("private-csv-column","object://fixture/private"),
+          Map.of("limits",Map.of("maxRows","private-csv-value")))){
+        args.put("executionProposal",bad);
+        http.perform(post(path).contentType(MediaType.APPLICATION_JSON).header("X-Correlation-ID",correlation)
+            .content(json.writeValueAsBytes(Map.of("Arguments",args))))
+            .andExpect(status().isUnprocessableEntity()).andExpect(jsonPath("$.code").value("ONB_REVIEW_ARGUMENTS_INVALID"));
+      }
+      verifyNoInteractions(service);
+      args.remove("executionProposal");
+      when(service.prepare(any(),any(),eq(correlation))).thenThrow(new IllegalArgumentException("private-exception-value"));
+      http.perform(post(path).contentType(MediaType.APPLICATION_JSON).header("X-Correlation-ID",correlation)
+          .header("X-OUF-Managed-File-Receipt","private-receipt").content(json.writeValueAsBytes(Map.of("Arguments",args))))
+          .andExpect(status().isInternalServerError()).andExpect(jsonPath("$.code").value("ONB_REVIEW_INTERNAL_ERROR"))
+          .andExpect(jsonPath("$.correlationId").value(correlation));
+      assertThat(logs.list).extracting(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).containsExactly(
+          "code=ONB_REVIEW_ARGUMENTS_INVALID phase=decode correlationId="+correlation+" path=Arguments",
+          "code=ONB_REVIEW_ARGUMENTS_INVALID phase=decode correlationId="+correlation+" path=Arguments.executionProposal.*",
+          "code=ONB_REVIEW_ARGUMENTS_INVALID phase=decode correlationId="+correlation+" path=Arguments.executionProposal.limits.maxRows",
+          "code=ONB_REVIEW_INTERNAL_ERROR phase=prepare correlationId="+correlation+" class=java.lang.IllegalArgumentException");
+      assertThat(logs.list).allMatch(event->event.getThrowableProxy()==null);
+    }finally{
+      logger.detachAppender(logs);
+      logs.stop();
+    }
+  }
+
   @Test void authenticatedEnvelopeStillRequiresExplicitVersionAndClosedTypedArguments()throws Exception{
     var receipts=mock(PermissionDelegationVerifier.class);var service=mock(ManagedOnboardingReviewService.class);
     when(receipts.verifyManagedFile(any(),anyString(),anyString(),any())).thenReturn(new PermissionDelegationVerifier.Delegated(null,"test-key"));

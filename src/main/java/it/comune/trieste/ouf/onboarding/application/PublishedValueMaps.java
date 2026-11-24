@@ -57,6 +57,6 @@ final class PublishedValueMaps {
       if(actual.get("label") instanceof Map<?,?> label && label.values().stream().allMatch(String.class::isInstance))
         pin.put("label",label);
       return canonical.length;
-    }catch(IllegalArgumentException invalid){throw unresolvedValueMap();}
+    }catch(ReviewValidationFailure | IllegalArgumentException invalid){throw unresolvedValueMap();}
   }
 }

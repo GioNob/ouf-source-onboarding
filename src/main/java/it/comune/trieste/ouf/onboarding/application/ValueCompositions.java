@@ -208,5 +208,5 @@ final class ValueCompositions {
     require(map.keySet().containsAll(required)&&map.keySet().stream().allMatch(k->required.contains(k)||optional.contains(k)));
   }
   static void require(boolean ok){if(!ok)throw invalid();}
-  private static IllegalArgumentException invalid(){return new IllegalArgumentException("ONB_COMPOSITION_INVALID");}
+  private static ReviewValidationFailure invalid(){return new ReviewValidationFailure("ONB_COMPOSITION_INVALID");}
 }

@@ -4,6 +4,12 @@ This change continues the existing managed-file, owner approval and OAuth2 Trust
 
 The authenticated HUMAN delegated by MCP calls `source.onboarding.review.prepare` with the source ID, version UUID, exact lock version and a stable command key. An optional execution proposal completes the draft with pinned semantic and UDP policies. Preparation freezes the configuration and returns its hash and THS URL. See [the execution proposal](MANAGED_FILE_EXECUTION_PROPOSAL.md).
 
+On a `DRAFT`, both `source.onboarding.create` and `source.onboarding.read` return `allowedActions: ["PREPARE_REVIEW"]`. When the retained configuration needs input they return `reasonCode: "EXECUTION_PROPOSAL_REQUIRED"`, `executionProposalRequired: true` and the ordered `missingSections` list. A complete draft returns `DRAFT_READY`, `false` and an empty list. Both exact and latest conditional reads carry these fields even when `unchanged` is true.
+
+Omitting the proposal on an incomplete draft gives HTTP 422 with `code: "ONB_EXECUTION_PROPOSAL_REQUIRED"` and the same list. Replay, recovery, state and lock checks take precedence. This refusal leaves the lock, command journal and challenge count intact. Supply a complete proposal with a new command key for the changed intent. An identical successful replay returns the existing challenge.
+
+Envelope and decoding failures return HTTP 422 with `ONB_REVIEW_ARGUMENTS_INVALID`. The server logs the phase, correlation ID and a schema field path. Unknown field names are masked. Domain validations carry their own codes, including `ONB_COMPOSITION_INVALID`. An unexpected exception returns HTTP 500 with `ONB_REVIEW_INTERNAL_ERROR`. The diagnostic records the exception class and omits its message and payload. Send a UUID in `X-Correlation-ID` or use the one returned by the owner.
+
 When `source.onboarding.read` returns `IN_REVIEW` with `challengeExpired=true`, follow the returned `nextAction`. Send `review.prepare` for that version and current lock with a fresh command key and omit `executionProposal`. Concurrent identical requests return the same replacement. Opening the new URL displays the frozen candidate. One explicit HUMAN click confirms it. V42 retains both challenge IDs and the actor. A replay of an earlier command reads current progress.
 
 ## Conditional owner observation
@@ -12,7 +18,7 @@ The [owner observation contract](../contracts/onboarding-managed-mcp-observation
 
 `review-read` accepts both `{sourceId, onboardingVersionId}` and `{sourceId, view: "LATEST"}`. Supply the last `observationVersion` as `ifObservationVersion` on the same authorized read. A matching validator gives HTTP 200 with `unchanged: true`, state, version, reason and actions. Keep the previous full view. A different validator gives the same full view as an unconditional read.
 
-The validator covers the selected version, challenge, time-dependent eligibility, readiness and budget, decision feedback, publication and the observed actions. Every read checks ownership and records authorization before comparing the validator. A match skips configuration loading, feedback decoding and assembly of the full receipt.
+The validator covers the selected version, proposal requirements, challenge, time-dependent eligibility, readiness and budget, decision feedback, publication and the observed actions. Every read checks ownership and records authorization before comparing the validator. Draft reads inspect the retained configuration. A match skips feedback decoding and assembly of the full receipt.
 
 A HUMAN may mark fields, identity rules, semantic references or acquisition limits on the card and choose **Chiedi modifiche all’agente**. The owner consumes the challenge and returns `CHANGES_REQUESTED`. The structured `reviewFeedback` contains up to 128 distinct targets, 500 characters per comment and 48 KiB in total. A plain rejection carries an empty list. The decision records its actor, challenge, authentication context and frozen hash. Older readers see the closed version as rejected.
 

@@ -39,12 +39,57 @@
     }
   },
   "else": {"properties": {"observationVersion": {"$ref": "#/$defs/observationVersion"}}},
+  "allOf": [
+    {
+      "if": {"required": ["executionProposalRequired"], "properties": {"executionProposalRequired": {"const": false}}},
+      "then": {
+        "required": ["missingSections"],
+        "properties": {
+          "workflowState": {"const": "DRAFT"},
+          "reasonCode": {"const": "DRAFT_READY"},
+          "missingSections": {"maxItems": 0},
+          "allowedActions": {"const": ["PREPARE_REVIEW"]}
+        }
+      }
+    },
+    {
+      "if": {"required": ["reasonCode"], "properties": {"reasonCode": {"const": "EXECUTION_PROPOSAL_REQUIRED"}}},
+      "then": {
+        "required": ["executionProposalRequired", "missingSections"],
+        "properties": {
+          "workflowState": {"const": "DRAFT"},
+          "executionProposalRequired": {"const": true},
+          "missingSections": {"minItems": 1},
+          "allowedActions": {"const": ["PREPARE_REVIEW"]}
+        }
+      }
+    },
+    {
+      "if": {"required": ["code"], "properties": {"code": {"const": "ONB_EXECUTION_PROPOSAL_REQUIRED"}}},
+      "then": {"required": ["missingSections"], "properties": {"missingSections": {"minItems": 1}}}
+    },
+    {
+      "if": {"required": ["code"], "properties": {"code": {"const": "ONB_SEMANTIC_REF_FORM_INVALID"}}},
+      "then": {"required": ["index"], "properties": {"index": {"type": "integer", "minimum": 0}}}
+    },
+    {
+      "if": {"required": ["code"], "properties": {"code": {"const": "ONB_SEMANTIC_REF_VERSION_MISMATCH"}}},
+      "then": {"required": ["semanticRef"], "properties": {"semanticRef": {"type": "string", "minLength": 3}}}
+    }
+  ],
   "properties": {
     "workflowState": {
       "$ref": "#/$defs/state"
     },
     "reasonCode": {
       "$ref": "#/$defs/reason"
+    },
+    "executionProposalRequired": {"type": "boolean"},
+    "missingSections": {
+      "description": "Sezioni richieste in ordine di dichiarazione.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["semanticBindings", "semanticPublicationSetRef", "udp.resolution", "udp.materialization", "limits"]}
     },
     "allowedActions": {
       "type": "array",
@@ -157,6 +202,7 @@
         "UPLOAD_QUARANTINED",
         "WAIT_DEADLINE_EXPIRED",
         "DRAFT_READY",
+        "EXECUTION_PROPOSAL_REQUIRED",
         "HUMAN_DECISION_PENDING",
         "CHALLENGE_EXPIRED",
         "REVIEW_UNAVAILABLE",
@@ -190,6 +236,7 @@
         "UPLOAD_QUARANTINED": "Il file della ricevuta è in quarantena.",
         "WAIT_DEADLINE_EXPIRED": "L'attesa umana del selettore è terminata alla scadenza fissata dall'owner.",
         "DRAFT_READY": "Bozza nello stato ammesso per la preparazione.",
+        "EXECUTION_PROPOSAL_REQUIRED": "La preparazione richiede una proposta esecutiva con le sezioni indicate in missingSections.",
         "HUMAN_DECISION_PENDING": "Challenge aperta, corrente e con tempo residuo.",
         "CHALLENGE_EXPIRED": "Challenge scaduta rinnovabile.",
         "REVIEW_UNAVAILABLE": "Review assente, chiusa o priva di uno stato di decisione ammesso.",

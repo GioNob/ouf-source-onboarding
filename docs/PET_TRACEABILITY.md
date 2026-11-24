@@ -50,6 +50,15 @@ The following test IDs identify assertions in `ManagedFileChatHandoffTest` on th
 
 The D-080 workflow includes `82aabaa`. It compares the full candidate handoff row and Flyway history through V46 after the predecessor has resumed reads and writes. MCP tranche renewal, admission, and the end-to-end latency measurement belong to the MCP and cross-module PET.
 
+## Sprint 03 · Managed proposal and preparation diagnostics
+
+| PET ID | Contract | Local regression |
+|---|---|---|
+| ONB-52C-01 | Create, full and conditional DRAFT reads agree on the ordered missing sections, including partial and legacy complete configurations. | `task52cPoiCsvDeclaresMissingProposalAndReplaysOneChallenge`, `task52cMissingSectionsComeFromTheRetainedConfigurationInWireOrder`, `latestReadRecoversTheOwnerVersionWithoutNewChallengeOrApproval` |
+| ONB-52C-02 | Omitted proposal and mismatched pins leave the draft at lock zero. Stale version takes precedence. A valid proposal for three text properties freezes one challenge across replay. | `task52cPoiCsvDeclaresMissingProposalAndReplaysOneChallenge` |
+| ONB-52C-03 | Create rejects the publication UUID suffix at its input index and leaves no source, version or idempotency record. | `task52cPoiCsvDeclaresMissingProposalAndReplaysOneChallenge` |
+| ONB-52C-04 | Decode errors carry safe diagnostic paths, domain validators retain their codes and unexpected exceptions produce a correlated 500. | `task52cErrorsLogOnlySchemaPathsAndExceptionClasses`, `task52cSharedValidatorsReturnTypedUnprocessableFailures`, `task52cRetainedInvalidCompositionReturnsItsDomainCode` |
+
 ## Release boundary
 
 The repository can verify module-local behavior and contracts. It cannot truthfully mark environment-bound integrations complete without Authorization, Gateway, Semantic Registry, Ingestion Runtime, shared log/object storage and a deployed browser client. Those items are not silently omitted: they are explicit release gates owned by the named systems.

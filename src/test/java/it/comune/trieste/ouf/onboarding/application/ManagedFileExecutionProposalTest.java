@@ -72,14 +72,55 @@ class ManagedFileExecutionProposalTest {
   }
   @Test void everySemanticReferenceMustHaveOneExactBindingInTheSelectedSet(){
     var correct=proposal();
-    for(var binding:List.of(new ManagedFileExecutionProposal.SemanticBinding(ONTOLOGY,"2",REVISION,PUBLICATION),
-        new ManagedFileExecutionProposal.SemanticBinding(ONTOLOGY,"1","not-a-revision",PUBLICATION),
+    for(var binding:List.of(new ManagedFileExecutionProposal.SemanticBinding(ONTOLOGY,"1","not-a-revision",PUBLICATION),
         new ManagedFileExecutionProposal.SemanticBinding(ONTOLOGY,"1",REVISION,REVISION))){
       var bad=new ManagedFileExecutionProposal.Proposal(List.of(binding),PUBLICATION,correct.udp(),correct.limits());
       assertThatThrownBy(()->compile(config(),bad)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
     }
     var bad=new ManagedFileExecutionProposal.Proposal(List.of(correct.semanticBindings().getFirst(),correct.semanticBindings().getFirst()),PUBLICATION,correct.udp(),correct.limits());
-    assertThatThrownBy(()->compile(config(),bad)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    assertThatThrownBy(()->compile(config(),bad)).isInstanceOfSatisfying(
+        it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,failure->{
+          assertThat(failure.code()).isEqualTo("ONB_SEMANTIC_REF_VERSION_MISMATCH");
+          assertThat(failure.properties()).containsEntry("semanticRef",ONTOLOGY+"@1");
+        });
+  }
+
+  @Test void task52cSharedValidatorsReturnTypedUnprocessableFailures(){
+    var proposal=proposal();
+    var config=config();
+    object(object(config,"extractionProfile"),"runtime").remove("csvDelimiter");
+    assertUnprocessable(()->compile(config,proposal),"ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    object(object(proposal.udp(),"resolution"),"governedIdentity").put("sourceId","other-source");
+    assertUnprocessable(()->compile(config(),proposal),"ONB_GOVERNED_IDENTITY_INVALID");
+    assertUnprocessable(()->ValueReader.named("unknown"),"ONB_VALUE_READER_INVALID");
+    assertUnprocessable(()->new ValueCompositions(List.of(Map.of()),Map.of(),null),"ONB_COMPOSITION_INVALID");
+    assertThatThrownBy(()->ManagedFileService.retainedFileId("private-invalid-reference"))
+        .isInstanceOfSatisfying(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class,failure->{
+          assertThat(failure.code()).isEqualTo("ONB_REVIEW_CONFIGURATION_DRIFT");
+          assertThat(failure.status().value()).isEqualTo(409);
+        });
+  }
+
+  private void assertUnprocessable(org.assertj.core.api.ThrowableAssert.ThrowingCallable call,String code){
+    assertThatThrownBy(call).isInstanceOfSatisfying(ReviewValidationFailure.class,failure->{
+      assertThat(failure.status().value()).isEqualTo(422);
+      assertThat(failure.code()).isEqualTo(code);
+    });
+  }
+
+  @Test void task52cMissingSectionsComeFromTheRetainedConfigurationInWireOrder(){
+    var draft=config();
+    assertThat(ManagedFileExecutionProposal.missingSections(draft)).containsExactly("semanticBindings",
+        "semanticPublicationSetRef","udp.resolution","udp.materialization","limits");
+    var compiled=compile(draft,proposal());
+    assertThat(ManagedFileExecutionProposal.missingSections(compiled)).isEmpty();
+    object(compiled,"semanticMapping").put("semanticRefs",List.of(ONTOLOGY+"@1","urn:extra@1"));
+    assertThat(ManagedFileExecutionProposal.missingSections(compiled)).containsExactly("semanticBindings");
+    object(compiled,"semanticMapping").put("semanticRefs",List.of(ONTOLOGY+"@1"));
+    var runtime=object(object(compiled,"extractionProfile"),"runtime");
+    object(runtime,"execution").remove("maxCellChars");
+    object(runtime,"udp").remove("resolution");
+    assertThat(ManagedFileExecutionProposal.missingSections(compiled)).containsExactly("udp.resolution","limits");
   }
   @Test void proposalCannotRelabelDataDropCanonicalPropertiesOrPretendCsvTypesAreConverted(){
     for(String change:List.of("label","datatype","drop","unknown")){
