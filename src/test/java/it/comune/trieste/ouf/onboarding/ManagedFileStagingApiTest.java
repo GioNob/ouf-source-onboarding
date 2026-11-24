@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.onboarding;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileContentInspector;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.authorization.ServletAuthorization;
 import it.comune.trieste.ouf.authorization.TestAuthorization;
@@ -22,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 
 class ManagedFileStagingApiTest {
-  private static void bind(MockHttpServletRequest request){request.setAttribute(ServletAuthorization.TRUSTED_PRINCIPAL,TestAuthorization.principal("human:operator","HUMAN",Set.of("ouf.managed-source.file.upload")));}
+  private static void bind(MockHttpServletRequest request){request.setContentType("text/csv");request.setAttribute(ServletAuthorization.TRUSTED_PRINCIPAL,TestAuthorization.principal("human:operator","HUMAN",Set.of("ouf.managed-source.file.upload")));}
   @Test void uploadsOriginalBomBytesAndRegistersExactHash() throws Exception {
     byte[] csv="\uFEFFcinema,indirizzo\r\nA,Trieste\r\n".getBytes(StandardCharsets.UTF_8);
     var request=new MockHttpServletRequest();bind(request);request.setContent(csv);
@@ -36,10 +37,38 @@ class ManagedFileStagingApiTest {
     });
     request.addHeader("X-OUF-File-Name","Dati%20locali.csv");
     UUID asset=UUID.randomUUID();when(files.registerOwned(eq(null),anyString(),anyString(),eq("text/csv"),eq((long)csv.length),eq("human:operator"),anyString(),eq("tenant-a"),eq("Dati locali.csv"))).thenReturn(Map.of("asset_id",asset));
-    var api=new ManagedFileStagingApi(store,files,hashes,actors);
+    var api=new ManagedFileStagingApi(store,files,new ManagedFileContentInspector(new org.springframework.mock.env.MockEnvironment()),actors);
     var response=api.upload(request,"sha256:"+hashes.ofBytes(csv).substring(7));
     assertThat(response.getStatusCode().value()).isEqualTo(201);
     verify(files).registerOwned(null,"object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8",hashes.ofBytes(csv),"text/csv",csv.length,"human:operator","retention://managed-files/30d","tenant-a","Dati locali.csv");
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"true,true","true,false","false,true"})
+  void xlsxAndCsvAreCheckedBeforeCustody(boolean sendWorkbook, boolean declareWorkbook) throws Exception {
+    byte[] bytes = sendWorkbook ? ManagedIntakeFixtures.workbook() : new byte[]{65,10};
+    String type = declareWorkbook ? ManagedFileContentInspector.XLSX : ManagedFileContentInspector.CSV;
+    var request = new MockHttpServletRequest();
+    bind(request);
+    request.setContentType(type);
+    request.setContent(bytes);
+    var store = mock(ManagedFileStagingStore.class);
+    var files = mock(ManagedFileService.class);
+    var actors = mock(TrustedActorResolver.class);
+    when(actors.requireHuman(request,"ouf.managed-source.file.upload"))
+        .thenReturn(new OnboardingService.Actor("human:operator","HUMAN_USER",Set.of("ouf.managed-source.file.upload")));
+    var inspector = new ManagedFileContentInspector(new org.springframework.mock.env.MockEnvironment());
+    var api = new ManagedFileStagingApi(store,files,inspector,actors);
+    if (sendWorkbook != declareWorkbook) {
+      assertThatThrownBy(() -> api.upload(request,null)).isInstanceOfSatisfying(DomainFailure.class,
+          e -> assertThat(e.code()).isEqualTo("ONB_FILE_MEDIA_TYPE_MISMATCH"));
+      verifyNoInteractions(store,files);
+    } else {
+      when(store.put(any(),eq((long)bytes.length),eq(type))).thenReturn("object://fixture/xlsx");
+      when(files.registerOwned(isNull(),eq("object://fixture/xlsx"),anyString(),eq(type),eq((long)bytes.length),
+          eq("human:operator"),anyString(),eq("tenant-a"),isNull())).thenReturn(Map.of("asset_id",UUID.randomUUID()));
+      assertThat(api.upload(request,null).getStatusCode().value()).isEqualTo(201);
+    }
   }
 
   @Test void mismatchedChecksumCannotWriteToMinio() throws Exception {
@@ -48,7 +77,7 @@ class ManagedFileStagingApiTest {
     var actors=mock(TrustedActorResolver.class);
     when(actors.requireHuman(request,"ouf.managed-source.file.upload"))
         .thenReturn(new OnboardingService.Actor("human:operator","HUMAN_USER",Set.of("ouf.managed-source.file.upload")));
-    var api=new ManagedFileStagingApi(store,files,new CanonicalHash(new ObjectMapper()),actors);
+    var api=new ManagedFileStagingApi(store,files,new ManagedFileContentInspector(new org.springframework.mock.env.MockEnvironment()),actors);
     assertThatThrownBy(()->api.upload(request,"sha256:"+"0".repeat(64))).isInstanceOf(DomainFailure.class).hasMessageContaining("checksum");
     verifyNoInteractions(store,files);
   }
@@ -59,8 +88,8 @@ class ManagedFileStagingApiTest {
     var actors=mock(TrustedActorResolver.class);
     when(actors.requireHuman(request,"ouf.managed-source.file.upload"))
         .thenReturn(new OnboardingService.Actor("human:operator","HUMAN_USER",Set.of("ouf.managed-source.file.upload")));
-    var api=new ManagedFileStagingApi(store,files,new CanonicalHash(new ObjectMapper()),actors);
-    assertThatThrownBy(()->api.upload(request,null)).isInstanceOf(DomainFailure.class).hasMessageContaining("10 MiB");
+    var api=new ManagedFileStagingApi(store,files,new ManagedFileContentInspector(new org.springframework.mock.env.MockEnvironment()),actors);
+    assertThatThrownBy(()->api.upload(request,null)).isInstanceOf(DomainFailure.class).hasMessageContaining("csv.max-bytes");
     verifyNoInteractions(store,files);
   }
 }

@@ -24,17 +24,20 @@ form.addEventListener('submit', async event => {
     status.textContent = 'Seleziona un file valido.';
     return;
   }
-  if (file.size < 1 || file.size > 10485760) {
-    status.textContent = 'Il file deve essere non vuoto e non superare 10 MiB.' +
-      (handoff ? ' Per riprovare, avvia un nuovo caricamento dalla chat.' : '');
-    await reportRejection('SIZE_INVALID');
+  const formats = JSON.parse(document.getElementById('file').dataset.formats);
+  const extension = /\.([^.]+)$/.exec(file.name)?.[1].toLowerCase();
+  const format = Object.hasOwn(formats, extension) && formats[extension];
+  if (!format) {
+    status.textContent = 'Formato non ancora gestito per il caricamento: ' + (file.name.split('.').pop() || 'sconosciuto').slice(0, 16) +
+      '. Formati ammessi: ' + Object.keys(formats).join(', ') + '.' + (handoff ? ' Per riprovare, avvia un nuovo caricamento dalla chat.' : '');
+    await reportRejection('FORMAT_UNSUPPORTED');
     if (handoff) document.getElementById('send').disabled = true;
     return;
   }
-  if (!/\.csv$/i.test(file.name)) {
-    status.textContent = 'Formato non ancora gestito per il caricamento: ' + (file.name.split('.').pop() || 'sconosciuto').slice(0, 16) +
-      '. Al momento è supportato CSV.' + (handoff ? ' Per riprovare, avvia un nuovo caricamento dalla chat.' : '');
-    await reportRejection('FORMAT_UNSUPPORTED');
+  if (file.size < 1 || file.size > format.maxBytes) {
+    status.textContent = 'Il file deve essere non vuoto e non superare ' + format.maxBytes + ' byte.' +
+      (handoff ? ' Per riprovare, avvia un nuovo caricamento dalla chat.' : '');
+    await reportRejection('SIZE_INVALID');
     if (handoff) document.getElementById('send').disabled = true;
     return;
   }
@@ -52,7 +55,7 @@ form.addEventListener('submit', async event => {
     const uploadPath = '/trusted-human/managed-files/upload' + (handoff ? '?handoff=' + encodeURIComponent(handoff) : '');
     const response = await ThsSession.fetch(uploadPath, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
-      headers: { 'Content-Type': 'text/csv', 'X-OUF-File-Name': encodeURIComponent(file.name), 'X-Content-SHA256': hash, [csrfHeader]: csrfToken }, body: file,
+      headers: { 'Content-Type': format.mediaType, 'X-OUF-File-Name': encodeURIComponent(file.name), 'X-Content-SHA256': hash, [csrfHeader]: csrfToken }, body: file,
     });
     if (!response.ok) throw new Error('HTTP_' + response.status);
     const uploaded = await response.json();

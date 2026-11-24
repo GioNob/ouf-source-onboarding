@@ -15,6 +15,19 @@ management:
   endpoint.health.probes.enabled: true
 ouf:
   onboarding:
+    source-time-zone: "${OUF_ONBOARDING_SOURCE_TIME_ZONE:}"
+    files:
+      media-types: ${OUF_ONBOARDING_FILES_MEDIA_TYPES:text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet}
+      csv.max-bytes: ${OUF_ONBOARDING_FILES_CSV_MAX_BYTES:10485760}
+      xlsx.max-bytes: ${OUF_ONBOARDING_FILES_XLSX_MAX_BYTES:10485760}
+      gpkg.max-bytes: ${OUF_ONBOARDING_FILES_GPKG_MAX_BYTES:10485760}
+      xlsx.max-uncompressed-bytes: ${OUF_ONBOARDING_FILES_XLSX_MAX_UNCOMPRESSED_BYTES:104857600}
+      xlsx.max-entry-bytes: ${OUF_ONBOARDING_FILES_XLSX_MAX_ENTRY_BYTES:67108864}
+      xlsx.min-inflate-ratio: ${OUF_ONBOARDING_FILES_XLSX_MIN_INFLATE_RATIO:0.01}
+      xlsx.max-entries: ${OUF_ONBOARDING_FILES_XLSX_MAX_ENTRIES:10000}
+      xlsx.max-sheets: ${OUF_ONBOARDING_FILES_XLSX_MAX_SHEETS:64}
+      xlsx.max-rows: ${OUF_ONBOARDING_FILES_XLSX_MAX_ROWS:10000}
+      xlsx.max-columns: ${OUF_ONBOARDING_FILES_XLSX_MAX_COLUMNS:1024}
     wait-max-seconds: ${OUF_ONB_WAIT_MAX_SECONDS:3600}
     handoff-retention-seconds: ${OUF_ONB_HANDOFF_RETENTION_SECONDS:86400}
     approval-challenge-ttl: PT10M

@@ -54,6 +54,45 @@ paths:
       x-ouf-mcp-capability: ouf.source-onboarding.version.create
       parameters: [{$ref: '#/components/parameters/SourceId'}]
       responses: {'201': {description: DRAFT created}, default: {$ref: '#/components/responses/Problem'}}
+  /files:
+    servers: [{url: /api/managed-sources/v1}]
+    post:
+      operationId: stageHumanManagedFile
+      description: Receives a HUMAN file through the governed Gateway. Only installation-enabled formats are accepted.
+      parameters:
+        - {name: X-Content-SHA256, in: header, required: false, schema: {type: string}}
+        - {name: X-OUF-File-Name, in: header, required: false, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          text/csv: {schema: {type: string, format: binary}}
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}
+          application/geopackage+sqlite3: {schema: {type: string, format: binary}}
+      responses:
+        '201': {description: Managed file staged}
+        '415': {description: ONB_FILE_MEDIA_TYPE_UNSUPPORTED}
+        '422': {description: "Media type mismatch, invalid length or hash, or ONB_FILE_LIMIT_EXCEEDED with the limit name"}
+        default: {$ref: '#/components/responses/Problem'}
+  /managed-file-mcp/upload:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: stageDelegatedManagedFile
+      description: Gateway HUMAN delegation. Receipt v1 binds CSV implicitly. Receipt v2 signs mediaType. The owner checks length, hash and content before storage.
+      parameters:
+        - {name: X-OUF-Managed-File-Receipt, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          text/csv: {schema: {type: string, format: binary}}
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}
+          application/geopackage+sqlite3: {schema: {type: string, format: binary}}
+      responses:
+        '201': {description: Managed file staged}
+        '403': {description: ONB_MANAGED_FILE_RECEIPT_INVALID}
+        '409': {description: ONB_FILE_UPLOAD_IDEMPOTENCY_CONFLICT}
+        '415': {description: ONB_FILE_MEDIA_TYPE_UNSUPPORTED}
+        '422': {description: "Media type mismatch, invalid length or hash, or ONB_FILE_LIMIT_EXCEEDED with the limit name"}
+        default: {$ref: '#/components/responses/Problem'}
   /managed-files:
     post:
       operationId: registerManagedFile

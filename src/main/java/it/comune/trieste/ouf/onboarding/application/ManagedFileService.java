@@ -148,6 +148,9 @@ public class ManagedFileService {
   }
   /** Serialize an upload attempt across retries before writing to object storage. */
   public Map<String,Object> registerDelegatedUpload(String tenant,String subject,String fileId,String key,String hash,long size,java.util.function.Supplier<String> put){
+    return registerDelegatedUpload(tenant,subject,fileId,key,hash,size,ManagedFileContentInspector.CSV,put);
+  }
+  public Map<String,Object> registerDelegatedUpload(String tenant,String subject,String fileId,String key,String hash,long size,String mediaType,java.util.function.Supplier<String> put){
     if(tenant==null||tenant.isBlank()||subject==null||subject.isBlank()||fileId==null||!fileId.matches("file_[A-Za-z0-9_-]{1,128}")
         ||key==null||!key.matches("[A-Za-z0-9_.:-]{1,128}")||hash==null||!hash.matches("sha256:[0-9a-f]{64}")
         ||size<1||size>MAX_PROFILE_BYTES)throw invalid("ONB_FILE_UPLOAD_INVALID","Invalid delegated upload metadata");
@@ -161,10 +164,12 @@ public class ManagedFileService {
         if(!fileId.equals(row.get("file_id"))||!hash.equals(row.get("content_hash"))||size!=((Number)row.get("size_bytes")).longValue())
           throw conflict("ONB_FILE_UPLOAD_IDEMPOTENCY_CONFLICT","Idempotency key used for different file content or identity");
         var existing=asset((UUID)row.get("asset_id"));
+        if(!Objects.equals(mediaType,existing.get("media_type")))
+          throw conflict("ONB_FILE_UPLOAD_IDEMPOTENCY_CONFLICT","Idempotency key used for a different media type");
         return Map.<String,Object>of("assetId",row.get("asset_id"),"status",existing.get("status"));
       }
       String ref=put.get();
-      var asset=registerOwned(null,ref,hash,"text/csv",size,subject,"retention://managed-files/30d",tenant);
+      var asset=registerOwned(null,ref,hash,mediaType,size,subject,"retention://managed-files/30d",tenant);
       db.sql("insert into ouf_onboarding.managed_file_upload_attempt(tenant_id,subject_id,file_id,idempotency_key,content_hash,size_bytes,asset_id) values(:t,:s,:f,:k,:h,:z,:a)")
           .param("t",tenant).param("s",subject).param("f",fileId).param("k",key).param("h",hash).param("z",size).param("a",asset.get("asset_id")).update();
       return Map.<String,Object>of("assetId",asset.get("asset_id"),"status","STAGED");
