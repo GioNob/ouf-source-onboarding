@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        predecessor: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.predecessor) || '["a54de876","9eeff596","82aabaa"]') }}
+        predecessor: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.predecessor) || '["a54de876","9eeff596","82aabaa","20e90de"]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     services:
