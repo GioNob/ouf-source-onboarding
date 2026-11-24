@@ -15,6 +15,8 @@ management:
   endpoint.health.probes.enabled: true
 ouf:
   onboarding:
+    units:
+      multiple-sources-per-asset: ${OUF_ONB_UNITS_MULTIPLE_SOURCES_PER_ASSET:false}
     wait-max-seconds: ${OUF_ONB_WAIT_MAX_SECONDS:3600}
     handoff-retention-seconds: ${OUF_ONB_HANDOFF_RETENTION_SECONDS:86400}
     approval-challenge-ttl: PT10M

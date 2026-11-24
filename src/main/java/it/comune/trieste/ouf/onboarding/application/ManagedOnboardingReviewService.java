@@ -31,7 +31,12 @@ public class ManagedOnboardingReviewService {
   public record Prepare(String sourceId,UUID onboardingVersionId,long expectedVersion,
       String commandKey,ManagedFileExecutionProposal.Proposal executionProposal,
       @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-      String candidateAction) {
+      String candidateAction,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      SourceUnitProfiles.Reference unitProfileRef) {
+    public Prepare(String sourceId,UUID version,long expectedVersion,String key,ManagedFileExecutionProposal.Proposal proposal,String action){
+      this(sourceId,version,expectedVersion,key,proposal,action,null);
+    }
     public Prepare(String sourceId,UUID version,long expectedVersion,String key,ManagedFileExecutionProposal.Proposal proposal){
       this(sourceId,version,expectedVersion,key,proposal,null);
     }
@@ -85,6 +90,18 @@ public class ManagedOnboardingReviewService {
         ||request.expectedVersion()<0||request.expectedVersion()>9007199254740991L)
       throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_REQUEST_INVALID");
     url(request.onboardingVersionId()); // Validate delivery configuration before any mutation.
+    if(request.unitProfileRef()!=null){
+      var pin=request.unitProfileRef();
+      var selected=files.resolve(null,null,null,pin,p.tenantId(),p.subjectId());
+      var version=ownedVersion(p,request.sourceId(),request.onboardingVersionId());
+      var extraction=ManagedReviewSnapshot.child(ManagedReviewSnapshot.object(version.get("configuration")),"extractionProfile");
+      var selection=ManagedReviewSnapshot.child(extraction,"selection");
+      var evidence=files.evidenceFor(extraction);
+      if(!selected.assetId().toString().equals(selection.get("assetId")) || !selected.profileId().toString().equals(selection.get("fileProfileId"))
+          || !pin.unitRef().equals(ManagedFileService.unitRef(evidence)))throw fail(HttpStatus.CONFLICT,"ONB_UNIT_SELECTION_CHANGED");
+      if(selected.pin()==null)request=new Prepare(request.sourceId(),request.onboardingVersionId(),request.expectedVersion(),request.commandKey(),
+          request.executionProposal(),request.candidateAction());
+    }
     String fingerprint=hashes.of(request);
     if(request.candidateAction()!=null && (!Set.of("WITHDRAW","RESTART_DRAFT").contains(request.candidateAction())
         ||request.executionProposal()!=null))throw fail(HttpStatus.BAD_REQUEST,"ONB_REVIEW_REQUEST_INVALID");
@@ -230,9 +247,27 @@ public class ManagedOnboardingReviewService {
             """).param("parent",current.get("parent_version_id"),java.sql.Types.OTHER).param("source",request.sourceId())
             .param("tenant",p.tenantId()).param("subject",p.subjectId()).param("asset",selected)
             .param("profile",ManagedFileService.retainedFileId(selection.get("fileProfileId"))).query(Boolean.class).single();
-        if(!sameRefusedInput)throw assetConflict(p,(String)files.asset(selected).get("source_id"));
+        if(!sameRefusedInput){
+          var pin=files.retainedPin(selection);
+          throw assetConflict(p,files.boundSource(selected,pin==null?"table:0":pin.unitRef()));
+        }
       }
-      return ManagedFileExecutionProposal.compile(configuration,files.asset(selected),p.tenantId(),request.executionProposal());
+      var evidence=files.evidenceFor(ManagedReviewSnapshot.child(configuration,"extractionProfile"));
+      if(ManagedFileExecutionProposal.UNIT_CONTRACT.equals(request.executionProposal().contract()) && "XLSX".equals(evidence.get("format"))
+          && !SourceUnitProfiles.XLSX_READER.equals(ManagedReviewSnapshot.child(evidence,"metadata").get("reader")))
+        throw fail(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_UNIT_PROFILE_OUTDATED");
+      // A retained layer DRAFT can predate durable unit references. Its runtime already froze the layer name.
+      if(request.unitProfileRef()!=null && !selection.containsKey("unitProfileRef") && "LAYER".equals(evidence.get("unitKind"))){
+        @SuppressWarnings("unchecked") Map<String,Object> upgraded=onboarding.retainedJson(onboarding.write(configuration),Map.class);
+        @SuppressWarnings("unchecked") var extraction=(Map<String,Object>)upgraded.get("extractionProfile");
+        @SuppressWarnings("unchecked") var runtime=(Map<String,Object>)extraction.get("runtime");
+        @SuppressWarnings("unchecked") var chosen=(Map<String,Object>)extraction.get("selection");
+        chosen.put("unitProfileRef",request.unitProfileRef().asMap());
+        for(String field:List.of("unitRef","unitKind","readParameters"))runtime.put(field,evidence.get(field));
+        configuration=upgraded;
+      }
+      var asset=files.scopedAsset(files.asset(selected),ManagedFileService.unitRef(evidence),request.sourceId(),p);
+      return ManagedFileExecutionProposal.compile(configuration,asset,p.tenantId(),request.executionProposal());
   }
 
   private Map<String,Object> finishPreparation(PrincipalContext p,Prepare request,String fingerprint,String correlation,
@@ -405,10 +440,10 @@ public class ManagedOnboardingReviewService {
     var runtime=ManagedReviewSnapshot.child(extraction,"runtime");
     if(!selection.containsKey("assetId")&&!selection.containsKey("fileProfileId"))return Map.of(); // Non-file revision.
     UUID assetId=ManagedFileService.retainedFileId(selection.get("assetId")),profileId=ManagedFileService.retainedFileId(selection.get("fileProfileId"));
-    var asset=files.asset(assetId);
+    var profile=files.evidenceFor(extraction);
+    var asset=files.scopedAsset(files.asset(assetId),ManagedFileService.unitRef(profile),(String)version.get("source_id"),null);
     if(!Objects.equals(asset.get("source_id"),version.get("source_id"))||!Objects.equals(asset.get("content_hash"),runtime.get("contentHash")))
       throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_CONFIGURATION_DRIFT");
-    var profile=files.selectedProfile(files.fileProfile(assetId,profileId),(String)runtime.get("layer"));
     var source=onboarding.source((String)version.get("source_id"));
     return ManagedReviewSnapshot.build(config,asset,profile,source.get("owner_ref"),source.get("name"));
   }

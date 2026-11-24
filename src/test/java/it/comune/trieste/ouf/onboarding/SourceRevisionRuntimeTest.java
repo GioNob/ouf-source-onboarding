@@ -207,6 +207,11 @@ private PrincipalContext principal(String tenant,String subject){return new Prin
     assertThat(receipt).containsEntry("sourceId","s").containsEntry("state","IN_REVIEW")
         .containsEntry("parentVersionId",parent).containsEntry("diagnostics",List.of());
     assertThat(onboarding.version("s",parent)).isEqualTo(original);
+    var unit=files.unitView(null,ref.profileId(),p.tenantId(),p.subjectId(),"UNIT","table:0",null,null,null);
+    var pin=new SourceUnitProfiles.Reference(ref.profileId(),((Number)unit.get("profileVersion")).intValue(),"table:0",(String)unit.get("schemaHash"));
+    var replay=new SourceRevisionService.Prepare(command.sourceId(),command.parentVersionId(),command.expectedVersion(),
+        command.configurationHash(),command.commandKey(),command.publicationEffect(),null,null,command.newColumns(),command.compositions(),pin);
+    assertThat(revisions.prepare(p,replay,"unit-replay")).isEqualTo(receipt);
     assertThat(revisions.prepare(p,command,"repeat")).isEqualTo(receipt);
     assertThat(revisions.readCommand(p,"s",parent,command.commandKey())).isEqualTo(receipt);
     assertThat(reviews.humanCard(p,challenge)).containsEntry("assetRef",Map.of("assetId",ref.assetId(),"profileId",ref.profileId()));

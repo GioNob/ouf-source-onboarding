@@ -318,6 +318,7 @@
     const fact = (name,value) => { element('dt',name,facts); return element('dd',value,facts); };
     fact('File',file.name || 'Nome originale non disponibile · ' + file.assetId);
     fact('Dimensione',file.size + ' byte'); fact('Profilo del file',(file.rows ?? unavailable) + ' righe · ' + file.columns + ' colonne · ' + file.format);
+    if (file.unitDescription) fact('Unità di estrazione',file.unitDescription);
     for (const target of card.configuration.semanticMapping.targetClasses) {
       const dd = fact('Classe di destinazione',termLabel(card,target.classIri) + ' · ');
       sourceLink(dd,target.classIri,target.classIri);

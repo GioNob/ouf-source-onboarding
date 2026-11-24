@@ -91,7 +91,7 @@ class ManagedFileDelegationVerifierTest {
         .header("X-OUF-Managed-File-Receipt",sign(json,key,path,cap,body))).andExpect(status().isOk());
     verify(files).onboardIdempotent(eq(asset),eq(profile),eq("wide"),eq("Wide"),eq("Comune"),eq("urn:fixture:class"),
         eq(List.of("urn:fixture:class@1")),eq(List.of("column_0")),argThat(values->values.size()==450),isNull(),any(),
-        eq("corr"),eq("profile-once"),eq("tenant-a"),isNull(),isNull(),isNull(),any());
+        eq("corr"),eq("profile-once"),eq("tenant-a"),isNull(),isNull(),isNull(),any(),isNull());
 
     byte[] oversized=new byte[ManagedFileLimits.MAX_MAPPING_ENVELOPE_BYTES+1];
     java.util.Arrays.fill(oversized,(byte)' ');

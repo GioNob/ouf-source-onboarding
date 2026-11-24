@@ -117,6 +117,16 @@ final class ManagedReviewSnapshot {
     file.put("rows",child(profile,"metadata").get("rows"));
     if(file.get("rows")==null)file.put("rows",profile.get("rowCount")!=null?profile.get("rowCount"):profile.get("featureCount"));
     file.put("columns",fields.size());
+    if("SHEET".equals(runtime.get("unitKind"))){
+      var parameters=child(child(runtime,"readParameters"),"xlsx");
+      var zone=parameters.get("timeZone");
+      file.put("rows",profile.get("rows"));
+      file.put("unitDescription","Foglio «"+parameters.get("sheet")+"». L’intestazione è alla riga "+parameters.get("headerRow")
+          +". Le date usano il sistema "+parameters.get("dateSystem")+" e il fuso "+(zone==null?"non dichiarato":zone)
+          +". La regola "+parameters.get("cellText")+" legge il valore salvato delle formule.");
+    }else if("LAYER".equals(runtime.get("unitKind"))){
+      file.put("unitDescription","Layer «"+runtime.get("layer")+"». Ogni elemento geometrico diventa un oggetto sorgente. Il sistema di riferimento è "+runtime.get("sourceCrs")+".");
+    }
     var snapshot=new LinkedHashMap<String,Object>();
     snapshot.put("sourceName",name);snapshot.put("owner",owner);snapshot.put("file",file);
     // JSONB objects have no insertion order. Keep the original header order separately.

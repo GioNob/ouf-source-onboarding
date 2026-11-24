@@ -1,13 +1,7 @@
 package it.comune.trieste.ouf.onboarding.application;
 
-import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.nio.charset.*;
 import java.time.LocalDate;
 import java.util.*;
-import org.apache.commons.csv.*;
-import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -19,7 +13,11 @@ public class ManagedFileProfiler {
   public record Profile(String format,Map<String,Object> metadata,List<ColumnProfile> columns,List<String> candidateKeys,
       List<Map<String,String>> sample,Map<String,Map<String,List<String>>> distinctCellValues) {}
 
-  public Profile profile(byte[] bytes,String mediaType){if(bytes.length==0||bytes.length>MAX_BYTES)throw new IllegalArgumentException("file size outside profiling limits");return switch(mediaType){case "application/zip"->shapefile(bytes);case "application/x-msaccess","application/vnd.ms-access"->access(bytes);case "application/geopackage+sqlite3"->geopackage(bytes);case "text/csv"->csv(bytes);case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"->xlsx(bytes);default->throw new IllegalArgumentException("unsupported media type");};}
+  private final ManagedFileFormatAdapter csv = new CsvFormatAdapter();
+  private final ManagedFileFormatAdapter xlsx = new XlsxFormatAdapter();
+  private final ManagedFileFormatAdapter geopackage = new GeoPackageFormatAdapter();
+
+  public Profile profile(byte[] bytes,String mediaType){if(bytes.length==0||bytes.length>MAX_BYTES)throw new IllegalArgumentException("file size outside profiling limits");return switch(mediaType){case "application/zip"->shapefile(bytes);case "application/x-msaccess","application/vnd.ms-access"->access(bytes);case "application/geopackage+sqlite3"->geopackage.profile(bytes);case "text/csv"->csv.profile(bytes);case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"->xlsx.profile(bytes);default->throw new IllegalArgumentException("unsupported media type");};}
   private Profile shapefile(byte[] bytes){
     try(var reader=new it.comune.trieste.ouf.managed.ShapefileReader(bytes)){
       var layers=new ArrayList<Map<String,Object>>();
@@ -53,70 +51,7 @@ public class ManagedFileProfiler {
       return new Profile("ACCESS",Map.of("layers",tables,"tableSelection","REQUIRED","relationships",relationships,"semanticHints",hints,"proposalStatus","PENDING_HUMAN_REVIEW","reader","jackcess-5.0.0","expressions","DISABLED","linkedTables","REJECTED"),List.of(),List.of(),List.of(),Map.of());
     }
   }
-  private Profile geopackage(byte[] bytes){
-    try(var reader=new it.comune.trieste.ouf.geopackage.GeoPackageReader(bytes)){
-      var layers=new ArrayList<Map<String,Object>>();
-      var distinct=new LinkedHashMap<String,Map<String,List<String>>>();
-      for(var layer:reader.layers()){
-        var features=reader.features(layer,MAX_ROWS,1048576);
-        var headers=layer.columns().stream().map(it.comune.trieste.ouf.geopackage.GeoPackageReader.Column::name).toList();
-        var rows=features.stream().map(row->headers.stream().map(h->h.equals(layer.geometryColumn())?"[GEOMETRY]":Objects.toString(row.get(h),"")).toList()).toList();
-        var tabular=build("GEOPACKAGE",Map.of(),headers,rows);
-        distinct.put(layer.name(),withoutGeometry(tabular,layer.geometryColumn()));
-        var columns=tabular.columns().stream().map(c->c.name().equals(layer.geometryColumn())?new ColumnProfile(c.name(),"GEOMETRY",false,0):c).toList();
-        var item=new LinkedHashMap<String,Object>();item.put("layer",layer.name());item.put("geometryColumn",layer.geometryColumn());item.put("geometryType",layer.geometryType());item.put("srsId",layer.srsId());item.put("sourceCrs",layer.crs());item.put("primaryKey",layer.primaryKey());item.put("columns",columns);item.put("candidateKeys",tabular.candidateKeys().stream().filter(k->!k.equals(layer.geometryColumn())).toList());item.put("sample",tabular.sample());item.put("featureCount",features.size());layers.add(item);
-      }
-      return new Profile("GEOPACKAGE",Map.of("layers",layers,"layerSelection","REQUIRED","recordModel","ONE_FEATURE_ONE_SOURCE_OBJECT","dimensions",2),List.of(),List.of(),List.of(),distinct);
-    }
-  }
-  private Profile csv(byte[] bytes) {
-    String text;
-    try {
-      text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-          .onUnmappableCharacter(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString();
-    } catch(CharacterCodingException e) {throw new IllegalArgumentException("CSV must be valid UTF-8 text",e);}
-    if(text.startsWith("\uFEFF"))text=text.substring(1);
-    if(text.indexOf('\u0000')>=0)throw new IllegalArgumentException("CSV must be UTF-8 text");
-    char separator=delimiter(text);
-    CSVFormat format=CSVFormat.DEFAULT.builder().setDelimiter(separator).setHeader()
-        .setSkipHeaderRecord(true).setIgnoreEmptyLines(true).get();
-    try(CSVParser parser=CSVParser.parse(text,format)) {
-      List<String> headers=parser.getHeaderNames();validateHeaders(headers);
-      List<Set<String>> distinct=new ArrayList<>(headers.size());
-      for(int c=0;c<headers.size();c++)distinct.add(new HashSet<>());
-      String[] types=new String[headers.size()];boolean[] nullable=new boolean[headers.size()];
-      List<Map<String,String>> sample=new ArrayList<>(5);int rows=0;
-      for(CSVRecord record:parser) {
-        if(rows>=MAX_ROWS)throw new IllegalArgumentException("row limit exceeded");
-        if(record.size()>headers.size())throw new IllegalArgumentException("CSV row exceeds declared headers");
-        Map<String,String> example=rows<5?new LinkedHashMap<>():null;
-        for(int c=0;c<headers.size();c++) {
-          String raw=record.isSet(c)?record.get(c):"",value=CellWhitespace.trim(raw);
-          if(value.isEmpty())nullable[c]=true;
-          else {
-            distinct.get(c).add(value);
-            types[c]=merge(types[c],infer(value));
-          }
-          if(example!=null)example.put(headers.get(c),redact(headers.get(c),raw));
-        }
-        if(example!=null)sample.add(example);
-        rows++;
-      }
-      List<ColumnProfile> columns=new ArrayList<>(headers.size());List<String> keys=new ArrayList<>();
-      Map<String,List<String>> values=new LinkedHashMap<>();
-      for(int c=0;c<headers.size();c++) {
-        columns.add(new ColumnProfile(headers.get(c),types[c]==null?"STRING":types[c],nullable[c],distinct.get(c).size()));
-        if(!nullable[c]&&rows>0&&distinct.get(c).size()==rows)keys.add(headers.get(c));
-        retainDistinct(values,headers.get(c),distinct.get(c));
-        distinct.set(c,null);
-      }
-      return new Profile("CSV",Map.of("encoding","UTF-8","delimiter",String.valueOf(separator),
-          "headerRow",1,"rows",rows,"columns",headers.size()),List.copyOf(columns),List.copyOf(keys),List.copyOf(sample),
-          Map.of(FLAT_PROFILE,values));
-    } catch(IOException e) {throw new IllegalArgumentException("invalid CSV",e);}
-  }
-  private Profile xlsx(byte[] bytes){try(Workbook workbook=new XSSFWorkbook(new ByteArrayInputStream(bytes))){if(workbook.getNumberOfSheets()==0)throw new IllegalArgumentException("workbook has no sheets");Sheet sheet=workbook.getSheetAt(0);Row header=sheet.getRow(sheet.getFirstRowNum());if(header==null)throw new IllegalArgumentException("sheet has no header");int columns=header.getLastCellNum();if(columns<1||columns>MAX_COLUMNS)throw new IllegalArgumentException("column limit exceeded");List<String> headers=new ArrayList<>();for(int i=0;i<columns;i++)headers.add(cellText(header.getCell(i),true));validateHeaders(headers);List<List<String>> rows=new ArrayList<>();for(int r=header.getRowNum()+1;r<=sheet.getLastRowNum();r++){if(rows.size()>=MAX_ROWS)throw new IllegalArgumentException("row limit exceeded");Row row=sheet.getRow(r);if(row==null)continue;List<String> values=new ArrayList<>();for(int c=0;c<columns;c++)values.add(cellText(row.getCell(c),false));rows.add(values);}return build("XLSX",Map.of("workbookSheets",workbook.getNumberOfSheets(),"sheet",sheet.getSheetName(),"headerRow",header.getRowNum()+1,"rows",rows.size(),"columns",columns,"formulas","REJECTED"),headers,rows);}catch(IOException e){throw new IllegalArgumentException("invalid XLSX",e);}}
-  private Profile build(String kind,Map<String,Object> metadata,List<String> headers,List<List<String>> rows){
+  static Profile build(String kind,Map<String,Object> metadata,List<String> headers,List<List<String>> rows){
     List<ColumnProfile> profiles=new ArrayList<>();
     List<String> keys=new ArrayList<>();
     Map<String,List<String>> values=new LinkedHashMap<>();
@@ -142,26 +77,24 @@ public class ManagedFileProfiler {
     }).toList();
     return new Profile(kind,metadata,List.copyOf(profiles),List.copyOf(keys),sample,Map.of(FLAT_PROFILE,values));
   }
-  private static Map<String,List<String>> withoutGeometry(Profile profile,String geometryColumn){
+  static Map<String,List<String>> withoutGeometry(Profile profile,String geometryColumn){
     var result=new LinkedHashMap<>(profile.distinctCellValues().get(FLAT_PROFILE));
     result.remove(geometryColumn);
     return result;
   }
-  private static void retainDistinct(Map<String,List<String>> result,String column,Set<String> values){
+  static void retainDistinct(Map<String,List<String>> result,String column,Set<String> values){
     if(values.size()<=MAX_DISTINCT_VALUES && !redactedColumn(column)
         && values.stream().allMatch(value->value.codePointCount(0,value.length())<=MAX_DISTINCT_VALUE_LENGTH))
       result.put(column,values.stream().sorted().toList());
   }
-  private static void validateHeaders(List<String> headers){if(headers.isEmpty()||headers.size()>MAX_COLUMNS)throw new IllegalArgumentException("column limit exceeded");Set<String> seen=new HashSet<>();for(String h:headers)if(h==null||CellWhitespace.trim(h).isEmpty()||h.length()>ManagedFileLimits.MAX_COLUMN_NAME_CHARS||!seen.add(h))throw new IllegalArgumentException("headers must be non-empty and unique");}
-  private static char delimiter(String text){String first=text.lines().findFirst().orElse("");long comma=first.chars().filter(c->c==',').count(),semicolon=first.chars().filter(c->c==';').count();return semicolon>comma?';':',';}
-  private static String cellText(Cell cell,boolean header){if(cell==null)return "";if(cell.getCellType()==CellType.FORMULA)throw new IllegalArgumentException("XLSX formulas are not allowed");DataFormatter formatter=new DataFormatter(Locale.ROOT);String value=formatter.formatCellValue(cell);return header?CellWhitespace.trim(value):value;}
-  private static String infer(String value){if(value.matches("-?[0-9]+"))return "LONG";if(value.matches("-?[0-9]+[.,][0-9]+"))return "DECIMAL";if(value.equalsIgnoreCase("true")||value.equalsIgnoreCase("false"))return "BOOLEAN";try{LocalDate.parse(value);return "DATE";}catch(Exception ignored){return "STRING";}}
-  private static String merge(String current,String next){if(current==null||current.equals(next))return next;if(Set.of(current,next).equals(Set.of("LONG","DECIMAL")))return "DECIMAL";return "STRING";}
+  static void validateHeaders(List<String> headers){if(headers.isEmpty()||headers.size()>MAX_COLUMNS)throw new IllegalArgumentException("column limit exceeded");Set<String> seen=new HashSet<>();for(String h:headers)if(h==null||CellWhitespace.trim(h).isEmpty()||h.length()>ManagedFileLimits.MAX_COLUMN_NAME_CHARS||!seen.add(h))throw new IllegalArgumentException("headers must be non-empty and unique");}
+  static String infer(String value){if(value.matches("-?[0-9]+"))return "LONG";if(value.matches("-?[0-9]+[.,][0-9]+"))return "DECIMAL";if(value.equalsIgnoreCase("true")||value.equalsIgnoreCase("false"))return "BOOLEAN";try{LocalDate.parse(value);return "DATE";}catch(Exception ignored){return "STRING";}}
+  static String merge(String current,String next){if(current==null||current.equals(next))return next;if(Set.of(current,next).equals(Set.of("LONG","DECIMAL")))return "DECIMAL";return "STRING";}
   private static boolean redactedColumn(String header){
     String key=header.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]","");
     return key.matches(".*(name|nome|surname|cognome|email|mail|phone|telefono|mobile|cellulare|address|indirizzo|fiscalcode|codicefiscale|iban|birth|nascita).*");
   }
-  private static String redact(String header,String value){
+  static String redact(String header,String value){
     if(redactedColumn(header))return "[REDACTED]";
     if(value==null)return "";
     int end=Math.min(128,value.length());
