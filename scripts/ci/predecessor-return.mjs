@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {appendFileSync, chmodSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {appendFileSync, chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
@@ -16,6 +16,12 @@ assert.match(db, /^[0-9a-f]{12,64}$/);
 assert.ok(process.env.OUF_ONB_DB_PASSWORD);
 const docker = (...args) => execFileSync('docker', args, {encoding: 'utf8', timeout: 45_000}).trim();
 const user = 'ouf_onboarding';
+// The candidate's migrations come from the source tree under test, never from a hand-kept list (task-62h).
+const MIGRATIONS = readdirSync('src/main/resources/db/migration')
+  .map(script => ({script, match: /^V([0-9]+)__.+\.sql$/.exec(script)}))
+  .filter(item => item.match).map(item => ({script: item.script, version: Number(item.match[1])}))
+  .sort((a, b) => a.version - b.version);
+const LATEST = String(MIGRATIONS.at(-1).version);
 function sql(query) {
   return docker('exec', db, 'psql', '-XAtq', '-v', 'ON_ERROR_STOP=1', '-U', user, '-d', user, '-c', query);
 }
@@ -53,7 +59,7 @@ async function ready(container, phase) {
   const flyway = /FlywayValidateException|Validate failed|Migration of schema .* failed|applied migration not resolved locally/i.test(logs);
   if (phase === 'predecessor return on candidate data' && process.env.GITHUB_STEP_SUMMARY) {
     const reason = flyway ? 'I log indicano un errore di migrazione o validazione Flyway.' : 'La readiness non ha raggiunto UP.';
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Domande aperte\n\nIl predecessore si è fermato su V46. ${reason} La qualificazione D-080 resta aperta.\n`);
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Domande aperte\n\nIl ritorno del predecessore si è fermato. ${reason} La qualificazione D-080 resta aperta.\n`);
   }
   throw new Error(phase + ': readiness failed' + (flyway ? ' during Flyway migration or validation' : '') +
     '. Return proof stopped with the packaged migration settings.');
@@ -99,8 +105,11 @@ try {
   const old = run(previous);
   await ready(old, 'predecessor on empty database');
   const baseline = history();
-  const predecessorHasDistinctValues = baseline.at(-1).version === '45';
-  assert.ok(predecessorHasDistinctValues || baseline.at(-1).version === '43');
+  // Supported predecessors: V43 (before distinct values), V45 (before the durable picker), V46 and later (exact deployed).
+  const baselineVersion = Number(baseline.at(-1).version);
+  assert.ok([43, 45].includes(baselineVersion) || baselineVersion >= 46, 'unsupported predecessor migration ' + baselineVersion);
+  const predecessorHasDistinctValues = baselineVersion >= 45;
+  const predecessorHasPicker = baselineVersion >= 46;
   // Seed only the isolated IAM policy; the runtime writes every onboarding row through HTTP.
   const bundle = policy(), payload = JSON.stringify(bundle);
   assert.ok(!payload.includes("'"));
@@ -116,11 +125,11 @@ try {
 
   const next = run(candidate);
   await ready(next, 'candidate on populated database');
-  const candidateHistory = history('47');
+  const candidateHistory = history(LATEST);
   assert.deepEqual(candidateHistory.slice(0, baseline.length), baseline, 'candidate must retain the exact deployed migration history');
-  const expected = predecessorHasDistinctValues ? [] :
-    ['V44__managed_profile_distinct_values.sql', 'V45__managed_value_map_preparation.sql'];
-  assert.deepEqual(candidateHistory.slice(baseline.length).map(row => row.script), [...expected, 'V46__managed_file_handoff.sql', 'V47__managed_file_unit_binding.sql']);
+  const expected = MIGRATIONS.filter(item => item.version > baselineVersion).map(item => item.script);
+  assert.ok(expected.length > 0, 'the candidate must add at least one migration to prove the return');
+  assert.deepEqual(candidateHistory.slice(baseline.length).map(row => row.script), expected);
   const commandKey = randomUUID();
   const issued = await issuePicker(fixture, commandKey);
   const pending = await readPicker(fixture, issued.handoffId);
@@ -163,8 +172,15 @@ try {
   await ready(old, 'predecessor return on candidate data');
   const oldObservation = await readPicker(fixture, issued.handoffId);
   assert.equal(oldObservation.status, 'PENDING');
-  for (const field of ['state', 'issuedAt', 'waitUntil', 'observationVersion']) {
-    assert.ok(!(field in oldObservation), 'predecessor uses its original handoff reader');
+  if (predecessorHasPicker) {
+    // The exact deployed predecessor already reads the durable picker: the observation is unchanged.
+    for (const field of ['state', 'issuedAt', 'waitUntil', 'observationVersion']) {
+      assert.equal(oldObservation[field], pending[field], 'predecessor keeps the durable picker field ' + field);
+    }
+  } else {
+    for (const field of ['state', 'issuedAt', 'waitUntil', 'observationVersion']) {
+      assert.ok(!(field in oldObservation), 'predecessor uses its original handoff reader');
+    }
   }
   const returnedProfile = await verifyReturn(fixture, seed, result, predecessorHasDistinctValues);
   assert.equal(distinctProfile(result.typed.profileId), valueEvidence);
@@ -173,13 +189,24 @@ try {
   else assert.equal(returnedValues, 'NULL');
   assert.equal(sql(`select parent_version_id from ouf_onboarding.onboarding_version where onboarding_version_id='${result.child.onboardingVersionId}'`),
     seed.parent.onboardingVersionId, 'child draft keeps its parent link after the return');
-  assert.deepEqual(history('47'), candidateHistory);
+  assert.deepEqual(history(LATEST), candidateHistory);
+  if (MIGRATIONS.some(item => item.script === 'V47__managed_file_unit_binding.sql')) {
+    // V47 (task-62b): the binding table and view survive the return and read every predecessor CSV write as table:0.
+    assert.equal(sql(`select to_regclass('ouf_onboarding.managed_file_unit_binding') is not null
+      and to_regclass('ouf_onboarding.managed_file_effective_binding') is not null`), 't');
+    assert.equal(sql(`select count(*) from ouf_onboarding.managed_file_asset a
+      where a.media_type='text/csv' and a.source_id is not null and not exists(
+        select 1 from ouf_onboarding.managed_file_effective_binding b
+        where b.asset_id=a.asset_id and b.source_id=a.source_id and b.unit_ref='table:0')`), '0');
+    assert.ok(Number(sql(`select count(*) from ouf_onboarding.managed_file_effective_binding where unit_ref='table:0'`)) > 0,
+      'the scenario binds at least one CSV source');
+  }
   assert.equal(pickerRow(), pickerEvidence);
   assert.deepEqual(candidateEvidence(), evidence);
   assert.equal(sql("select count(*) from ouf_onboarding.onboarding_version where source_id='review'"), '2');
   assert.equal(sql("select count(*) from ouf_onboarding.managed_onboarding_review where source_id='review'"), '2');
   assert.equal(sql("select count(*) from ouf_onboarding.approval_challenge where source_id='review'"), '2');
-  console.log('D-080 PASS: predecessor reconciled profile and review, preserving the picker and migration history through V47');
+  console.log('D-080 PASS: predecessor reconciled profile and review, preserving the picker and migration history through V' + LATEST);
 } finally {
   fixture.close();
   for (const container of containers.reverse()) docker('rm', '-f', container);
