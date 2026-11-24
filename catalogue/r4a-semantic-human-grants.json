@@ -42,5 +42,9 @@
   {
     "grantId": "grant-semantic-discovery-adopt-human-admin",
     "capabilityId": "ouf.semantic.discovery.adopt"
+  },
+  {
+    "grantId": "grant-semantic-search-batch-human-admin",
+    "capabilityId": "ouf.semantic.search.batch"
   }
 ]

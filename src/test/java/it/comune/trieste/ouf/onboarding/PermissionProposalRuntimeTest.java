@@ -47,6 +47,9 @@ class PermissionProposalRuntimeTest {
  @Autowired JdbcClient db;@Autowired ObjectMapper json;@Autowired MockMvc http;@Autowired PermissionProposalService proposals;@Autowired AuthorizationAdminService admin;@Autowired AuthorizationPolicyRegistry registry;@Autowired ClientRegistrationRepository registrations;@Autowired PlatformTransactionManager transactions;
  @Autowired ReleaseCapabilityRegistration release;
  static final String DISCOVERY="ouf.semantic.discovery";
+ static final String SEARCH="ouf.semantic.search";
+ static final CapabilityDescriptor BATCH_SEARCH=new CapabilityDescriptor(
+     SEARCH+".batch","READ",SEARCH,Set.of(PrincipalContext.ActorType.HUMAN));
  static final List<CapabilityDescriptor> DISCOVERY_DESCRIPTORS=List.of(
      new CapabilityDescriptor(DISCOVERY,"COMMAND",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)),
      new CapabilityDescriptor(DISCOVERY+".adopt","COMMAND",DISCOVERY,Set.of(PrincipalContext.ActorType.HUMAN)),
@@ -248,7 +251,7 @@ class PermissionProposalRuntimeTest {
   var permissions=ids.stream().map(id->new OufRoleCatalogue.Permission(id,null)).toList();
   var role=new OufRoleCatalogue.Role("admin","Amministratore",permissions);
   var assignment=new OufRoleCatalogue.Assignment("admin-person","admin","giovanni",null,now.minusSeconds(5),now.plusSeconds(3600));
-  return new PermissionProposalService.Change("REPLACE_ROLES",null,null,"Aggiornare i permessi discovery",
+  return new PermissionProposalService.Change("REPLACE_ROLES",null,null,"Aggiornare i permessi del ruolo admin",
       new OufRoleCatalogue.Snapshot(ISSUER,List.of(role),List.of(assignment)));
  }
  PermissionProposalService.Change discoveryRole(){
@@ -259,7 +262,8 @@ class PermissionProposalRuntimeTest {
    try(var input=new org.springframework.core.io.ClassPathResource("catalogue/"+manifest).getInputStream()){
     for(var entry:json.readTree(input)){
      var descriptor=json.treeToValue(entry.get("descriptor"),CapabilityDescriptor.class);
-     if(!DISCOVERY_DESCRIPTORS.contains(descriptor))admin.register(entry.get("ownerRef").asText(),descriptor,actor(root));
+     if(!DISCOVERY_DESCRIPTORS.contains(descriptor)&&!BATCH_SEARCH.capabilityId().equals(descriptor.capabilityId()))
+      admin.register(entry.get("ownerRef").asText(),descriptor,actor(root));
     }
    }
   }
@@ -269,7 +273,7 @@ class PermissionProposalRuntimeTest {
       select capability_id from ouf_authorization.capability_registration
       where registered_by='release:catalogue/r4a-semantic-human-capabilities.json'
         and owner_ref='semantic' and registered_at is not null order by capability_id
-      """).query(String.class).list()).containsExactly(DISCOVERY,DISCOVERY+".adopt",DISCOVERY+".candidates",DISCOVERY+".status");
+      """).query(String.class).list()).containsExactly(DISCOVERY,DISCOVERY+".adopt",DISCOVERY+".candidates",DISCOVERY+".status",BATCH_SEARCH.capabilityId());
   var readOnly=new TransactionTemplate(transactions);
   readOnly.setReadOnly(true);
   readOnly.executeWithoutResult(tx->release.run(null));
@@ -289,13 +293,22 @@ class PermissionProposalRuntimeTest {
       .query(Long.class).single()).isZero();
  }
  @Test void releaseDescriptorsAndCompiledGrantsEnterActiveInOneThsPublication()throws Exception{
-  var original=proposals.propose(proposer,adminRole(List.of("ouf.system.status")),"existing-admin");
+  verifyReleaseProposal(List.of("ouf.system.status"),DISCOVERY_DESCRIPTORS);
+ }
+ @Test void batchSearchEntersExistingAdminRoleOnlyAfterThsConfirmation()throws Exception{
+  admin.register("semantic",new CapabilityDescriptor(SEARCH,"READ",SEARCH,Set.of(PrincipalContext.ActorType.HUMAN)),actor(root));
+  verifyReleaseProposal(List.of(SEARCH),List.of(BATCH_SEARCH));
+ }
+ void verifyReleaseProposal(List<String> existingPermissions,List<CapabilityDescriptor> additions)throws Exception{
+  var existingRole=adminRole(existingPermissions);
+  var original=proposals.propose(proposer,existingRole,"existing-admin");
   var originalCard=proposals.card(root,original.proposalId());
   proposals.decide(root,original.proposalId(),original.revision(),new PermissionProposalService.Confirmation(originalCard.proposedHash()),true);
-  release.run(null);
   var base=registry.load("permissions",2);
-  var ids=new ArrayList<>(List.of("ouf.system.status"));
-  DISCOVERY_DESCRIPTORS.forEach(c->ids.add(c.capabilityId()));
+  var pointer=registry.active().orElseThrow();
+  release.run(null);
+  var ids=new ArrayList<>(existingPermissions);
+  additions.forEach(c->ids.add(c.capabilityId()));
   var change=adminRole(ids);
   byte[] body=json.writeValueAsBytes(Map.of("Arguments",change));
   var response=http.perform(post(API+"propose")
@@ -305,17 +318,19 @@ class PermissionProposalRuntimeTest {
   var proposed=json.readValue(db.sql("select proposed_policy::text from ouf_authorization.permission_proposal where proposal_id=:id")
       .param("id",id).query(String.class).single(),PolicyBundle.class);
   var expectedCapabilities=new ArrayList<>(base.capabilities());
-  expectedCapabilities.addAll(DISCOVERY_DESCRIPTORS);
+  expectedCapabilities.addAll(additions);
   var expectedGrants=new ArrayList<>(base.grants());
   expectedGrants.removeIf(g->g.grantId().startsWith(OufRoleCatalogue.PREFIX));
   expectedGrants.addAll(OufRoleCatalogue.compile(change.roleCatalogue(),proposer.tenantId(),ISSUER,expectedCapabilities));
-  assertThat(expectedGrants).hasSize(base.grants().size()+DISCOVERY_DESCRIPTORS.size());
+  assertThat(expectedGrants).hasSize(base.grants().size()+additions.size());
   assertThat(proposed.grants()).containsAll(base.grants());
   assertThat(proposed.capabilities()).containsExactlyElementsOf(expectedCapabilities);
   assertThat(proposed.grants()).containsExactlyElementsOf(expectedGrants);
-  assertThat(registry.active().orElseThrow().version()).isEqualTo(base.version());
+  assertThat(registry.active().orElseThrow()).isEqualTo(pointer);
+  assertThat(registry.load("permissions",2)).isEqualTo(base);
+  assertThat(proposals.roleCatalogue(proposer)).isEqualTo(existingRole.roleCatalogue());
   var card=proposals.card(root,id);
-  assertThat(card.addedCapabilities()).containsExactlyElementsOf(DISCOVERY_DESCRIPTORS);
+  assertThat(card.addedCapabilities()).containsExactlyElementsOf(additions);
   var canonical=new CanonicalHash(json);
   assertThat(card.proposedHash()).isEqualTo(canonical.of(Map.of("policy",proposed,"roleCatalogue",change.roleCatalogue())));
   http.perform(post(THS+id+"/confirm").with(oauth2Login().clientRegistration(registration)).with(csrf())

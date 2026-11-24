@@ -24,6 +24,14 @@ Acquisire e ripristinare i due parametri e l'origine con la configurazione dell'
 | Ripristino e dipendenze | Predisporre ruoli PostgreSQL e database di destinazione vuoto. Con l'applicazione ferma, ripristinare lo snapshot completo con `pg_restore --single-transaction`, nell'ordine delle dipendenze del dump. Registro, bundle, puntatore ACTIVE, ruoli, audit e cronologia Flyway devono provenire dalla stessa cattura. Avviare l'artefatto di rilascio corrispondente dopo il controllo dei dati. |
 | Prova di ripristino | Su un'istanza isolata confrontare conteggio, chiavi, owner, descrittori e provenienza con la distinta privata. Verificare il riferimento e l'hash di ACTIVE, la corrispondenza di ogni suo descrittore col registro e il secondo avvio senza inserimenti. La prova su un secondo host resta da eseguire. |
 
+### Ricerca semantica a lotti (D-090, tranche T1)
+
+Il rilascio registra `ouf.semantic.search.batch` per l'owner `semantic` con operazione `READ`, scope `ouf.semantic.search` e attore `HUMAN`. La provenienza della nuova riga è `release:catalogue/r4a-semantic-human-capabilities.json`. Si applicano lo schema V16 e la procedura di cattura e ripristino della tabella descritta sopra. Il descrittore e il grant di catalogo sono dati di rilascio comuni a tutte le installazioni.
+
+Per abilitare il lotto nel ruolo `admin`, la proposta `REPLACE_ROLES` conserva la ricerca singola e aggiunge il permesso per il lotto. La THS mostra il descrittore aggiunto e il ruolo proposto. La conferma umana del diff pubblica il bundle e aggiorna ACTIVE nella stessa transazione (D-071).
+
+Tracciabilità PET (D-082), D-090 T1. Nel job CI `java21-postgresql17`, `PermissionProposalRuntimeTest.releaseRegistersOnlyNewDescriptorsAndSecondStartupIsReadOnly` verifica la provenienza e il secondo avvio in sola lettura. `PermissionProposalRuntimeTest.batchSearchEntersExistingAdminRoleOnlyAfterThsConfirmation` verifica il diff del solo lotto, la conservazione di ACTIVE durante la proposta e la pubblicazione dopo conferma THS.
+
 ## Source mapping and publication (D-065)
 
 | Entry | Owner and contents | Credentials | Capture and restore | Restore check |
