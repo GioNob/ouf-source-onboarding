@@ -26,13 +26,13 @@ class MinioManagedFileStagingStoreTest {
     new ApplicationContextRunner()
         .withInitializer(ctx->ctx.getEnvironment().getPropertySources().addFirst(
             new SystemEnvironmentPropertySource("deployment",variables)))
-        .withUserConfiguration(MinioManagedFileStagingStore.class)
+        .withUserConfiguration(MinioManagedFileStagingStore.class,ManagedFileContentInspector.class)
         .run(ctx->{assertThat(ctx).hasNotFailed();assertThat(ctx).hasSingleBean(MinioManagedFileStagingStore.class);});
   }
 
   @Test void rejectsNonManagedReferencesBeforeMinioAccess(){
     var minio=mock(MinioClient.class);
-    var storage=new MinioManagedFileStagingStore(minio,"ouf-managed-files");
+    var storage=new MinioManagedFileStagingStore(minio,"ouf-managed-files",new ManagedFileContentInspector(new org.springframework.mock.env.MockEnvironment()));
     assertThatThrownBy(()->storage.get("object://other-bucket/file.csv"))
         .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("reference");
     assertThatThrownBy(()->storage.get("object://managed-files/../../secret"))
@@ -42,9 +42,9 @@ class MinioManagedFileStagingStoreTest {
 
   @Test void rejectsOversizedInputBeforeMinioAccess(){
     var minio=mock(MinioClient.class);
-    var storage=new MinioManagedFileStagingStore(minio,"ouf-managed-files");
+    var storage=new MinioManagedFileStagingStore(minio,"ouf-managed-files",new ManagedFileContentInspector(new org.springframework.mock.env.MockEnvironment()));
     assertThatThrownBy(()->storage.put(new ByteArrayInputStream(new byte[1]),10*1024*1024+1L,"text/csv"))
-        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("limit");
+        .isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class).hasMessageContaining("csv.max-bytes");
     verifyNoInteractions(minio);
   }
 }

@@ -28,20 +28,26 @@ class ManagedFileRuntimeTest {
         .isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class)
         .hasMessageContaining("not owned");
   }
-  @Test void delegatedUploadRetryKeepsOneAssetAndRejectsChangedBytes(){
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={ManagedFileContentInspector.CSV,ManagedFileContentInspector.XLSX})
+  void delegatedUploadRetryKeepsOneAssetAndRejectsChangedBytes(String mediaType) throws Exception {
     byte[] csv="cinema,indirizzo\nA,Trieste\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-    String hash=hashes.ofBytes(csv);
+    byte[] content=mediaType.equals(ManagedFileContentInspector.CSV) ? csv : ManagedIntakeFixtures.workbook();
+    String hash=hashes.ofBytes(content);
     java.util.concurrent.atomic.AtomicInteger puts=new java.util.concurrent.atomic.AtomicInteger();
     java.util.function.Supplier<String> put=()->"object://staging/upload-"+puts.incrementAndGet();
-    var first=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put);
-    var retry=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put);
+    var first=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,content.length,mediaType,put);
+    var retry=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,content.length,mediaType,put);
+    assertThat(files.asset((UUID)first.get("assetId"))).containsEntry("media_type",mediaType);
     assertThat(retry).isEqualTo(first).containsEntry("status","STAGED");
     assertThat(puts).hasValue(1);
     assertThat(db.sql("select count(*) from ouf_onboarding.managed_file_upload_attempt").query(Long.class).single()).isOne();
-    assertThatThrownBy(()->files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123","sha256:"+"0".repeat(64),csv.length,put))
+    assertThatThrownBy(()->files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123","sha256:"+"0".repeat(64),content.length,mediaType,put))
         .hasMessageContaining("different file content");
     assertThat(puts).hasValue(1);
-    var other=files.registerDelegatedUpload("tenant-b","human:alice","file_123","upload:file_123",hash,csv.length,put);
+    String otherType=mediaType.equals(ManagedFileContentInspector.CSV) ? ManagedFileContentInspector.XLSX : ManagedFileContentInspector.CSV;
+    assertThatThrownBy(()->files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,content.length,otherType,put)).hasMessageContaining("media type");
+    var other=files.registerDelegatedUpload("tenant-b","human:alice","file_123","upload:file_123",hash,content.length,mediaType,put);
     assertThat(other.get("assetId")).isNotEqualTo(first.get("assetId"));
     assertThat(puts).hasValue(2);
   }

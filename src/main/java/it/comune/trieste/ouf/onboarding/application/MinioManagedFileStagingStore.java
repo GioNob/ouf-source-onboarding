@@ -18,17 +18,19 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(name="ouf.onboarding.staging.bucket")
 public class MinioManagedFileStagingStore implements ManagedFileStagingStore {
-  private static final int MAX_BYTES=10*1024*1024;
+  private static final int MAX_BYTES=ManagedFileContentInspector.MAX_BYTES;
   private static final String PREFIX="object://managed-files/";
   private final MinioClient minio;
   private final String bucket;
+  private final ManagedFileContentInspector inspector;
 
   @Autowired
   public MinioManagedFileStagingStore(
       @Value("${ouf.onboarding.staging.endpoint}") String endpoint,
       @Value("${ouf.onboarding.staging.bucket}") String bucket,
       @Value("${ouf.onboarding.staging.access-key-file}") Path accessKeyFile,
-      @Value("${ouf.onboarding.staging.secret-key-file}") Path secretKeyFile) throws Exception {
+      @Value("${ouf.onboarding.staging.secret-key-file}") Path secretKeyFile, ManagedFileContentInspector inspector) throws Exception {
+    this.inspector=inspector;
     this.bucket=bucket;
     if(!bucket.matches("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"))throw new IllegalArgumentException("invalid staging bucket");
     String access=Files.readString(accessKeyFile).strip();
@@ -38,11 +40,12 @@ public class MinioManagedFileStagingStore implements ManagedFileStagingStore {
   }
 
   // Visible for storage tests without reading any real credentials.
-  MinioManagedFileStagingStore(MinioClient minio,String bucket){this.minio=minio;this.bucket=bucket;}
+  MinioManagedFileStagingStore(MinioClient minio,String bucket,ManagedFileContentInspector inspector){this.inspector=inspector;this.minio=minio;this.bucket=bucket;}
 
   @Override public String put(InputStream content,long size,String mediaType) throws IOException {
-    if(content==null||size<=0||size>MAX_BYTES)throw new IllegalArgumentException("file exceeds staging limit");
-    if(!"text/csv".equals(mediaType))throw new IllegalArgumentException("unsupported staging media type");
+    var format=inspector.requireFormat(mediaType);
+    inspector.checkSize(format,size);
+    if(content==null||size<=0)throw new IllegalArgumentException("file exceeds staging limit");
     String id=UUID.randomUUID().toString();
     try {
       minio.putObject(PutObjectArgs.builder().bucket(bucket).object("managed-files/"+id)

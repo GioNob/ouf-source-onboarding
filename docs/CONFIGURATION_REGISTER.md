@@ -61,3 +61,24 @@ Both IRIs are required and absolute. Extra keys, explicit nulls and malformed va
 Onboarding pins semantic references and, for managed execution, their published revisions and set. These bindings carry no concept-to-scheme membership assertion. The human verifies membership against the published vocabulary when reviewing the class, scheme and concept in THS.
 
 Publication carries the approved pair at `semanticMapping.targetClasses[].category`. UDP scopes identity comparison by tenant, exact canonical class and concept IRI. Omitting the field limits comparison to uncategorized objects of the same class and tenant. Historical mappings need no backfill.
+
+## Managed file intake and XLSX lexical reader (D-065)
+
+Source Onboarding validates these installation settings at startup. Capture and restore the effective values with the installation profile. Keep media types and file sizes aligned with the Gateway. All entries are non-secret.
+
+| Property | Environment | Default | Accepted values or scope |
+|---|---|---|---|
+| `ouf.onboarding.files.media-types` | OUF_ONBOARDING_FILES_MEDIA_TYPES | text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet | Comma-separated supported formats. Add application/geopackage+sqlite3 for GPKG. |
+| `ouf.onboarding.files.csv.max-bytes` | OUF_ONBOARDING_FILES_CSV_MAX_BYTES | 10485760 | 1–10485760 bytes |
+| `ouf.onboarding.files.xlsx.max-bytes` | OUF_ONBOARDING_FILES_XLSX_MAX_BYTES | 10485760 | 1–10485760 bytes |
+| `ouf.onboarding.files.gpkg.max-bytes` | OUF_ONBOARDING_FILES_GPKG_MAX_BYTES | 10485760 | 1–10485760 bytes |
+| `ouf.onboarding.files.xlsx.max-uncompressed-bytes` | OUF_ONBOARDING_FILES_XLSX_MAX_UNCOMPRESSED_BYTES | 104857600 | 1–268435456 bytes across all entries |
+| `ouf.onboarding.files.xlsx.max-entry-bytes` | OUF_ONBOARDING_FILES_XLSX_MAX_ENTRY_BYTES | 67108864 | 1–268435456 bytes in one entry |
+| `ouf.onboarding.files.xlsx.min-inflate-ratio` | OUF_ONBOARDING_FILES_XLSX_MIN_INFLATE_RATIO | 0.01 | Positive compressed / decompressed ratio, up to 1 |
+| `ouf.onboarding.files.xlsx.max-entries` | OUF_ONBOARDING_FILES_XLSX_MAX_ENTRIES | 10000 | 1–10000 ZIP entries |
+| `ouf.onboarding.files.xlsx.max-sheets` | OUF_ONBOARDING_FILES_XLSX_MAX_SHEETS | 64 | 1–64 worksheet units |
+| `ouf.onboarding.files.xlsx.max-rows` | OUF_ONBOARDING_FILES_XLSX_MAX_ROWS | 10000 | 1–10000 nonempty data rows per worksheet |
+| `ouf.onboarding.files.xlsx.max-columns` | OUF_ONBOARDING_FILES_XLSX_MAX_COLUMNS | 1024 | 1–1024 columns per worksheet |
+| `ouf.onboarding.source-time-zone` | OUF_ONBOARDING_SOURCE_TIME_ZONE | Unset | JVM IANA zone ID. A worksheet with DATETIME needs a declared zone. |
+
+After restore, verify the picker formats, upload a synthetic file at the configured limit, then read the date and DST vectors with the declared zone.
