@@ -32,6 +32,33 @@ Per abilitare il lotto nel ruolo `admin`, la proposta `REPLACE_ROLES` conserva l
 
 Tracciabilità PET (D-082), D-090 T1. Nel job CI `java21-postgresql17`, `PermissionProposalRuntimeTest.releaseRegistersOnlyNewDescriptorsAndSecondStartupIsReadOnly` verifica la provenienza e il secondo avvio in sola lettura. `PermissionProposalRuntimeTest.batchSearchEntersExistingAdminRoleOnlyAfterThsConfirmation` verifica il diff del solo lotto, la conservazione di ACTIVE durante la proposta e la pubblicazione dopo conferma THS.
 
+## Attributi di risorsa delle capability (D-065, D-071, D-081)
+
+| Voce | Registrazione |
+|---|---|
+| Owner e versione | Source Onboarding, `catalogue/resource-attributes-capabilities.json`, formato 1. Il rilascio include lo stesso file nel classpath dell’immagine. |
+| Contenuto | Per ogni capability dichiarata, attributi che l’owner può fornire in almeno uno dei percorsi di decisione. Una lista vuota esclude entrambi gli attributi controllati. Una chiave assente indica una capability non verificabile. |
+| Validazione | All’avvio sono controllati versione, struttura, tipi e duplicati. Alla proposta, `allowedDataLabels` richiede `dataAccessLabel` e `allowedDetailLevels` richiede `detailLevel` quando le rispettive liste contengono valori. |
+| Acquisizione e ripristino | Conservare la revisione del repository e il digest dell’immagine. Ripristinare l’immagine corrispondente insieme allo snapshot di Authorization. Il catalogo contiene solo dati di rilascio. |
+| Verifica | Confrontare il file nel JAR con quello della revisione ripristinata. `PermissionConstraintCatalogueTest` verifica copertura dei descrittori di rilascio, confronto per ruolo, attributi supportati e limite delle violazioni. |
+
+La dichiarazione Semantic usa liste vuote per le capability di ricerca, discovery, proposta e revisione. Il controllo riguarda gli attributi di accesso. Il solo attributo tecnico `module` di Semantic non soddisfa alcuno dei due vincoli. Le capability esterne prive di evidenza restano senza dichiarazione.
+
+Per Onboarding la provenienza è la seguente.
+
+| Capability o gruppo | Attributi e percorso owner |
+|---|---|
+| `ouf.managed-source.onboarding.read`, `ouf.managed-source.onboarding.review.prepare`, `ouf.onboarding.configuration.write` | `onboardingVersionId` in `ManagedOnboardingReviewService.authorize`. |
+| `ouf.onboarding.revision.read`, `ouf.onboarding.revision.prepare` | `onboardingVersionId` in `SourceRevisionService.permitted`. |
+| `ouf.onboarding.configuration.read`, `ouf.ingestion.configuration.attest` | `module` e `onboardingVersionId` in `ManagedOnboardingReviewService` sulle configurazioni pubblicate. Per la lettura, `RuntimePublicationApi.require` fornisce anche `sourceRef` quando la fonte è specificata. Il descrittore di attestazione ha owner Onboarding in `catalogue/r4a-onboarding-lifecycle.json`. |
+| `ouf.managed-source.file.profile`, `ouf.onboarding.quarantine.release` | `module`, `assetRef`, `jobRef`, `detailLevel` nei percorsi di recovery di `ManagedFileService.profileRecoveryResource` e `ManagedFileOwnershipRecovery.resource`. |
+| `ouf.ths.log.*` elencate | `module` e `detailLevel` in `ProtectedLogApi.protectedActor`. La risorsa associata alla richiesta alimenta anche `ServletAuthorization.resolve` per i permessi accessori `pii.read`, `export.read.any` e `download.any` controllati in `ProtectedLogService`. |
+| `authorization.permissions.*`, `authorization.proposal.read`, `authorization.policy.admin` | Mappa vuota in `PermissionProposalService.delegated`, `AuthorizationAdminService` e `AuthorizationReviewService.authorized`. Bootstrap e lettura bundle controllano principal e scope in `BootstrapAdministrator` e `AuthorizationBundleApi`. |
+| `ouf.onboarding.ths-links.*` | `IngestionRunRecoveryLinkApi.verifyDelegation` verifica la ricevuta per la capability senza aggiungere attributi di risorsa. |
+| Altre voci locali con lista vuota | Operazioni fonte, discovery, mapping e file dichiarate in `openapi/onboarding-v1.yaml`, lettura staging in `ManagedFileStagingApi`, quarantena in `ManagedFileQuarantineTrustedHumanApi` e configurazione installazione in `InstallationBootstrapApi` e `InstallationProjectionExportApi`. Il percorso servlet usa la mappa vuota di `ServletAuthorization.resolve` in assenza di una risorsa esplicita. |
+
+La ricevuta, lo status e la scheda usano la proposta e la fotografia dei ruoli della sua transazione. Per una proposta diretta precedente alla fotografia dei ruoli, gli avvisi sui grant compilati conservano il loro `grantId`. Una proposta pendente precedente al rilascio viene ricontrollata prima della pubblicazione. La scheda consente di rifiutarla se richiede correzioni.
+
 ## Source mapping and publication (D-065)
 
 | Entry | Owner and contents | Credentials | Capture and restore | Restore check |

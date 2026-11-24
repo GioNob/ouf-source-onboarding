@@ -8,6 +8,7 @@ test('permission review binds explicit human confirmation to hash, revision and 
  await page.route('**/api/proposals/**',async route=>{if(route.request().method()==='POST'){posts++;if(broken){await route.abort();return;}if(delay)await new Promise(r=>{release=r;});sent={body:route.request().postDataJSON(),headers:route.request().headers(),url:route.request().url()};await route.fulfill({status:code,json:{state:sent.url.endsWith('/reject')?'REJECTED':'PUBLISHED',finalPolicyRef:'policy:2'}});}else await route.fulfill({json:{card,csrfHeader:'X-CSRF-TOKEN',csrfToken:'session-csrf'}});});
  await page.goto(url);await page.locator('#review:not([hidden])').waitFor();assert.equal(await page.locator('#reason img').count(),0);assert.equal(await page.locator('#confirm').isDisabled(),true);
  assert.equal(await page.locator('#catalogue-additions').isHidden(),true);
+ assert.equal(await page.getByRole('region',{name:'Vincoli che non si applicheranno',includeHidden:true}).isHidden(),true);
  await page.clock.install();await page.locator('#checked').check();await page.locator('#confirm').click();
  await page.locator('#decision-status').filter({hasText:'Pubblicazione in corso'}).waitFor();
  assert.equal(await page.locator('#decision').getAttribute('aria-busy'),'true');
@@ -26,7 +27,16 @@ test('permission review binds explicit human confirmation to hash, revision and 
  card.afterRoles={issuer:'https://iam.example',roles:[{roleId:'operator',displayName:'<img src=x onerror=alert(1)>',permissions:[{capabilityId:'ouf.system.status',constraints:{allowedDetailLevels:['PUBLIC_OPERATIONAL']}}]}],assignments:[{roleId:'operator',subjectId:'nominal-person',validFrom:'2026-09-20',validUntil:'2027-09-20'},{roleId:'operator',externalRoleRef:'ente:it',validFrom:'2026-09-20',validUntil:'2027-09-20'}]};
  card.addedCapabilities=[{capabilityId:'ouf.semantic.discovery.status',operation:'READ',requiredScope:'ouf.semantic.discovery',allowedActors:['HUMAN','SERVICE']}];
  card.afterRoles.roles[0].permissions.push({capabilityId:'ouf.semantic.discovery.status',constraints:null});
+ card.constraintWarnings=[
+  {role:'operator',grantId:null,capabilityId:'ouf.semantic.search',field:'allowedDataLabels',missingResourceAttribute:'dataAccessLabel',kind:'INERT_UNCHANGED'},
+  {role:null,grantId:'direct',capabilityId:'ouf.system.status',field:'allowedDetailLevels',missingResourceAttribute:'detailLevel',kind:'UNVERIFIABLE'}
+ ];
  card.beforeRoles={issuer:'https://iam.example',roles:[],assignments:[]};await page.goto(url);await page.locator('#review:not([hidden])').waitFor();assert.equal(await page.locator('#after img').count(),0);assert.match(await page.locator('#after').textContent(),/nominal-person/);assert.match(await page.locator('#after').textContent(),/ente:it/);assert.match(await page.locator('#after').textContent(),/PUBLIC_OPERATIONAL/);assert.equal(await page.locator('#confirm').isDisabled(),true);
+ const warnings=page.getByRole('region',{name:'Vincoli che non si applicheranno'});
+ assert.equal(await warnings.isVisible(),true);
+ const rows=warnings.locator('tbody tr');
+ assert.deepEqual(await rows.first().locator('td').allTextContents(),['operator','—','ouf.semantic.search','allowedDataLabels','dataAccessLabel','L’owner non fornisce questo attributo: il permesso con questo vincolo non concederà mai accesso.']);
+ assert.match(await rows.nth(1).textContent(),/direct.*detailLevel.*Non verificabile/);
  const additions=page.getByRole('region',{name:'Capability aggiunte al catalogo attivo'});
  assert.equal(await additions.isVisible(),true);
  assert.deepEqual(await additions.locator('h3').allTextContents(),['ouf.semantic.discovery.status']);
@@ -34,6 +44,12 @@ test('permission review binds explicit human confirmation to hash, revision and 
  await page.locator('#checked').check();await page.locator('#confirm').click();await page.locator('#status').filter({hasText:'Modifica pubblicata'}).waitFor();assert.deepEqual(sent.body,{expectedHash:'exact-hash'});await page.screenshot({path:'target/browser-evidence/role-review.png',fullPage:true});
  broken=true;await page.goto(url);await page.locator('#review:not([hidden])').waitFor();await page.locator('#checked').check();const beforePosts=posts;await page.locator('#confirm').click();await page.locator('#decision-status').filter({hasText:'esito non verificato'}).waitFor();assert.equal(posts,beforePosts+1);assert.equal(await page.locator('#confirm').isDisabled(),true);assert.doesNotMatch(await page.locator('#decision-status').textContent(),/non registrata/);
  broken=false;card.state='PUBLISHED';card.finalPolicyRef='policy:2';await page.goto(url);await page.locator('#decision-status').filter({hasText:'Modifica pubblicata'}).waitFor();assert.equal(await page.locator('#confirm').isDisabled(),true);
+ card.state='PENDING';delete card.finalPolicyRef;
+ card.constraintViolations=[{role:null,grantId:'direct',capabilityId:'ouf.semantic.search',field:'allowedDataLabels',missingResourceAttribute:'dataAccessLabel'}];
+ await page.goto(url);await page.locator('#correction').waitFor();await page.locator('#checked').check();
+ assert.equal(await page.locator('#confirm').isDisabled(),true);
+ await page.locator('#reject').click();await page.locator('#status').filter({hasText:'Proposta rifiutata'}).waitFor();
+ assert.equal(await page.locator('#correction').isHidden(),true);
  await page.unroute('**/api/proposals/**');await page.route('**/api/proposals/**',route=>route.fulfill({status:403,json:{}}));await page.goto(url);await page.locator('#status').filter({hasText:'Proposta non accessibile'}).waitFor();assert.equal(await page.locator('#review').isHidden(),true);
  }finally{await browser.close();await new Promise(r=>server.close(r));}
 });
