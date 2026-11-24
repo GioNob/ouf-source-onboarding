@@ -39,7 +39,7 @@ class AnalysisRenewalGateway {
 
   AnalysisRenewalGateway(ObjectMapper json, @Value("${ouf.workflow.ths.gateway-base-url}") String base,
       @Value("${ouf.workflow.ths.analysis-renewal.timeout-seconds:15}") int timeoutSeconds,
-      @Value("${ouf.workflow.ths.analysis-renewal.message-bytes:65536}") int messageBytes) {
+      @Value("${ouf.workflow.ths.analysis-renewal.message-bytes:131072}") int messageBytes) {
     this.json = json;
     origin = WorkflowThsApi.gatewayOrigin(base);
     if (timeoutSeconds < 1 || timeoutSeconds > 25 || messageBytes < 1 || messageBytes > 131072)

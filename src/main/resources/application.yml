@@ -19,7 +19,7 @@ ouf:
       analysis-renewal:
         # Limiti per un singolo scambio THS, validati dal client (massimi 25 s e 131072 byte).
         timeout-seconds: ${OUF_THS_ANALYSIS_RENEWAL_TIMEOUT_SECONDS:15}
-        message-bytes: ${OUF_THS_ANALYSIS_RENEWAL_MESSAGE_BYTES:65536}
+        message-bytes: ${OUF_THS_ANALYSIS_RENEWAL_MESSAGE_BYTES:131072}
   onboarding:
     wait-max-seconds: ${OUF_ONB_WAIT_MAX_SECONDS:3600}
     handoff-retention-seconds: ${OUF_ONB_HANDOFF_RETENTION_SECONDS:86400}

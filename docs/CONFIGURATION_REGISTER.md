@@ -16,7 +16,7 @@ Acquisire e ripristinare i due parametri e l'origine con la configurazione dell'
 | Proprietà Spring | Variabile d'installazione | Default | Valori ammessi |
 |---|---|---:|---|
 | `ouf.workflow.ths.analysis-renewal.timeout-seconds` | `OUF_THS_ANALYSIS_RENEWAL_TIMEOUT_SECONDS` | 15 s | Intero da 1 a 25 s |
-| `ouf.workflow.ths.analysis-renewal.message-bytes` | `OUF_THS_ANALYSIS_RENEWAL_MESSAGE_BYTES` | 65536 byte | Intero da 1 a 131072 byte |
+| `ouf.workflow.ths.analysis-renewal.message-bytes` | `OUF_THS_ANALYSIS_RENEWAL_MESSAGE_BYTES` | 131072 byte | Intero da 1 a 131072 byte |
 
 Il client valida i limiti all’avvio. I 25 secondi lasciano margine rispetto ai 30 secondi della rotta pubblica per segnalare un esito da verificare. Il limite dei corpi JSON è allineato a quello del Gateway. Acquisire e ripristinare entrambi i valori con la configurazione dell’installazione.
 
