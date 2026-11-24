@@ -2,7 +2,8 @@ package it.comune.trieste.ouf.onboarding.api;
 
 import java.io.IOException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
-import org.springframework.core.io.ClassPathResource;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileContentInspector;
+import java.nio.charset.StandardCharsets;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -20,7 +21,6 @@ import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URI;
 import java.net.HttpURLConnection;
 import java.util.Map;
@@ -36,7 +36,7 @@ import it.comune.trieste.ouf.authorization.ServletAuthorization;
 @ConditionalOnBean(ManagedFileStagingStore.class)
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name="ouf.managed-file-picker.gateway-upload-url")
 public class ManagedFilePickerPage {
-  private static final long MAX_BYTES = 10L * 1024 * 1024;
+  private final ManagedFileContentInspector inspector;
   private final URI uploadUrl;
   private final OAuth2AuthorizedClientService clients;
   private final TrustedActorResolver actors;
@@ -45,7 +45,8 @@ public class ManagedFilePickerPage {
 
   public ManagedFilePickerPage(@Value("${ouf.managed-file-picker.gateway-upload-url}") String url,
       OAuth2AuthorizedClientService clients, TrustedActorResolver actors, ObjectMapper json,
-      ManagedFileChatHandoff handoffs) {
+      ManagedFileChatHandoff handoffs, ManagedFileContentInspector inspector) {
+    this.inspector = inspector;
     this.uploadUrl = URI.create(url);
     if (!"/api/managed-sources/v1/files".equals(uploadUrl.getPath()) || uploadUrl.getRawQuery() != null
         || uploadUrl.getRawFragment() != null || uploadUrl.getUserInfo() != null
@@ -98,14 +99,14 @@ public class ManagedFilePickerPage {
   }
 
   /** Browser session adapter; invokes the one existing Gateway upload API. */
-  @PostMapping(path="/trusted-human/managed-files/upload", consumes="text/csv")
+  @PostMapping(path="/trusted-human/managed-files/upload")
   public ResponseEntity<Map<String,String>> upload(HttpServletRequest request,
       @RequestHeader("X-Content-SHA256") String hash,
       @RequestParam(value="handoff",required=false) UUID handoff) throws IOException {
     var principal = requireSession(request);
     long declaredSize = request.getContentLengthLong();
-    if (declaredSize > MAX_BYTES)
-      throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "UPLOAD_SIZE_INVALID");
+    var format = inspector.requireFormat(request.getContentType());
+    inspector.checkSize(format, declaredSize);
     if (declaredSize == 0 || !hash.matches("sha256:[0-9a-f]{64}"))
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UPLOAD_METADATA_INVALID");
     if (handoff != null) handoffs.checkUpload(handoff, principal.tenantId(), principal.subjectId());
@@ -115,6 +116,10 @@ public class ManagedFilePickerPage {
     var client = clients.loadAuthorizedClient(session.getAuthorizedClientRegistrationId(), session.getName());
     if (client == null || !"ouf-ths".equals(client.getClientRegistration().getRegistrationId()))
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "THS_SESSION_REQUIRED");
+    byte[] verified;
+    try (var source = request.getInputStream()) {
+      verified = verifiedBody(source, declaredSize, format, inspector);
+    }
     var connection = (HttpURLConnection) uploadUrl.toURL().openConnection();
     try {
       connection.setInstanceFollowRedirects(false);
@@ -122,15 +127,14 @@ public class ManagedFilePickerPage {
       connection.setReadTimeout(30000);
       connection.setRequestMethod("POST");
       connection.setDoOutput(true);
-      if (declaredSize > 0) connection.setFixedLengthStreamingMode(declaredSize);
-      else connection.setChunkedStreamingMode(65536);
+      connection.setFixedLengthStreamingMode(verified.length);
       connection.setRequestProperty("Authorization", "Bearer " + client.getAccessToken().getTokenValue());
-      connection.setRequestProperty("Content-Type", "text/csv");
+      connection.setRequestProperty("Content-Type", format.mediaType());
       connection.setRequestProperty("X-Content-SHA256", hash);
       String fileName=request.getHeader("X-OUF-File-Name");
       if(fileName!=null && fileName.matches("[!-~]{1,3072}"))connection.setRequestProperty("X-OUF-File-Name",fileName);
-      try (var source = request.getInputStream(); var target = connection.getOutputStream()) {
-        copyBounded(source, target, declaredSize);
+      try (var target = connection.getOutputStream()) {
+        target.write(verified);
       }
       int code = connection.getResponseCode();
       if (code != 201)
@@ -143,33 +147,38 @@ public class ManagedFilePickerPage {
         if (!id.matches("[0-9a-f-]{36}")) throw new IOException("Gateway upload result missing asset ID");
         if (handoff != null) handoffs.complete(handoff, UUID.fromString(id), principal.tenantId(), principal.subjectId());
         return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore())
-            .body(Map.of("assetId", id, "status", "STAGED"));
+            .body(Map.of("assetId", id, "status", "STAGED", "mediaType", format.mediaType()));
       }
     } finally {
       connection.disconnect();
     }
   }
 
-  static long copyBounded(InputStream source, OutputStream target, long declaredSize) throws IOException {
-    byte[] chunk = new byte[65536];
-    long count = 0;
-    for (int n; (n = source.read(chunk)) != -1;) {
-      count += n;
-      if (count > MAX_BYTES || declaredSize > 0 && count > declaredSize)
-        throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "UPLOAD_SIZE_INVALID");
-      target.write(chunk, 0, n);
-    }
-    if (count == 0 || declaredSize > 0 && count != declaredSize)
+  static byte[] verifiedBody(InputStream source, long declaredSize, ManagedFileContentInspector.Format format,
+      ManagedFileContentInspector inspector) throws IOException {
+    byte[] bytes = source.readNBytes(format.maxBytes() + 1);
+    inspector.checkSize(format, bytes.length);
+    if (bytes.length == 0 || declaredSize > 0 && declaredSize != bytes.length)
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UPLOAD_SIZE_MISMATCH");
-    return count;
+    inspector.verify(format, bytes);
+    return bytes;
   }
 
   private ResponseEntity<byte[]> asset(String name, MediaType type) throws IOException {
+    byte[] body = ThsAssets.read(name);
+    if (type.equals(MediaType.TEXT_HTML)) {
+      // Extensions and MIME values come exclusively from the closed format registry.
+      String html = new String(body, StandardCharsets.UTF_8)
+          .replace("{{formats}}", json.writeValueAsString(inspector.formats()))
+          .replace("{{extensions}}", "." + String.join(",.", inspector.formats().keySet()))
+          .replace("{{labels}}", String.join(", ", inspector.formats().keySet()).toUpperCase(java.util.Locale.ROOT));
+      body = html.getBytes(StandardCharsets.UTF_8);
+    }
     return ResponseEntity.ok().contentType(type).cacheControl(CacheControl.noStore())
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
         .header("X-Frame-Options", "DENY")
         .header("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-        .body(ThsAssets.read(name));
+        .body(body);
   }
 }

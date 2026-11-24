@@ -79,7 +79,7 @@ class ManagedFileChatHandoffTest {
     assertThat(owner.result(id, TENANT, USER)).containsEntry("state", "PENDING").containsEntry("observationVersion", "1");
     at(3599).complete(id, asset, TENANT, USER);
     var staged = at(3600).result(id, TENANT, USER);
-    assertThat(staged).containsEntry("assetId", asset).containsEntry("state", "STAGED").containsEntry("observationVersion", "2");
+    assertThat(staged).containsEntry("assetId", asset).containsEntry("state", "STAGED").containsEntry("observationVersion", "2").containsEntry("mediaType", "text/csv");
     at(4000).complete(id, asset, TENANT, USER);
     assertThat(at(4000).result(id, TENANT, USER)).isEqualTo(staged);
     assertThatThrownBy(() -> at(4000).complete(id, other, TENANT, USER)).hasMessage("ONB_HANDOFF_OUTCOME_CONFLICT");

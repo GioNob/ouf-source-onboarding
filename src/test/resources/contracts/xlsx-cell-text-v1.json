@@ -1,0 +1,767 @@
+{
+  "schema": "ouf.xlsx-cell-text.v1.vectors",
+  "contract": "contract-extraction-unit-v1.md §8 (v1.1.0)",
+  "version": "1.1.0",
+  "usage": "Each module (Onboarding profiler, Ingestion managed-xlsx-v1) builds an XSSFWorkbook with Apache POI from these vectors inside a unit test and asserts the expected lexical text or the expected unit rejection. The file is copied verbatim into the test resources of both repositories; any change is a new version of the rule. Serial numbers are Excel serial days; 'numberFormat' is applied with CellStyle.setDataFormat(workbook.createDataFormat().getFormat(...)). For FORMULA cells: 'cached' null means the cell has a formula and no <v> element (do not call setCellValue); otherwise the formula is set first and the cached value is then stored with setCellValue (or setCellErrorValue). Expected 'text' is the lexical cell text; 'reject' is the unit rejection code of the sheet that contains the cell. Date/time handling is driven by the cell number format (contract §8.4), never by the value. Cases whose expected rejection depends on <v/> or other XML that the POI API cannot produce are NOT in this file: each module adds them by editing the sheet XML (contract §8.3). Row/column limits are module-specific and are not in this file (contract §8.5).",
+  "defaults": {
+    "timeZone": "Europe/Rome",
+    "dateSystem": "1900"
+  },
+  "cells": [
+    {
+      "id": "string-raw",
+      "cell": {
+        "type": "STRING",
+        "value": "  Via Roma 1 "
+      },
+      "expect": {
+        "text": "  Via Roma 1 "
+      }
+    },
+    {
+      "id": "string-numeric-looking",
+      "cell": {
+        "type": "STRING",
+        "value": "007"
+      },
+      "expect": {
+        "text": "007"
+      }
+    },
+    {
+      "id": "blank",
+      "cell": {
+        "type": "BLANK"
+      },
+      "expect": {
+        "text": ""
+      }
+    },
+    {
+      "id": "boolean-true",
+      "cell": {
+        "type": "BOOLEAN",
+        "value": true
+      },
+      "expect": {
+        "text": "true"
+      }
+    },
+    {
+      "id": "boolean-false",
+      "cell": {
+        "type": "BOOLEAN",
+        "value": false
+      },
+      "expect": {
+        "text": "false"
+      }
+    },
+    {
+      "id": "integer-valued",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 42.0
+      },
+      "expect": {
+        "text": "42"
+      }
+    },
+    {
+      "id": "decimal",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 45.6495
+      },
+      "expect": {
+        "text": "45.6495"
+      }
+    },
+    {
+      "id": "large-exponent",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 10000000000.0
+      },
+      "expect": {
+        "text": "10000000000"
+      }
+    },
+    {
+      "id": "small-exponent",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 1.5e-07
+      },
+      "expect": {
+        "text": "0.00000015"
+      }
+    },
+    {
+      "id": "negative-zero",
+      "cell": {
+        "type": "NUMERIC",
+        "value": -0.0
+      },
+      "expect": {
+        "text": "0"
+      }
+    },
+    {
+      "id": "negative-decimal",
+      "cell": {
+        "type": "NUMERIC",
+        "value": -12.5
+      },
+      "expect": {
+        "text": "-12.5"
+      }
+    },
+    {
+      "id": "binary-fraction",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 0.30000000000000004
+      },
+      "expect": {
+        "text": "0.30000000000000004"
+      }
+    },
+    {
+      "id": "percent-format-ignored",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 0.25,
+        "numberFormat": "0%"
+      },
+      "expect": {
+        "text": "0.25"
+      }
+    },
+    {
+      "id": "grouping-format-ignored",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 1234.5,
+        "numberFormat": "#,##0.00"
+      },
+      "expect": {
+        "text": "1234.5"
+      }
+    },
+    {
+      "id": "date-only",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350,
+        "numberFormat": "yyyy-mm-dd"
+      },
+      "expect": {
+        "text": "2026-11-24"
+      }
+    },
+    {
+      "id": "date-only-leap",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 45351,
+        "numberFormat": "dd/mm/yyyy"
+      },
+      "expect": {
+        "text": "2024-02-29"
+      }
+    },
+    {
+      "id": "datetime-winter",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350.4375,
+        "numberFormat": "yyyy-mm-dd hh:mm"
+      },
+      "expect": {
+        "text": "2026-11-24T10:30:00+01:00"
+      }
+    },
+    {
+      "id": "datetime-summer",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46204.5,
+        "numberFormat": "yyyy-mm-dd hh:mm"
+      },
+      "expect": {
+        "text": "2026-07-01T12:00:00+02:00"
+      }
+    },
+    {
+      "id": "datetime-dst-gap",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46110.104166666664,
+        "numberFormat": "yyyy-mm-dd hh:mm"
+      },
+      "expect": {
+        "text": "2026-03-29T03:30:00+02:00"
+      },
+      "note": "02:30 does not exist in Europe/Rome on 2026-03-29; ZonedDateTime.ofLocal shifts forward by the gap"
+    },
+    {
+      "id": "datetime-dst-overlap",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46320.104166666664,
+        "numberFormat": "yyyy-mm-dd hh:mm"
+      },
+      "expect": {
+        "text": "2026-10-25T02:30:00+02:00"
+      },
+      "note": "02:30 occurs twice; ZonedDateTime.ofLocal with null preferred offset keeps the earlier offset"
+    },
+    {
+      "id": "datetime-round-seconds",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350.43749537037,
+        "numberFormat": "yyyy-mm-dd hh:mm:ss"
+      },
+      "expect": {
+        "text": "2026-11-24T10:30:00+01:00"
+      },
+      "note": "10:29:59.6 rounds to the nearest second"
+    },
+    {
+      "id": "time-only",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 0.5,
+        "numberFormat": "hh:mm"
+      },
+      "expect": {
+        "text": "12:00:00"
+      }
+    },
+    {
+      "id": "date-1904",
+      "dateSystem": "1904",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 44888,
+        "numberFormat": "yyyy-mm-dd"
+      },
+      "expect": {
+        "text": "2026-11-24"
+      }
+    },
+    {
+      "id": "datetime-no-time-zone",
+      "timeZone": null,
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350.4375,
+        "numberFormat": "yyyy-mm-dd hh:mm"
+      },
+      "expect": {
+        "reject": "XLSX_TIME_ZONE_UNDECLARED"
+      }
+    },
+    {
+      "id": "date-only-no-time-zone",
+      "timeZone": null,
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350,
+        "numberFormat": "yyyy-mm-dd"
+      },
+      "expect": {
+        "text": "2026-11-24"
+      }
+    },
+    {
+      "id": "formula-cached-number",
+      "cell": {
+        "type": "FORMULA",
+        "formula": "1+1",
+        "cached": {
+          "type": "NUMERIC",
+          "value": 2.0
+        }
+      },
+      "expect": {
+        "text": "2"
+      }
+    },
+    {
+      "id": "formula-cached-string",
+      "cell": {
+        "type": "FORMULA",
+        "formula": "\"a\"&\"b\"",
+        "cached": {
+          "type": "STRING",
+          "value": "ab"
+        }
+      },
+      "expect": {
+        "text": "ab"
+      }
+    },
+    {
+      "id": "formula-cached-boolean",
+      "cell": {
+        "type": "FORMULA",
+        "formula": "1>2",
+        "cached": {
+          "type": "BOOLEAN",
+          "value": false
+        }
+      },
+      "expect": {
+        "text": "false"
+      }
+    },
+    {
+      "id": "formula-cached-date",
+      "cell": {
+        "type": "FORMULA",
+        "formula": "DATE(2026,11,24)",
+        "numberFormat": "yyyy-mm-dd",
+        "cached": {
+          "type": "NUMERIC",
+          "value": 46350
+        }
+      },
+      "expect": {
+        "text": "2026-11-24"
+      }
+    },
+    {
+      "id": "formula-without-cached-value",
+      "cell": {
+        "type": "FORMULA",
+        "formula": "1+1",
+        "cached": null
+      },
+      "expect": {
+        "reject": "XLSX_FORMULA_WITHOUT_CACHED_VALUE"
+      }
+    },
+    {
+      "id": "formula-cached-error",
+      "cell": {
+        "type": "FORMULA",
+        "formula": "1/0",
+        "cached": {
+          "type": "ERROR",
+          "value": "#DIV/0!"
+        }
+      },
+      "expect": {
+        "reject": "XLSX_CELL_ERROR"
+      }
+    },
+    {
+      "id": "error-cell",
+      "cell": {
+        "type": "ERROR",
+        "value": "#N/A"
+      },
+      "expect": {
+        "reject": "XLSX_CELL_ERROR"
+      }
+    },
+    {
+      "id": "date-format-hides-time",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350.4375,
+        "numberFormat": "yyyy-mm-dd"
+      },
+      "expect": {
+        "text": "2026-11-24"
+      },
+      "note": "DATE format: the hidden time of day does not appear"
+    },
+    {
+      "id": "date-format-quoted-literal",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350,
+        "numberFormat": "\"Data: \"dd/mm/yyyy"
+      },
+      "expect": {
+        "text": "2026-11-24"
+      }
+    },
+    {
+      "id": "datetime-midnight",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350,
+        "numberFormat": "yyyy-mm-dd hh:mm"
+      },
+      "expect": {
+        "text": "2026-11-24T00:00:00+01:00"
+      },
+      "note": "DATETIME format keeps its type at midnight"
+    },
+    {
+      "id": "datetime-round-carry",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350.999995370374,
+        "numberFormat": "yyyy-mm-dd hh:mm:ss"
+      },
+      "expect": {
+        "text": "2026-11-25T00:00:00+01:00"
+      },
+      "note": "23:59:59.6 rounds before the zone is applied and carries to the next day"
+    },
+    {
+      "id": "time-with-day-part",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 46350.5,
+        "numberFormat": "hh:mm"
+      },
+      "expect": {
+        "text": "12:00:00"
+      },
+      "note": "TIME format: only the fraction counts"
+    },
+    {
+      "id": "time-am-pm",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 0.75,
+        "numberFormat": "h:mm AM/PM"
+      },
+      "expect": {
+        "text": "18:00:00"
+      }
+    },
+    {
+      "id": "time-minutes-seconds",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 0.0006944444444444445,
+        "numberFormat": "mm:ss"
+      },
+      "expect": {
+        "text": "00:01:00"
+      },
+      "note": "m next to s is minutes"
+    },
+    {
+      "id": "elapsed-hours-is-number",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 1.5,
+        "numberFormat": "[h]:mm"
+      },
+      "expect": {
+        "text": "1.5"
+      },
+      "note": "ELAPSED formats are rendered as plain numbers"
+    },
+    {
+      "id": "color-format-is-number",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 3.5,
+        "numberFormat": "[Red]0.00"
+      },
+      "expect": {
+        "text": "3.5"
+      }
+    },
+    {
+      "id": "date-1900-day-60-rejected",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 60,
+        "numberFormat": "yyyy-mm-dd"
+      },
+      "expect": {
+        "reject": "XLSX_DATE_OUT_OF_RANGE"
+      },
+      "note": "fictitious 1900-02-29"
+    },
+    {
+      "id": "date-1900-day-61",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 61,
+        "numberFormat": "yyyy-mm-dd"
+      },
+      "expect": {
+        "text": "1900-03-01"
+      }
+    },
+    {
+      "id": "date-negative-rejected",
+      "cell": {
+        "type": "NUMERIC",
+        "value": -1,
+        "numberFormat": "yyyy-mm-dd"
+      },
+      "expect": {
+        "reject": "XLSX_DATE_OUT_OF_RANGE"
+      }
+    },
+    {
+      "id": "date-1904-zero",
+      "dateSystem": "1904",
+      "cell": {
+        "type": "NUMERIC",
+        "value": 0,
+        "numberFormat": "yyyy-mm-dd"
+      },
+      "expect": {
+        "text": "1904-01-01"
+      }
+    },
+    {
+      "id": "formula-cached-empty-string",
+      "cell": {
+        "type": "FORMULA",
+        "formula": "\"\"",
+        "cached": {
+          "type": "STRING",
+          "value": ""
+        }
+      },
+      "expect": {
+        "text": ""
+      }
+    },
+    {
+      "id": "formula-cached-boolean-true",
+      "cell": {
+        "type": "FORMULA",
+        "formula": "2>1",
+        "cached": {
+          "type": "BOOLEAN",
+          "value": true
+        }
+      },
+      "expect": {
+        "text": "true"
+      }
+    }
+  ],
+  "sheets": [
+    {
+      "id": "default-header-first-non-empty-row",
+      "rows": {
+        "3": [
+          "codice",
+          "nome"
+        ],
+        "4": [
+          "E1",
+          "Alfa"
+        ]
+      },
+      "expect": {
+        "status": "READY",
+        "headerRow": 3,
+        "recordCount": 1
+      }
+    },
+    {
+      "id": "declared-header-row",
+      "headerRow": 2,
+      "rows": {
+        "1": [
+          "Elenco edicole"
+        ],
+        "2": [
+          "codice",
+          "nome"
+        ],
+        "3": [
+          "E1",
+          "Alfa"
+        ]
+      },
+      "merged": [
+        "A1:B1"
+      ],
+      "expect": {
+        "status": "READY",
+        "headerRow": 2,
+        "recordCount": 1
+      },
+      "note": "merged title above the declared header is allowed"
+    },
+    {
+      "id": "merged-in-header",
+      "rows": {
+        "1": [
+          "codice",
+          "nome"
+        ],
+        "2": [
+          "E1",
+          "Alfa"
+        ]
+      },
+      "merged": [
+        "A1:B1"
+      ],
+      "expect": {
+        "status": "REJECTED",
+        "reject": "XLSX_MERGED_CELLS",
+        "at": "A1:B1"
+      }
+    },
+    {
+      "id": "merged-in-data",
+      "rows": {
+        "1": [
+          "codice",
+          "nome",
+          "via"
+        ],
+        "2": [
+          "E1",
+          "Alfa",
+          "x"
+        ],
+        "3": [
+          "E2",
+          "Beta",
+          "y"
+        ]
+      },
+      "merged": [
+        "B3:C3"
+      ],
+      "expect": {
+        "status": "REJECTED",
+        "reject": "XLSX_MERGED_CELLS",
+        "at": "B3:C3"
+      }
+    },
+    {
+      "id": "duplicate-header",
+      "rows": {
+        "1": [
+          "codice",
+          "codice"
+        ],
+        "2": [
+          "E1",
+          "E2"
+        ]
+      },
+      "expect": {
+        "status": "REJECTED",
+        "reject": "XLSX_HEADER_INVALID"
+      }
+    },
+    {
+      "id": "header-gap",
+      "rows": {
+        "1": [
+          "codice",
+          "",
+          "nome"
+        ],
+        "2": [
+          "E1",
+          "",
+          "Alfa"
+        ]
+      },
+      "expect": {
+        "status": "REJECTED",
+        "reject": "XLSX_HEADER_INVALID"
+      }
+    },
+    {
+      "id": "data-outside-header",
+      "rows": {
+        "1": [
+          "codice",
+          "nome"
+        ],
+        "2": [
+          "E1",
+          "Alfa",
+          "",
+          "fuori"
+        ]
+      },
+      "expect": {
+        "status": "REJECTED",
+        "reject": "XLSX_DATA_OUTSIDE_HEADER"
+      }
+    },
+    {
+      "id": "blank-row-skipped",
+      "rows": {
+        "1": [
+          "codice",
+          "nome"
+        ],
+        "2": [
+          "E1",
+          "Alfa"
+        ],
+        "3": [
+          "",
+          ""
+        ],
+        "4": [
+          "E2",
+          "Beta"
+        ]
+      },
+      "expect": {
+        "status": "READY",
+        "headerRow": 1,
+        "recordCount": 2
+      }
+    },
+    {
+      "id": "empty-sheet",
+      "rows": {},
+      "expect": {
+        "status": "REJECTED",
+        "reject": "XLSX_EMPTY_SHEET"
+      }
+    },
+    {
+      "id": "hidden-sheet",
+      "hidden": true,
+      "rows": {
+        "1": [
+          "codice"
+        ],
+        "2": [
+          "E1"
+        ]
+      },
+      "expect": {
+        "status": "READY",
+        "hidden": true,
+        "headerRow": 1,
+        "recordCount": 1
+      }
+    },
+    {
+      "id": "header-only",
+      "rows": {
+        "1": [
+          "codice",
+          "nome"
+        ]
+      },
+      "expect": {
+        "status": "READY",
+        "headerRow": 1,
+        "recordCount": 0
+      }
+    }
+  ]
+}

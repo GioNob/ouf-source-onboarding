@@ -3,6 +3,7 @@ package it.comune.trieste.ouf.onboarding.api;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileStagingStore;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileContentInspector;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -23,15 +24,20 @@ public class ManagedFileDelegatedUploadApi {
   private final PermissionDelegationVerifier receipts;
   private final ManagedFileService files;
   private final ManagedFileStagingStore storage;
-  public ManagedFileDelegatedUploadApi(PermissionDelegationVerifier receipts,ManagedFileService files,ManagedFileStagingStore storage){
-    this.receipts=receipts;this.files=files;this.storage=storage;
+  private final ManagedFileContentInspector inspector;
+  public ManagedFileDelegatedUploadApi(PermissionDelegationVerifier receipts,ManagedFileService files,ManagedFileStagingStore storage,ManagedFileContentInspector inspector){
+    this.inspector=inspector;this.receipts=receipts;this.files=files;this.storage=storage;
   }
-  @PostMapping(path="/api/internal/v1/onboarding/managed-file-mcp/upload",consumes="text/csv")
+  // The fallback lets the owner return its governed 415 for a disabled or unknown format.
+  @PostMapping(path="/api/internal/v1/onboarding/managed-file-mcp/upload", consumes={ManagedFileContentInspector.CSV,
+      ManagedFileContentInspector.XLSX, ManagedFileContentInspector.GPKG, "*/*"})
   public ResponseEntity<Map<String,Object>> upload(HttpServletRequest request) throws IOException {
-    var delegated=receipts.verifyManagedUpload(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI());
+    var delegated=receipts.verifyManagedUpload(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),request.getContentType());
+    var format=inspector.requireFormat(delegated.mediaType());
+    inspector.checkSize(format,delegated.expectedLength());
     if(request.getContentLengthLong()!=delegated.expectedLength())
       throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_FILE_SIZE_MISMATCH","Declared upload size differs from signed size");
-    Path spool=Files.createTempFile("ouf-delegated-intake-",".csv");
+    Path spool=Files.createTempFile("ouf-delegated-intake-",".upload");
     try {
       var digest=MessageDigest.getInstance("SHA-256");long size=0;
       try(var input=request.getInputStream();var output=Files.newOutputStream(spool)){
@@ -48,8 +54,11 @@ public class ManagedFileDelegatedUploadApi {
       final long checkedSize=size;
       var principal=delegated.principal();
       Map<String,Object> asset=files.registerDelegatedUpload(principal.tenantId(),principal.subjectId(),delegated.fileId(),
-          delegated.idempotencyKey(),delegated.expectedHash(),checkedSize,()->{
-            try(var input=Files.newInputStream(spool)){return storage.put(input,checkedSize,"text/csv");}
+          delegated.idempotencyKey(),delegated.expectedHash(),checkedSize,format.mediaType(),()->{
+            try {
+              inspector.verify(format,Files.readAllBytes(spool));
+              try(var input=Files.newInputStream(spool)){return storage.put(input,checkedSize,format.mediaType());}
+            }
             catch(IOException e){throw new DomainFailure(HttpStatus.BAD_GATEWAY,"ONB_STAGING_WRITE_FAILED","Managed file staging write failed");}
           });
       return ResponseEntity.status(HttpStatus.CREATED).body(
