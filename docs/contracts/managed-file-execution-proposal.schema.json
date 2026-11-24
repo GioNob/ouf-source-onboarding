@@ -219,6 +219,28 @@
                       }
                     }
                   }
+                },
+                "category": {
+                  "type": "object",
+                  "required": [
+                    "schemeIri",
+                    "conceptIri"
+                  ],
+                  "properties": {
+                    "schemeIri": {
+                      "type": "string",
+                      "minLength": 1,
+                      "format": "iri",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:"
+                    },
+                    "conceptIri": {
+                      "type": "string",
+                      "minLength": 1,
+                      "format": "iri",
+                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:"
+                    }
+                  },
+                  "additionalProperties": false
                 }
               }
             }

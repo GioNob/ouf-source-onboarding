@@ -2,6 +2,7 @@ FROM maven:3.9.11-eclipse-temurin-21 AS build
 WORKDIR /build
 COPY pom.xml .
 COPY src src
+COPY catalogue/*-capabilities.json catalogue/
 COPY authorization-sdk authorization-sdk
 RUN cd authorization-sdk && sha256sum -c SOURCE_SHA256SUMS && timeout --signal=TERM --kill-after=30s 10m mvn -B -ntp clean install
 RUN timeout --signal=TERM --kill-after=30s 15m mvn -B -ntp -DskipTests package

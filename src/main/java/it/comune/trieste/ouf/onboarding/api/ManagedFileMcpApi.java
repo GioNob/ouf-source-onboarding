@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
+import it.comune.trieste.ouf.onboarding.application.MappingCategory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
@@ -21,7 +22,7 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/internal/v1/onboarding/managed-file-mcp")
 public class ManagedFileMcpApi {
   public record CreateDraft(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,
-      List<String> semanticRefs,List<String> sourceObjectKeyFields,List<ManagedFileApi.FieldDecision> fields,String layer){}
+      List<String> semanticRefs,List<String> sourceObjectKeyFields,List<ManagedFileApi.FieldDecision> fields,String layer,JsonNode category){}
   private final PermissionDelegationVerifier receipts;
   private final ManagedFileService files;
   private final ManagedFileChatHandoff handoffs;
@@ -112,7 +113,7 @@ public class ManagedFileMcpApi {
     var delegated=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),cap,raw);
     try {
       JsonNode envelope=json.readTree(raw),args=envelope.required("Arguments");
-      Set<String> allowed=Set.of("assetId","profileId","sourceId","name","owner","targetClassIri","semanticRefs","sourceObjectKeyFields","fields","layer");
+      Set<String> allowed=Set.of("assetId","profileId","sourceId","name","owner","targetClassIri","semanticRefs","sourceObjectKeyFields","fields","layer","category");
       if(!args.isObject()||args.size()>allowed.size())throw new IllegalArgumentException("invalid draft arguments");
       for(var names=args.fieldNames();names.hasNext();)if(!allowed.contains(names.next()))throw new IllegalArgumentException("invalid draft arguments");
       CreateDraft draft=json.copy().enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).treeToValue(args,CreateDraft.class);
@@ -126,7 +127,7 @@ public class ManagedFileMcpApi {
       List<ManagedFileService.FieldDecision> fields=draft.fields().stream()
           .map(f->new ManagedFileService.FieldDecision(f.fieldName(),f.extractionDecision(),f.dataAccessLabel(),f.targetPropertyIri(),f.transform(),f.vocabularyId(),f.vocabularyVersion(),f.valueMapRef())).toList();
       return files.onboardIdempotent(draft.assetId(),draft.profileId(),draft.sourceId(),draft.name(),draft.owner(),draft.targetClassIri(),
-          draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey(),delegated.principal().tenantId());
+          draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey(),delegated.principal().tenantId(),MappingCategory.fromRequest(draft.category()));
     }catch(IOException e){throw new IllegalArgumentException("invalid draft arguments",e);}
   }
 

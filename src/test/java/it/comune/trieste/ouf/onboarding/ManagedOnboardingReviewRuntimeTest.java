@@ -27,6 +27,62 @@ class ManagedOnboardingReviewRuntimeTest {
   private final OnboardingService.Actor human=new OnboardingService.Actor("test-human","HUMAN_USER");
   private PrincipalContext principal(String tenant,String subject){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,"test-mcp","test-acr","https://issuer.example","test-audience",Set.of(ManagedOnboardingReviewService.PREPARE,ManagedOnboardingReviewService.READ,"ouf.onboarding.configuration.write"),new PrincipalContext.IdentityClaims(Set.of(),"test-acr",Set.of(),null));}
   @BeforeEach void clean(){db.sql("truncate ouf_onboarding.source,ouf_onboarding.managed_file_asset restart identity cascade").update();when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(true);}
+  @Test void preparedMappingReadsAdoptedBytesAfterAnotherSemanticPublicationBecomesActive(){
+    String semanticId="https://example.org/onto/Place", property="urn:fixture:name";
+    String tenant="test-tenant", source="review-test";
+    var registry=new PublishedSnapshots();
+    var adopted=registry.publish(semanticId,"1.0.0","Prima");
+    var originalBytes=registry.snapshots.get(adopted);
+    byte[] csv="name,unused\nEdicola,1\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.registerOwned(null,"object://fixture/edicole.csv",hashes.ofBytes(csv),"text/csv",
+        csv.length,human.subject(),"retention://test",tenant).get("asset_id");
+    UUID profile=(UUID)files.profile(asset,csv,"object://fixture/edicole-sample.json").get("profile_id");
+    var fields=List.of(new ManagedFileService.FieldDecision("name","INCLUDE","OPEN",property,"IDENTITY",null,null,null),
+        new ManagedFileService.FieldDecision("unused","EXCLUDE","OPEN",null,null,null,null,null));
+    var refs=List.of(semanticId+"@"+adopted.semanticVersion());
+    var draft=files.onboardIdempotent(asset,profile,source,"Edicole","Mapper",semanticId,refs,List.of("name"),
+        fields,null,human,"create","create:edicole",tenant);
+    UUID version=(UUID)draft.get("onboardingVersionId");
+    var signal=Map.of("id",property,"semanticRef",property+"@"+adopted.publicationSetId(),"comparator","TEXT_V1",
+        "excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","urn:fixture:signal");
+    var rule=Map.of("id","name-rule","signalIds",List.of(property),"assertionRef","urn:fixture:rule");
+    var policy=Map.of("ref","urn:fixture:identity","version","1","tenantId",tenant,"sourceId",source,
+        "canonicalClass",semanticId,"allowAutoNew",false,"maxCandidates",10,"signals",List.of(signal),"sufficientRules",List.of(rule));
+    var materialized=Map.of("sourceField",property,"propertyIri",property,"datatype","http://www.w3.org/2001/XMLSchema#string",
+        "accessLabel","OPEN","authorityOrder",List.of(source));
+    var udp=Map.<String,Object>of("resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1",
+        "policyRef","urn:fixture:identity","governedIdentity",policy),"materialization",Map.of("policyRef","urn:fixture:authority",
+        "properties",List.of(materialized),"bitemporalProperties",List.of(),"checkpointInterval",1));
+    var proposal=new ManagedFileExecutionProposal.Proposal(List.of(adopted),adopted.publicationSetId(),udp,
+        new ManagedFileExecutionProposal.Limits(100,2,1000));
+    var mapper=principal(tenant,human.subject());
+    var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"review:edicole",proposal);
+    var review=reviews.prepare(mapper,command,"prepare");
+
+    registry.publish(semanticId,"1.1.0","Seconda");
+    assertThat(registry.snapshots.get(registry.active)).isNotEqualTo(originalBytes);
+    assertThat(reviews.prepare(mapper,command,"retry")).isEqualTo(review);
+    var card=reviews.humanCard(mapper,(UUID)review.get("challengeId"));
+    var config=(Map<?,?>)card.get("configuration");
+    assertThat(((Map<?,?>)config.get("semanticMapping")).get("semanticRefs")).isEqualTo(refs);
+    var bindings=(List<?>)config.get("semanticReferenceBindings");
+    assertThat(bindings).hasSize(1);
+    var retained=new com.fasterxml.jackson.databind.ObjectMapper().convertValue(bindings.getFirst(),
+        ManagedFileExecutionProposal.SemanticBinding.class);
+    assertThat(retained).isEqualTo(adopted);
+    assertThat(registry.snapshots.get(retained)).containsExactly(originalBytes);
+  }
+
+  private static class PublishedSnapshots {
+    final Map<ManagedFileExecutionProposal.SemanticBinding,byte[]> snapshots=new HashMap<>();
+    ManagedFileExecutionProposal.SemanticBinding active;
+    ManagedFileExecutionProposal.SemanticBinding publish(String id,String version,String label){
+      active=new ManagedFileExecutionProposal.SemanticBinding(id,version,UUID.randomUUID().toString(),UUID.randomUUID().toString());
+      String rdf="<"+id+"> <http://www.w3.org/2000/01/rdf-schema#label> \""+label+"\" .\n";
+      snapshots.put(active,rdf.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      return active;
+    }
+  }
   @Test void preparationRetryAndReadPreserveOneFrozenChallengeAndHumanApprovalRemainsSeparate(){
     UUID version=draft();var p=principal("test-tenant","test-human");
     var command=new ManagedOnboardingReviewService.Prepare("review-test",version,1,"prepare:one",null);

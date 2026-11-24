@@ -50,6 +50,13 @@
       if (card.interchangeSnapshot) detail('Contenuto semantico esatto', card.interchangeSnapshot, article);
     } else {
       const config = card.configuration || {}, mapping = config.semanticMapping || {};
+      for (const target of mapping.targetClasses || []) {
+        element('h3', target.classIri, article);
+        if (target.category) {
+          element('p', `Vocabolario: ${target.category.schemeIri}`, article);
+          element('p', `Categoria: ${target.category.conceptIri}`, article);
+        } else element('p', 'Categoria assente', article);
+      }
       const rows = mapping.propertyMappings || [];
       element('h3', 'Campi inclusi e corrispondenze', article);
       const table = document.createElement('table'), head = document.createElement('tr');
@@ -57,12 +64,28 @@
       table.append(head);
       for (const row of rows) { const tr = document.createElement('tr'); for (const value of [row.sourceField, row.targetPropertyIri, row.transform]) element('td', value, tr); table.append(tr); }
       article.append(table);
+      if (card.newColumns?.length) {
+        element('h3', 'Decisioni sulle colonne nuove', article);
+        const decisions = document.createElement('table'), header = document.createElement('tr');
+        for (const label of ['Colonna nuova', 'Decisione', 'Effetto sulla proiezione']) element('th', label, header);
+        decisions.append(header);
+        for (const item of card.newColumns) {
+          const row = document.createElement('tr');
+          element('td', item.column, row);
+          element('td', item.decision, row);
+          const effect = element('td', item.decision === 'EXCLUDE' ? 'Conservata solo nel file' : item.mapping.propertyIri, row);
+          if (item.decision === 'MAP') detail('Trasformazione e regole', item.mapping, effect);
+          decisions.append(row);
+        }
+        article.append(decisions);
+      }
       detail('Identità delle righe e classificazione di accesso', { sourceObjectIdentityPolicy: config.sourceObjectIdentityPolicy, dataAccessPolicies: config.dataAccessPolicies }, article);
       detail('Confronto con gli oggetti esistenti e materializzazione', config.extractionProfile?.runtime?.udp, article);
       if (card.publicationEffects) {
         element('h3', 'Effetto della nuova pubblicazione', article);
         element('p', card.publicationEffects.description, article);
         detail('Versione di partenza della revisione', card.revisionBase, article);
+        if (card.assetRef) detail('Nuovo file e profilo da approvare', card.assetRef, article);
       }
       detail('Configurazione completa da approvare', config, article);
       if(card.progress?.activationProgress) detail('Avanzamento delle verifiche e tentativi disponibili', card.progress.activationProgress, article);

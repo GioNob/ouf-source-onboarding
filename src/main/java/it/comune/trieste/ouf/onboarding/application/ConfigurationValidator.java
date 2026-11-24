@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding.application;
 
+import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.util.*;
 import org.springframework.stereotype.Component;
 
@@ -47,6 +48,11 @@ public class ConfigurationValidator {
       if("PROPERTY_EVENTS".equals(mode))requireText(profile,"eventContractRef","/changeRepresentationProfile/eventContractRef",out);
       if("DELTA_PATCH".equals(mode)){Optional<Map<String,Object>> delta=object(configuration,"deltaPatchContract");if(delta.isEmpty())delta=object(configuration,"bundle").flatMap(b->object(b,"deltaPatchContract"));if(delta.isEmpty())error(out,"ONB_DELTA_CONTRACT_REQUIRED","/deltaPatchContract","DELTA_PATCH requires a compiled logical contract");else validateDelta(delta.get(),out);}
     });
+    try {
+      MappingCategory.validateConfiguration(configuration);
+    } catch (DomainFailure failure) {
+      error(out,failure.code(),"/semanticMapping/targetClasses",failure.getMessage());
+    }
     validateWeightedIdentity(configuration,out);
     validateLinkedProperties(configuration,out);
     validateManagedPublication(configuration,out);

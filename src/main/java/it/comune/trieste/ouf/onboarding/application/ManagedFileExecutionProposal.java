@@ -6,6 +6,7 @@ import java.util.*;
 /** Pure preparation of an explicitly typed CSV execution profile. It issues no approval or runtime authority. */
 public final class ManagedFileExecutionProposal {
   private static final Map<String,String> DATATYPES=Map.of("IDENTITY","string","DECIMAL_DOT_V1","decimal","DECIMAL_COMMA_V1","decimal","DATE_ISO_V1","date","DATE_DMY_V1","date");
+  static String datatype(String transform){return "http://www.w3.org/2001/XMLSchema#"+DATATYPES.get(transform);}
   public record SemanticBinding(String semanticId,String semanticVersion,String revisionId,String publicationSetId) {}
   public record Limits(int maxRows,int maxColumns,int maxCellChars) {}
   public record Proposal(List<SemanticBinding> semanticBindings,String semanticPublicationSetRef,
@@ -44,7 +45,7 @@ public final class ManagedFileExecutionProposal {
       Map<String,Object> mapping=map(raw);String field=text(mapping,"sourceField");
       require(fields.contains(field) && mappedFields.add(field) && DATATYPES.containsKey(text(mapping,"transform"))
           && mapped.add(iri(text(mapping,"targetPropertyIri"))));
-      declaredDatatypes.put(text(mapping,"targetPropertyIri"),"http://www.w3.org/2001/XMLSchema#"+DATATYPES.get(mapping.get("transform")));
+      declaredDatatypes.put(text(mapping,"targetPropertyIri"),datatype(text(mapping,"transform")));
     }
     require(mappedFields.equals(new HashSet<>(fields)));
     require(!semantic.containsKey("vocabularyMappings") || list(semantic.get("vocabularyMappings"),0,0).isEmpty());
@@ -64,6 +65,7 @@ public final class ManagedFileExecutionProposal {
     }
     Map<String,Object> udp=copy(proposal.udp());keys(udp,"resolution","materialization");
     Map<String,Object> resolution=object(udp,"resolution"),policy=object(resolution,"governedIdentity");
+    MappingCategory.validate(semantic.get("targetClasses"),policy);
     GovernedIdentityProposal.validate(resolution,policy,sourceId,classes,mapped);
     require(tenant.equals(policy.get("tenantId")));
     for(Object raw:list(policy.get("signals"),1,ManagedFileLimits.MAX_COLUMNS)){

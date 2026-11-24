@@ -19,6 +19,19 @@ class PublishedBundleCompilerTest {
 
   @Test @SuppressWarnings("unchecked") void pullPublicationFailsClosedWithoutBindingReference(){Map<String,Object> config=new LinkedHashMap<>(configuration());Map<String,Object> template=new LinkedHashMap<>((Map<String,Object>)config.get("bundle"));template.remove("bindingRef");config.put("bundle",template);assertThatThrownBy(()->compiler.compile("source-1",UUID.randomUUID(),1,"sha256:"+"a".repeat(64),config)).hasMessageContaining("bindingRef");}
 
+  @Test @SuppressWarnings("unchecked") void publishesTheExactMappingWithAndWithoutCategory(){
+    for(boolean categorized:List.of(false,true)){
+      var config=new LinkedHashMap<>(configuration());
+      var mapping=new LinkedHashMap<>((Map<String,Object>)config.get("semanticMapping"));
+      var target=new LinkedHashMap<>(((List<Map<String,Object>>)mapping.get("targetClasses")).getFirst());
+      if(categorized)target.put("category",Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:concept"));
+      mapping.put("targetClasses",List.of(target));
+      config.put("semanticMapping",mapping);
+      var bundle=compiler.compile("source-1",UUID.randomUUID(),1,"sha256:"+"a".repeat(64),config);
+      assertThat(bundle.get("semanticMapping")).isEqualTo(mapping);
+    }
+  }
+
   private static Map<String,Object> configuration(){Map<String,Object> sync=Map.of("bootstrap","FULL_SNAPSHOT","incremental","NONE");return Map.of(
     "syncProfile",sync,
     "extractionProfile",Map.of("profileId","ep-1","version","1","sourceId","source-1","selection",Map.of(),"projection",Map.of("TYPE",List.of("id")),"sync",sync),

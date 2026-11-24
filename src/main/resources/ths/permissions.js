@@ -14,6 +14,19 @@
   text('h3','Assegnazioni',parent);for(const a of value.assignments){const item=document.createElement('dl');parent.append(item);pair(item,'Ruolo OUF',a.roleId);pair(item,a.subjectId?'Persona IAM (sub)':'Ruolo organizzativo IAM',a.subjectId||a.externalRoleRef);pair(item,'Valido da',a.validFrom);pair(item,'Valido fino a',a.validUntil);}
  }
  const endpoint=`/trusted-human/authorization/api/proposals/${encodeURIComponent(id||'')}`;
+ function catalogueAdditions(descriptors){
+  const list=$('added-capabilities');
+  list.replaceChildren();
+  for(const descriptor of descriptors){
+   text('h3',descriptor.capabilityId,list);
+   const fields=document.createElement('dl');
+   list.append(fields);
+   pair(fields,'Operazione',descriptor.operation);
+   pair(fields,'Scope richiesto',descriptor.requiredScope);
+   pair(fields,'Attori ammessi',descriptor.allowedActors.join(', '));
+  }
+  $('catalogue-additions').hidden=descriptors.length===0;
+ }
  function controls(enabled){$('confirm').disabled=!enabled||!$('checked').checked;$('reject').disabled=!enabled;$('checked').disabled=!enabled;}
  $('checked').onchange=()=>controls(!busy&&card?.state==='PENDING');
  async function load(){
@@ -23,6 +36,7 @@
   const data=await r.json();card=data.card;csrfHeader=data.csrfHeader;csrfToken=data.csrfToken;
   if(card.proposalId!==id||!csrfHeader||!csrfToken)throw new Error('Risposta di revisione non valida.');
   context();
+  catalogueAdditions(card.addedCapabilities||[]);
   $('reason').textContent=`Motivo: ${card.reason}`;if(card.afterRoles){catalogue(card.beforeRoles,$('before'));catalogue(card.afterRoles,$('after'));}else{grant(card.before,$('before'));grant(card.after,$('after'));}$('details').textContent=JSON.stringify(card,null,2);$('review').hidden=false;
   controls(card.state==='PENDING');message(card.state==='PENDING'?'Verifica la modifica. Nessun permesso è ancora stato cambiato.':outcome());
  }
