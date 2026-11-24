@@ -93,21 +93,11 @@ public final class ManagedCsvRevision {
     var additions=decisions.stream().filter(d->"MAP".equals(d.decision())).toList();
     if(!additions.isEmpty())extendMappings(config,additions);
 
-    String id=asset.get("asset_id").toString(),profileId=profile.get("profile_id").toString();
-    String ref=schemaRef(id,profileId);
+    String profileId=profile.get("profile_id").toString();
     if(config.get("excludedFieldReview") instanceof Map<?,?> excluded && oldProfileId.equals(excluded.get("profileId")))
       config.put("excludedFieldReview",Map.of("profileId",profileId,"labels",excluded.get("labels")));
-    selection.put("assetId",id);
-    selection.put("fileProfileId",profileId);
-    runtime.put("assetId",id);
-    runtime.put("fileProfileId",profileId);
-    runtime.put("stagingRef",asset.get("staging_ref"));
-    runtime.put("contentHash",asset.get("content_hash"));
+    ManagedUnitRevision.bindAsset(selection,runtime,execution,bundle,asset,profileId,version);
     runtime.put("csvDelimiter",delimiter);
-    execution.put("expectedSize",asset.get("size_bytes"));
-    execution.put("sourceSchemaRef",ref);
-    execution.put("sourceSchemaVersion",String.valueOf(version));
-    bundle.put("schemaRef",ref);
   }
 
   static void checkColumns(Map<String,String> before,Map<String,String> after,Map<String,String> mapped,
@@ -155,7 +145,7 @@ public final class ManagedCsvRevision {
         &&order.stream().allMatch(s->s!=null&&!s.isBlank()&&s.length()<=2048));
   }
 
-  private static void extendMappings(Map<String,Object> config,List<NewColumn> additions){
+  static void extendMappings(Map<String,Object> config,List<NewColumn> additions){
     var extraction=object(config,"extractionProfile");
     var projection=object(extraction,"projection");
     var fields=new ArrayList<>(strings(projection.get("FILE")));

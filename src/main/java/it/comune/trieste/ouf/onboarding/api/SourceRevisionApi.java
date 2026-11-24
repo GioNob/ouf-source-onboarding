@@ -30,6 +30,9 @@ public class SourceRevisionApi {
   private <T>T arguments(byte[] raw,Class<T> type){
     try{var args=json.readTree(raw).required("Arguments");
       if(!args.isObject()||!args.path("sourceId").isTextual())throw new IllegalArgumentException();
+      if(type==SourceRevisionService.Prepare.class && args.has("unitProfileRef") &&
+          (args.has("assetRef") || args.has("changes") || !args.get("unitProfileRef").isObject()))
+        throw new IllegalArgumentException();
       if(type==Read.class){
         boolean version=args.path("onboardingVersionId").isTextual(), command=args.path("parentVersionId").isTextual()&&args.path("commandKey").isTextual();
         if(version==command||(version&&(args.has("parentVersionId")||args.has("commandKey")))||(!version&&args.has("onboardingVersionId")))throw new IllegalArgumentException();
@@ -51,7 +54,7 @@ public class SourceRevisionApi {
     if(raw.length>it.comune.trieste.ouf.onboarding.application.ManagedFileLimits.MAX_MAPPING_ENVELOPE_BYTES)throw new IllegalArgumentException("ONB_REVISION_ARGUMENTS_INVALID");
     var caller=receipts.verifySourceRevision(request.getHeader("X-OUF-Source-Revision-Receipt"),request.getRequestURI(),SourceRevisionService.PREPARE,raw);
     var command=arguments(raw,SourceRevisionService.Prepare.class);
-    if(command.assetRef()!=null){
+    if(command.assetRef()!=null || command.unitProfileRef()!=null){
       String match=request.getHeader("If-Match");
       if(match==null)throw new DomainFailure(HttpStatus.PRECONDITION_REQUIRED,"ONB_REVISION_ETAG_REQUIRED","Parent ETag required");
       if(!etag(command.expectedVersion()).equals(match))

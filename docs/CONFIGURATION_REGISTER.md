@@ -61,3 +61,9 @@ Both IRIs are required and absolute. Extra keys, explicit nulls and malformed va
 Onboarding pins semantic references and, for managed execution, their published revisions and set. These bindings carry no concept-to-scheme membership assertion. The human verifies membership against the published vocabulary when reviewing the class, scheme and concept in THS.
 
 Publication carries the approved pair at `semanticMapping.targetClasses[].category`. UDP scopes identity comparison by tenant, exact canonical class and concept IRI. Omitting the field limits comparison to uncategorized objects of the same class and tenant. Historical mappings need no backfill.
+
+## Managed file extraction units (D-065, D-080)
+
+V47 stores each unit’s source in `ouf_onboarding.managed_file_unit_binding`, keyed by `(asset_id, unit_ref)`. The DRAFT transaction also retains the first source in `managed_file_asset.source_id`. The `managed_file_effective_binding` view resolves predecessor writes from retained selections.
+
+`ouf.onboarding.units.multiple-sources-per-asset` (`OUF_ONB_UNITS_MULTIPLE_SOURCES_PER_ASSET`) defaults to `false`. Enable it through the approved installation profile only once the rollback predecessor reads unit bindings.

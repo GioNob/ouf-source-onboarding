@@ -10,6 +10,76 @@ class ManagedFileExecutionProposalTest {
   private static final String REVISION="00000000-0000-4000-8000-000000000001",PUBLICATION="00000000-0000-4000-8000-000000000002";
   private static final String SOURCE="fixture-source",CLASS="https://schema.org/PerformingArtsTheater",NAME="https://schema.org/name",CAP="urn:fixture:sourcePostalCode",ONTOLOGY="urn:fixture:imported-ontology";
   private final ObjectMapper json=new ObjectMapper();
+  @Test void f1_06_compileUnitsAndReplaceWithDifferentCounts() {
+    for(boolean layer:List.of(false,true)) {
+      var c=config();var a=asset();var p=proposal();
+      var runtime=object(object(c,"extractionProfile"),"runtime");
+      runtime.remove("csvDelimiter");
+      var parameters=layer?Map.of("geopackage",Map.of("layer","buildings","sourceCrs","EPSG:4326","geometryColumn","cap")):Map.of("xlsx",Map.of("sheet","south","sheetIndex",1,"headerRow",2,"dateSystem","1904","cellText",SourceUnitProfiles.XLSX_READER));
+      String ref=layer?"layer:0":"sheet:1",kind=layer?"LAYER":"SHEET";
+      runtime.put("unitRef",ref);runtime.put("unitKind",kind);
+      object(object(c,"extractionProfile"),"selection").put("unitProfileRef",Map.of("unitRef",ref));
+      runtime.put("readParameters",parameters);
+      if(layer) {
+        a.put("media_type","application/geopackage+sqlite3");runtime.put("recordModel","ONE_FEATURE_ONE_SOURCE_OBJECT");
+        runtime.put("layer","buildings");runtime.put("geometryColumn","cap");runtime.put("sourceCrs","EPSG:4326");
+        p.udp().put("spatial",Map.of("policyRef","policy://geometry","relationships",List.of(),"geometry",
+            Map.of("sourceField",CAP,"expectedSourceCrs","EPSG:4326","canonicalSrid",4326,"accessLabel","RESTRICTED",
+                "normalizationVersion","1","crsPolicy",Map.of("sourceAxisOrder","XY","mismatchAction","REJECT"))));
+      } else {
+        a.put("media_type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");runtime.put("format","XLSX");
+      }
+      assertThatThrownBy(()->ManagedFileExecutionProposal.compile(c,a,"fixture-tenant",p)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+      var explicit=new ManagedFileExecutionProposal.Proposal(p.semanticBindings(),p.semanticPublicationSetRef(),p.udp(),p.limits(),
+          ManagedFileExecutionProposal.UNIT_CONTRACT);
+      var compiled=ManagedFileExecutionProposal.compile(c,a,"fixture-tenant",explicit);
+      var execution=object(object(object(compiled,"extractionProfile"),"runtime"),"execution");
+      assertThat(execution).containsEntry("adapterId",layer?"managed-geopackage-v1":"managed-xlsx-v1")
+          .containsEntry("acquisitionMode",layer?"INTERNAL_MANAGED_GEOPACKAGE":"INTERNAL_MANAGED_XLSX")
+          .containsEntry("readParameters",parameters).doesNotContainKey("csvDelimiter");
+      if(layer)assertThat(execution).containsEntry("geometryColumn","cap").containsEntry("layer","buildings").containsEntry("sourceCrs","EPSG:4326");
+      else assertThat(execution).doesNotContainKeys("sheet","headerRow");
+      var evidence=new LinkedHashMap<String,Object>();
+      evidence.put(layer?"featureCount":"rows",1);
+      if(layer)evidence.putAll(Map.of("primaryKey","nome_teatro","geometryType","POINT","srsId",4326,
+          "geometryColumn","cap","sourceCrs","EPSG:4326"));
+      var first=Map.<String,Object>of("name","nome_teatro","dataType","STRING","nullable",false,"distinctValues",1);
+      var before=Map.<String,Object>of("name","cap","dataType",layer?"GEOMETRY":"STRING","nullable",false,"distinctValues",1);
+      var nextKey=new LinkedHashMap<>(first);nextKey.put("distinctValues",2);
+      var after=new LinkedHashMap<>(before);after.put("nullable",true);after.put("distinctValues",2);
+      var from=new SourceUnitProfiles.Unit(ref,kind,layer?"buildings":"south",evidence,List.of(first,before),
+          List.of("nome_teatro"),new LinkedHashMap<>(parameters));
+      var nextEvidence=new LinkedHashMap<>(evidence);nextEvidence.put(layer?"featureCount":"rows",2);
+      var to=new SourceUnitProfiles.Unit(ref,kind,from.name(),nextEvidence,List.of(nextKey,after),
+          List.of("nome_teatro"),new LinkedHashMap<>(parameters));
+      var h=new it.comune.trieste.ouf.onboarding.domain.CanonicalHash(json);
+      assertThat(h.of(from.structure())).isNotEqualTo(h.of(to.structure()));
+      var pin=new SourceUnitProfiles.Reference(UUID.randomUUID(),2,ref,h.of(to.structure()));
+      var incoming=new LinkedHashMap<>(a);incoming.put("asset_id",UUID.randomUUID());
+      ManagedUnitRevision.replace(compiled,a,Map.of("profile_id",PROFILE),from,incoming,to,pin,2,null);
+      assertThat(execution).containsEntry("sourceSchemaVersion","2").containsEntry("readParameters",parameters);
+    }
+  }
+
+  @Test void f1_14_onlyAnAbsentContractSelectsTheHistoricalProposal() throws Exception {
+    var node=(com.fasterxml.jackson.databind.node.ObjectNode)json.valueToTree(proposal());
+    assertThat(node.has("contract")).isFalse();
+    assertThat(json.treeToValue(node,ManagedFileExecutionProposal.Proposal.class).contract()).isNull();
+    node.putNull("contract");
+    assertThatThrownBy(()->json.treeToValue(node,ManagedFileExecutionProposal.Proposal.class))
+        .isInstanceOf(com.fasterxml.jackson.databind.JsonMappingException.class);
+  }
+
+  @Test void f1_02_csvDraftAndCompiledProposalFingerprints() {
+    var hashes=new it.comune.trieste.ouf.onboarding.domain.CanonicalHash(json);
+    assertThat(hashes.of(config())).isEqualTo("sha256:7d207f8c86c7b87ca0fc0804655e702b080534dfe2e26a80081dcc5471628f85");
+    var csv=proposal();
+    var explicit=new ManagedFileExecutionProposal.Proposal(csv.semanticBindings(),csv.semanticPublicationSetRef(),csv.udp(),csv.limits(),
+        ManagedFileExecutionProposal.UNIT_CONTRACT);
+    for(var p:List.of(csv,explicit))
+      assertThat(hashes.of(compile(config(),p))).isEqualTo("sha256:32ea369b8a8bb514432abaee595285475dedcef063469e67cb957fb4587df83b");
+  }
+
   @Test void importedOntologyCanContainExternalStandardTermsWithoutChangingOwnerIdentityOrProjection(){
     var existing=config();var before=clone(existing);var compiled=compile(existing,proposal());
     assertThat(existing).isEqualTo(before);

@@ -105,6 +105,11 @@ class ManagedFileRuntimeTest {
   }
   @Test @SuppressWarnings("unchecked") void geoPackageRegistrationRequiresLayerAndStableKeys()throws Exception{
     byte[] bytes=getClass().getResourceAsStream("/geopackage/cameras.gpkg").readAllBytes();
+    var baseline=profiler.profile(bytes,"application/geopackage+sqlite3");
+    assertThat(hashes.of(new com.fasterxml.jackson.databind.ObjectMapper().convertValue(baseline,Map.class))).isEqualTo("sha256:172e27358d92542a95ea545e7e19a470b1315db533eefabe63aae6fd23da6e28");
+    var layers=(List<Map<String,Object>>)baseline.metadata().get("layers");
+    assertThat(layers).extracting(layer->layer.get("layer")).containsExactly("cabinets","cameras");
+    assertThat(layers).allSatisfy(layer->assertThat(layer).containsEntry("sourceCrs","EPSG:4326").containsEntry("primaryKey","fid"));
     UUID asset=(UUID)files.register(null,"object://staging/cameras.gpkg",hashes.ofBytes(bytes),"application/geopackage+sqlite3",bytes.length,"human:test","retention://30d").get("asset_id");
     UUID profile=(UUID)files.profile(asset,bytes,"object://samples/cameras.json").get("profile_id");
     assertThat(String.valueOf(files.preview(asset,profile))).contains("cameras","cabinets","EPSG:4326","LAYER_AND_STABLE_KEYS_REQUIRED");

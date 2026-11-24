@@ -209,7 +209,9 @@ public class OnboardingService {
           select a.asset_id from ouf_onboarding.file_profile p
           join ouf_onboarding.managed_file_asset a on a.asset_id=p.asset_id
           join ouf_onboarding.onboarding_version v on v.onboarding_version_id=:v
-          where p.profile_id=:p and a.source_id=v.source_id and a.status='PROFILED'
+          where p.profile_id=:p and a.status='PROFILED'
+            and exists(select 1 from ouf_onboarding.managed_file_effective_binding b
+                       where b.asset_id=a.asset_id and b.source_id=v.source_id)
             and a.content_hash=v.configuration#>>'{extractionProfile,runtime,contentHash}'
             and a.staging_ref=v.configuration#>>'{extractionProfile,runtime,stagingRef}'
             and a.size_bytes::text=v.configuration#>>'{extractionProfile,runtime,execution,expectedSize}'

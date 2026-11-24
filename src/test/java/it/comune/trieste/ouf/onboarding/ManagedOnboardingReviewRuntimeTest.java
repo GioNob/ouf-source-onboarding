@@ -79,6 +79,20 @@ class ManagedOnboardingReviewRuntimeTest {
     var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"review:edicole",proposal);
     return new Governed(mapper,command,reviews.prepare(mapper,command,"prepare"));
   }
+  @Test void f1_13_tableReferenceReplaysFrozenReviewWithoutAPatch(){
+    var fixture=governed(new PublishedSnapshots().publish("https://example.org/onto/Place","1.0.0","Prima"));
+    var cmd=fixture.command();var principal=fixture.mapper();
+    var baseline=onboarding.version(cmd.sourceId(),cmd.onboardingVersionId());
+    var config=(Map<?,?>)baseline.get("configuration");
+    var selection=(Map<?,?>)((Map<?,?>)config.get("extractionProfile")).get("selection");
+    UUID profile=UUID.fromString((String)selection.get("fileProfileId"));
+    var unit=files.unitView(null,profile,principal.tenantId(),principal.subjectId(),"UNIT","table:0",null,null,null);
+    var pin=new SourceUnitProfiles.Reference(profile,((Number)unit.get("profileVersion")).intValue(),"table:0",(String)unit.get("schemaHash"));
+    var replay=new ManagedOnboardingReviewService.Prepare(cmd.sourceId(),cmd.onboardingVersionId(),cmd.expectedVersion(),
+        cmd.commandKey(),cmd.executionProposal(),null,pin);
+    assertThat(reviews.prepare(principal,replay,"unit-replay")).isEqualTo(fixture.review());
+    assertThat(onboarding.version(cmd.sourceId(),cmd.onboardingVersionId())).isEqualTo(baseline);
+  }
   @MockitoBean DatatypeResolver registryReader;
   @Autowired ObjectMapper runtimeJson;
 

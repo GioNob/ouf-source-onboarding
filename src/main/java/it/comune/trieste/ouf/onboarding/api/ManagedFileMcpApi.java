@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.onboarding.api;
 
+import it.comune.trieste.ouf.onboarding.application.SourceUnitProfiles;
 import it.comune.trieste.ouf.onboarding.application.MappingCategory;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileExecutionProposal.SemanticBinding;
 import it.comune.trieste.ouf.authorization.PrincipalContext;
@@ -29,7 +30,7 @@ import org.springframework.web.bind.annotation.*;
 public class ManagedFileMcpApi {
   public record CreateDraft(UUID assetId,UUID profileId,String sourceId,String name,String owner,String targetClassIri,
       List<String> semanticRefs,List<String> sourceObjectKeyFields,List<ManagedFileApi.FieldDecision> fields,String layer,JsonNode category,List<Map<String,Object>> compositions,
-      List<SemanticBinding> semanticBindings){}
+      List<SemanticBinding> semanticBindings,SourceUnitProfiles.Reference unitProfileRef){}
   private final PermissionDelegationVerifier receipts;
   private final ManagedFileService files;
   private final ManagedFileChatHandoff handoffs;
@@ -77,6 +78,21 @@ public class ManagedFileMcpApi {
     String tenant=caller.principal().tenantId();
     try{
       JsonNode selection=json.readTree(raw).required("Arguments");
+      String view=selection.path("view").textValue();
+      if ("UNITS".equals(view) || "UNIT".equals(view)) {
+        var allowed="UNITS".equals(view)?Set.of("view","assetId","profileId","offset","limit")
+            :Set.of("view","assetId","profileId","unitRef","offset","limit","distinctValuesCursor");
+        for(var names=selection.fieldNames();names.hasNext();)if(!allowed.contains(names.next()))throw new IllegalArgumentException("Invalid unit argument");
+        UUID profile=canonicalId(selection.required("profileId"));
+        UUID asset=selection.has("assetId")?canonicalId(selection.get("assetId")):null;
+        String ref=selection.path("unitRef").textValue(), continuation=selection.path("distinctValuesCursor").textValue();
+        if ("UNIT".equals(view) && (ref==null || !ref.matches("(table|sheet|layer|collection):(0|[1-9][0-9]{0,3})"))
+            || selection.has("distinctValuesCursor") && (continuation==null || continuation.isEmpty()))
+          throw new IllegalArgumentException("Invalid unit selection");
+        var page=files.unitView(asset,profile,tenant,owner,view,ref,selection.has("offset")?pageInteger(selection,"offset",0):null,
+            selection.has("limit")?pageInteger(selection,"limit",0):null,continuation);
+        return ManagedMcpObservation.preview(page,State.PROFILE_COLUMNS,Reason.COLUMN_PAGE);
+      }
       boolean columnsView="COLUMNS".equals(selection.path("view").textValue());
       boolean exactProfile=selection.path("assetId").isTextual()&&selection.path("profileId").isTextual();
       String cursor=selection.path("distinctValuesCursor").textValue();
@@ -126,6 +142,12 @@ public class ManagedFileMcpApi {
     return ManagedMcpObservation.preview(files.previewProfile(asset,UUID.fromString(args.get("profileId").asText()),tenant,owner),
         State.PROFILE_AVAILABLE,Reason.PROFILE_READY);
   }
+  private static UUID canonicalId(JsonNode value) {
+    if (!value.isTextual()) throw new IllegalArgumentException("Expected UUID");
+    UUID id=UUID.fromString(value.textValue());
+    if(!id.toString().equals(value.textValue()))throw new IllegalArgumentException("Expected canonical UUID");
+    return id;
+  }
   private static int pageInteger(JsonNode selection,String key,int fallback){
     if(!selection.has(key))return fallback;
     JsonNode value=selection.get(key);
@@ -138,11 +160,12 @@ public class ManagedFileMcpApi {
     var delegated=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),cap,raw);
     try {
       JsonNode envelope=json.readTree(raw),args=envelope.required("Arguments");
-      Set<String> allowed=Set.of("assetId","profileId","sourceId","name","owner","targetClassIri","semanticRefs","sourceObjectKeyFields","fields","layer","category","compositions","semanticBindings");
+      Set<String> allowed=Set.of("assetId","profileId","sourceId","name","owner","targetClassIri","semanticRefs","sourceObjectKeyFields","fields","layer","category","compositions","semanticBindings","unitProfileRef");
       if(!args.isObject()||args.size()>allowed.size())throw new IllegalArgumentException("invalid draft arguments");
       for(var names=args.fieldNames();names.hasNext();)if(!allowed.contains(names.next()))throw new IllegalArgumentException("invalid draft arguments");
+      if(args.has("unitProfileRef")&&!args.get("unitProfileRef").isObject())throw new IllegalArgumentException("Invalid unit profile reference");
       CreateDraft draft=json.copy().enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).treeToValue(args,CreateDraft.class);
-      if(draft.assetId()==null||draft.profileId()==null||draft.sourceId()==null||draft.sourceId().isBlank()
+      if(draft.unitProfileRef()==null&&(draft.assetId()==null||draft.profileId()==null)||draft.sourceId()==null||draft.sourceId().isBlank()
           ||draft.name()==null||draft.name().isBlank()||draft.owner()==null||draft.owner().isBlank()
           ||draft.targetClassIri()==null||draft.targetClassIri().isBlank()
           ||draft.semanticRefs()==null||draft.semanticRefs().isEmpty()
@@ -152,7 +175,7 @@ public class ManagedFileMcpApi {
       List<ManagedFileService.FieldDecision> fields=draft.fields().stream()
           .map(f->new ManagedFileService.FieldDecision(f.fieldName(),f.extractionDecision(),f.dataAccessLabel(),f.targetPropertyIri(),f.transform(),f.vocabularyId(),f.vocabularyVersion(),f.valueMapRef(),f.transformParams())).toList();
       return ManagedMcpObservation.created(files.onboardIdempotent(draft.assetId(),draft.profileId(),draft.sourceId(),draft.name(),draft.owner(),draft.targetClassIri(),
-          draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey(),delegated.principal().tenantId(),MappingCategory.fromRequest(draft.category()),draft.compositions(),draft.semanticBindings(),delegated.principal()));
+          draft.semanticRefs(),draft.sourceObjectKeyFields(),fields,draft.layer(),actor,envelope.required("CorrelationID").asText(),delegated.idempotencyKey(),delegated.principal().tenantId(),MappingCategory.fromRequest(draft.category()),draft.compositions(),draft.semanticBindings(),delegated.principal(),draft.unitProfileRef()));
     }catch(IOException e){throw new IllegalArgumentException("invalid draft arguments",e);}
   }
 
