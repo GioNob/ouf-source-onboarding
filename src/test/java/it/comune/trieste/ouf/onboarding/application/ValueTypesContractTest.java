@@ -345,7 +345,7 @@ class ValueTypesContractTest {
         var reviewConfig=new LinkedHashMap<>(config);
         reviewConfig.put("extractionProfile",Map.of("runtime",extraction.get("runtime"),"projection",Map.of("FILE",List.of("text"))));
         var snapshot=ManagedReviewSnapshot.build(reviewConfig,Map.of("display_name","Fixture"),
-            Map.of("inferred_schema",List.of(Map.of("name","text","dataType","STRING"))),"owner","source");
+            Map.of("inferred_schema",List.of(Map.of("name","text","dataType","STRING"))),"owner","source",AcquisitionLimitsTest.DEFAULTS);
         var summary=json.valueToTree(snapshot).path("FIELD").path("text").path("valueMap");
         assertThat(summary).isEqualTo(json.valueToTree(Map.of("valueMapRef",MAP+"@"+SET,"name","Colori pubblicati",
             "targetVocabulary",VOCABULARY+"@"+REV,"entryCount",2)));

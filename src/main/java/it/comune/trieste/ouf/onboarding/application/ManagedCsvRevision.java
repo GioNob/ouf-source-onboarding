@@ -30,7 +30,7 @@ public final class ManagedCsvRevision {
   }
 
   static void replace(Map<String,Object> config,Map<String,Object> previous,Map<String,Object> oldProfile,
-      Map<String,Object> asset,Map<String,Object> profile,int version,List<NewColumn> newColumns){
+      Map<String,Object> asset,Map<String,Object> profile,int version,List<NewColumn> newColumns,AcquisitionLimits acquisitionLimits){
     var extraction=object(config,"extractionProfile");
     var runtime=object(extraction,"runtime");
     var selection=object(extraction,"selection");
@@ -84,12 +84,23 @@ public final class ManagedCsvRevision {
     require(!mapped.isEmpty()&&mapped.size()==projected.size()&&mapped.keySet().equals(new HashSet<>(projected)));
     var nextColumns=columns(profile);
     var decisions=newColumns==null?List.<NewColumn>of():newColumns;
-    checkColumns(columns(oldProfile),nextColumns,mapped,keys.getFirst(),strings(profile.get("candidate_keys")),decisions);
     var metadata=object(profile,"metadata");
     String delimiter=text(metadata,"delimiter");
     require(Set.of(",",";").contains(delimiter));
-    if(number(metadata,"rows")>number(execution,"maxRows")||nextColumns.size()>number(execution,"maxColumns"))
-      throw new Incompatible(List.of(new Finding("EXECUTION_LIMIT_EXCEEDED",null,null,null)));
+    var measures=acquisitionLimits.measures(profile).ordered();
+    require(metadata.get("rows") instanceof Number);
+    boolean needsNewLimits=false;
+    for(var measure:measures){
+      if(measure.exceeds(measure.installationMaximum()))
+        throw new Incompatible(List.of(new Finding("EXECUTION_LIMIT_EXCEEDED",null,null,null)));
+      if(execution.containsKey(measure.limit())){
+        if(measure.exceeds(number(execution,measure.limit())))needsNewLimits=true;
+      }else if(measure.observed()!=null){
+        // A historical execution profile may have no explicit bound for this measure.
+        needsNewLimits=true;
+      }
+    }
+    checkColumns(previousColumns,nextColumns,mapped,keys.getFirst(),strings(profile.get("candidate_keys")),decisions);
     var additions=decisions.stream().filter(d->"MAP".equals(d.decision())).toList();
     if(!additions.isEmpty())extendMappings(config,additions);
 
@@ -104,6 +115,7 @@ public final class ManagedCsvRevision {
     runtime.put("stagingRef",asset.get("staging_ref"));
     runtime.put("contentHash",asset.get("content_hash"));
     runtime.put("csvDelimiter",delimiter);
+    if(needsNewLimits)for(var measure:measures)execution.put(measure.limit(),measure.ceiling());
     execution.put("expectedSize",asset.get("size_bytes"));
     execution.put("sourceSchemaRef",ref);
     execution.put("sourceSchemaVersion",String.valueOf(version));
