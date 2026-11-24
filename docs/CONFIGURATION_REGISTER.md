@@ -32,6 +32,33 @@ Per abilitare il lotto nel ruolo `admin`, la proposta `REPLACE_ROLES` conserva l
 
 Tracciabilità PET (D-082), D-090 T1. Nel job CI `java21-postgresql17`, `PermissionProposalRuntimeTest.releaseRegistersOnlyNewDescriptorsAndSecondStartupIsReadOnly` verifica la provenienza e il secondo avvio in sola lettura. `PermissionProposalRuntimeTest.batchSearchEntersExistingAdminRoleOnlyAfterThsConfirmation` verifica il diff del solo lotto, la conservazione di ACTIVE durante la proposta e la pubblicazione dopo conferma THS.
 
+## Attributi di risorsa delle capability (D-065, D-071, D-081)
+
+| Voce | Registrazione |
+|---|---|
+| Owner e versione | Source Onboarding, `catalogue/resource-attributes-capabilities.json`, formato 1. Il rilascio include lo stesso file nel classpath dell’immagine. |
+| Contenuto | Per ogni capability dichiarata, attributi che l’owner può fornire in almeno uno dei percorsi di decisione. Una lista vuota esclude entrambi gli attributi controllati. Una chiave assente indica una capability non verificabile. |
+| Validazione | All’avvio sono controllati versione, struttura, tipi e duplicati. Alla proposta, `allowedDataLabels` richiede `dataAccessLabel` e `allowedDetailLevels` richiede `detailLevel` quando le rispettive liste contengono valori. |
+| Acquisizione e ripristino | Conservare la revisione del repository e il digest dell’immagine. Ripristinare l’immagine corrispondente insieme allo snapshot di Authorization. Il catalogo contiene solo dati di rilascio. |
+| Verifica | Confrontare il file nel JAR con quello della revisione ripristinata. `PermissionConstraintCatalogueTest` verifica copertura dei descrittori di rilascio, confronto per ruolo, attributi supportati e limite delle violazioni. |
+
+La dichiarazione Semantic usa liste vuote per le capability di ricerca, discovery, proposta e revisione. Il controllo riguarda gli attributi di accesso. Il solo attributo tecnico `module` di Semantic non soddisfa alcuno dei due vincoli. Le capability esterne prive di evidenza restano senza dichiarazione.
+
+Per Onboarding la provenienza è la seguente.
+
+| Capability o gruppo | Attributi e percorso owner |
+|---|---|
+| `ouf.managed-source.onboarding.read`, `ouf.managed-source.onboarding.review.prepare`, `ouf.onboarding.configuration.write` | `onboardingVersionId` in `ManagedOnboardingReviewService.authorize`. |
+| `ouf.onboarding.revision.read`, `ouf.onboarding.revision.prepare` | `onboardingVersionId` in `SourceRevisionService.permitted`. |
+| `ouf.onboarding.configuration.read`, `ouf.ingestion.configuration.attest` | `module` e `onboardingVersionId` in `ManagedOnboardingReviewService` sulle configurazioni pubblicate. Per la lettura, `RuntimePublicationApi.require` fornisce anche `sourceRef` quando la fonte è specificata. Il descrittore di attestazione ha owner Onboarding in `catalogue/r4a-onboarding-lifecycle.json`. |
+| `ouf.managed-source.file.profile`, `ouf.onboarding.quarantine.release` | `module`, `assetRef`, `jobRef`, `detailLevel` nei percorsi di recovery di `ManagedFileService.profileRecoveryResource` e `ManagedFileOwnershipRecovery.resource`. |
+| `ouf.ths.log.*` elencate | `module` e `detailLevel` in `ProtectedLogApi.protectedActor`. La risorsa associata alla richiesta alimenta anche `ServletAuthorization.resolve` per i permessi accessori `pii.read`, `export.read.any` e `download.any` controllati in `ProtectedLogService`. |
+| `authorization.permissions.*`, `authorization.proposal.read`, `authorization.policy.admin` | Mappa vuota in `PermissionProposalService.delegated`, `AuthorizationAdminService` e `AuthorizationReviewService.authorized`. Bootstrap e lettura bundle controllano principal e scope in `BootstrapAdministrator` e `AuthorizationBundleApi`. |
+| `ouf.onboarding.ths-links.*` | `IngestionRunRecoveryLinkApi.verifyDelegation` verifica la ricevuta per la capability senza aggiungere attributi di risorsa. |
+| Altre voci locali con lista vuota | Operazioni fonte, discovery, mapping e file dichiarate in `openapi/onboarding-v1.yaml`, lettura staging in `ManagedFileStagingApi`, quarantena in `ManagedFileQuarantineTrustedHumanApi` e configurazione installazione in `InstallationBootstrapApi` e `InstallationProjectionExportApi`. Il percorso servlet usa la mappa vuota di `ServletAuthorization.resolve` in assenza di una risorsa esplicita. |
+
+La ricevuta, lo status e la scheda usano la proposta e la fotografia dei ruoli della sua transazione. Per una proposta diretta precedente alla fotografia dei ruoli, gli avvisi sui grant compilati conservano il loro `grantId`. Una proposta pendente precedente al rilascio viene ricontrollata prima della pubblicazione. La scheda consente di rifiutarla se richiede correzioni.
+
 ## Source mapping and publication (D-065)
 
 | Entry | Owner and contents | Credentials | Capture and restore | Restore check |
@@ -39,6 +66,20 @@ Tracciabilità PET (D-082), D-090 T1. Nel job CI `java21-postgresql17`, `Permiss
 | `onboarding.semantic-mapping.v1` | Source Onboarding owns the reviewed mapping in `ouf_onboarding.onboarding_version.configuration`. The version pins source type, target classes, optional controlled category and semantic references. | The category contains two public IRIs. Treat the enclosing configuration snapshot as private. Credential references must keep their original bindings. | Capture the configuration JSON in a consistent database snapshot with source/version IDs, parentage, hashes, approval records and referenced semantic revision/publication IDs. Restore the referenced revisions and the version graph before dependent publications. | Recompute the version hash where present. Resolve the pinned semantic references and compare every target class and its optional category against the captured mapping. |
 | `onboarding.published-mapping.v1` | Source Onboarding owns the mapping embedded in `ouf_onboarding.published_configuration.bundle` for UDP consumption. Depends on `onboarding.semantic-mapping.v1`. | Same handling as the reviewed configuration. | Capture the original bundle with its publication row, version link, checksum and lifecycle state in the same snapshot. Restore the captured rows and links. | Verify checksum and version link, then compare the published mapping with the approved version, including category absence. |
 | `ouf.onboarding.publication.max-runtime-envelope-bytes` | Source Onboarding installation setting in bytes. Default `2097152` (2 MiB), the lower known runtime read limit. Set at or below the smallest installed Ingestion and UDP publication read capacity, including Gateway limits on those routes. The check counts UTF-8 JSON bytes for the whole runtime envelope, including D-084 pins, embedded definitions, value maps, the longest valid source status and the framing of the single-item discovery page. | No. | Capture and restore the effective setting with the installation configuration, alongside the runtime and Gateway read limits. | Verify that review and activation reject a body over the restored limit and that active and exact reads return the admitted envelope. A blocked candidate can be withdrawn and replaced with a smaller revision. |
+
+## Managed file acquisition limits (D-065)
+
+The following Spring settings are integers under `ouf.onboarding.acquisition-limits.`. All seven are non-secret installation configuration. Capture the effective values with the installation configuration backup. Restore them before starting Onboarding and verify a new review snapshot against a known file. Frozen reviews retain their original basis. The environment overrides below use the prefix `OUF_ONB_ACQUISITION_LIMITS_`.
+
+| Property suffix | Environment suffix | Default | Inclusive range |
+|---|---|---:|---:|
+| `max-rows` | `MAX_ROWS` | 1000000 | 1–1000000 |
+| `max-columns` | `MAX_COLUMNS` | 1024 | 1–10000 |
+| `max-cell-chars` | `MAX_CELL_CHARS` | 1000000 | 1–1000000 |
+| `margin-percent` | `MARGIN_PERCENT` | 25 | 0–1000 |
+| `min-headroom-rows` | `MIN_HEADROOM_ROWS` | 100 | 0–1000000 |
+| `min-headroom-columns` | `MIN_HEADROOM_COLUMNS` | 8 | 0–10000 |
+| `min-headroom-cell-chars` | `MIN_HEADROOM_CELL_CHARS` | 1024 | 0–1000000 |
 
 ## Controlled category contract (D-059)
 

@@ -11,7 +11,7 @@ final class ManagedReviewSnapshot {
   static List<?> list(Object value){return value instanceof List<?> items?items:List.of();}
   static Map<?,?> child(Map<?,?> map,String key){return object(map.get(key));}
 
-  static Map<String,Object> build(Map<?,?> config,Map<?,?> asset,Map<?,?> profile,Object owner,Object name){
+  static Map<String,Object> build(Map<?,?> config,Map<?,?> asset,Map<?,?> profile,Object owner,Object name,AcquisitionLimits acquisitionLimits){
     var extraction=child(config,"extractionProfile");
     var runtime=child(extraction,"runtime");
     var mapping=child(config,"semanticMapping");
@@ -135,6 +135,12 @@ final class ManagedReviewSnapshot {
     }
     if(!definitions.isEmpty())snapshot.put("DATATYPE",definitions);
     snapshot.put("FIELD",fields);snapshot.put("IDENTITY",identity);snapshot.put("SEMANTIC",semantics);snapshot.put("LIMITS",limits);
+    var basis=new LinkedHashMap<String,Object>();
+    for(var measure:acquisitionLimits.measures(profile).ordered()){
+      if(limits.get(measure.limit()) instanceof Number effective)
+        basis.put(measure.limit(),measure.basis(effective.intValue()));
+    }
+    snapshot.put("LIMITS_BASIS",basis);
     return snapshot;
   }
   static List<?> reviewBindings(List<?> bindings){

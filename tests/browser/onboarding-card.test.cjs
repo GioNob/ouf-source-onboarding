@@ -147,7 +147,17 @@ test('la THS rende ogni colonna, raccoglie modifiche e distingue la nuova revisi
       assert.doesNotMatch(await article.textContent(),/FALSO-AGENTE/);
     }
     card.termVerification='COMPLETE';card.verifiedTerms=semantic;
+    assert.ok((await article.textContent()).includes('Righe massime · 1500')); // frozen predecessor
+    snapshot.LIMITS_BASIS={
+      maxRows:{effective:1500,observed:27,ceiling:127,installationMaximum:1000000,marginPercent:25,minHeadroom:100,origin:'ABOVE_CEILING'},
+      maxColumns:{effective:25,observed:21,ceiling:29,installationMaximum:1024,marginPercent:25,minHeadroom:8,origin:'RESTRICTED'},
+      maxCellChars:{effective:800,observed:null,ceiling:800,installationMaximum:800,marginPercent:25,minHeadroom:4,origin:'DERIVED'}
+    };
     await page.reload();await table.waitFor();assert.ok(await page.locator('#approve').isEnabled());
+    for (const text of ['Valore reale nel file · 27','Tetto 127','valore reale + 25 %','almeno + 100',
+      'ristretto dall’agente','calcolato dall’Onboarding','non misurato per questo profilo','prima di consegnare qualsiasi riga'])
+      assert.ok((await article.textContent()).includes(text),text);
+    assert.match(await article.locator('.warnings').allTextContents().then(parts=>parts.join(' ')),/supera il tetto attuale di 127/);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
     const columnScroll=page.getByRole('region',{name:'Campi del file, tabella scorrevole'});
     assert.ok(await columnScroll.evaluate(region=>region.scrollWidth>region.clientWidth));

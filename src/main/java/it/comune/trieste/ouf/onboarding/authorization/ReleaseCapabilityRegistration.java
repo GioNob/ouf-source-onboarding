@@ -20,7 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** Release input is bundled with the application. It has no publication authority. */
 @Component
 public class ReleaseCapabilityRegistration implements ApplicationRunner {
-    private static final List<String> CATALOGUES = List.of(
+    static final List<String> CATALOGUES = List.of(
             "catalogue/chatbot-source-review-capabilities.json",
             "catalogue/r4a-semantic-human-capabilities.json");
     private final JdbcClient db;

@@ -44,8 +44,10 @@ public class SourceRevisionService {
       this(sourceId,parentVersionId,expectedVersion,configurationHash,commandKey,publicationEffect,changes,assetRef,null);
     }
   }
+  private final AcquisitionLimits acquisitionLimits;
   public SourceRevisionService(JdbcClient db,OnboardingService onboarding,ManagedOnboardingReviewService reviews,
-      ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy){
+      ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy,AcquisitionLimits acquisitionLimits){
+    this.acquisitionLimits=acquisitionLimits;
     this.db=db;this.onboarding=onboarding;this.reviews=reviews;this.files=files;this.hashes=hashes;this.policy=policy;
   }
   private static DomainFailure fail(HttpStatus status,String code){return new DomainFailure(status,code,code);}
@@ -189,7 +191,7 @@ public class SourceRevisionService {
     if(!other.isEmpty())throw reviews.assetConflict(p,other.size()==1?other.getFirst():null);
     if(!"PROFILED".equals(asset.get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_NOT_PROFILED");
     ManagedCsvRevision.replace(config,base,files.fileProfile(previous,profile),asset,
-        files.fileProfile(ref.assetId(),ref.profileId()),number,request.newColumns());
+        files.fileProfile(ref.assetId(),ref.profileId()),number,request.newColumns(),acquisitionLimits);
     if(asset.get("source_id")==null)
       db.sql("update ouf_onboarding.managed_file_asset set source_id=:s where asset_id=:a and source_id is null")
           .param("s",source).param("a",ref.assetId()).update();
