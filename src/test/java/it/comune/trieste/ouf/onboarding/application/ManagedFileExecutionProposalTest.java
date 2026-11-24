@@ -68,7 +68,9 @@ class ManagedFileExecutionProposalTest {
       var changed=asset();changed.put(key,"changed");
       assertThatThrownBy(()->ManagedFileExecutionProposal.compile(config(),changed,profile(2),"fixture-tenant",proposal(),AcquisitionLimitsTest.DEFAULTS)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
     }
-    assertThatThrownBy(()->ManagedFileExecutionProposal.compile(config(),asset(),profile(2),"other-tenant",proposal(),AcquisitionLimitsTest.DEFAULTS)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    assertThatThrownBy(()->ManagedFileExecutionProposal.compile(config(),asset(),profile(2),"other-tenant",proposal(),AcquisitionLimitsTest.DEFAULTS))
+        .isInstanceOfSatisfying(ReviewValidationFailure.class,failure->assertThat(failure.properties()).isEqualTo(Map.of(
+            "constraint","POLICY_TENANT","path","/executionProposal/udp/resolution/governedIdentity/tenantId")));
   }
   @Test void everySemanticReferenceMustHaveOneExactBindingInTheSelectedSet(){
     var correct=proposal();
@@ -135,7 +137,10 @@ class ManagedFileExecutionProposalTest {
   @Test void identityRuleAndSignalMustRemainScopedToAllOwnerPropertiesAndExactPublication(){
     var p=proposal();var policy=object(object(p.udp(),"resolution"),"governedIdentity");
     ((Map<String,Object>)((List<?>)policy.get("signals")).getFirst()).put("semanticRef",NAME+"@"+REVISION);
-    assertThatThrownBy(()->compile(config(),p)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    assertThatThrownBy(()->compile(config(),p)).isInstanceOfSatisfying(ReviewValidationFailure.class,
+        failure->assertThat(failure.properties()).isEqualTo(Map.of("constraint","SIGNAL_SEMANTIC_REF",
+            "path","/executionProposal/udp/resolution/governedIdentity/signals/0/semanticRef","propertyIris",List.of(NAME),
+            "propertyCount",1,"expectedSignals",List.of(Map.of("id",NAME,"semanticRef",NAME+"@"+PUBLICATION,"comparator","TEXT_V1")))));
     var other=proposal();object(object(other.udp(),"resolution"),"governedIdentity").put("sourceId","other-source");
     assertThatThrownBy(()->compile(config(),other)).hasMessage("ONB_GOVERNED_IDENTITY_INVALID");
   }
@@ -144,6 +149,42 @@ class ManagedFileExecutionProposalTest {
     assertThatThrownBy(()->compile(config(),bad)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
     var c=config();object(object(c,"extractionProfile"),"runtime").remove("csvDelimiter");
     assertThatThrownBy(()->compile(c,p)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+  }
+  @Test void task59bOfficialNameNeedsBothMaterializedCoordinates(){
+    var config=config();
+    var proposal=proposal();
+    var policy=object(object(proposal.udp(),"resolution"),"governedIdentity");
+    String lat="urn:fixture:latitude",lon="urn:fixture:longitude";
+    var mappings=new ArrayList<Map<String,Object>>();
+    var materialized=new ArrayList<Map<String,Object>>();
+    var labels=new ArrayList<Map<String,Object>>();
+    for(var field:List.of(Map.entry("nome_teatro",NAME),Map.entry("longitude",lon),Map.entry("latitude",lat))){
+      String id=field.getValue();
+      boolean name=id.equals(NAME);
+      mappings.add(Map.of("sourceField",field.getKey(),"targetPropertyIri",id,"transform",name?"IDENTITY":"DECIMAL_DOT_V1"));
+      labels.add(Map.of("scope","PROPERTY","target",id,"label","RESTRICTED"));
+      materialized.add(Map.of("sourceField",id,"propertyIri",id,"datatype",ValueReader.DATATYPES.get(name?"string":"decimal"),
+          "accessLabel","RESTRICTED","authorityOrder",List.of(SOURCE)));
+    }
+    object(object(config,"extractionProfile"),"projection").put("FILE",List.of("nome_teatro","longitude","latitude"));
+    object(config,"semanticMapping").put("propertyMappings",mappings);
+    config.put("dataAccessPolicies",labels);
+    object(proposal.udp(),"materialization").put("properties",materialized);
+    var signals=new ArrayList<>((List<Map<String,Object>>)policy.get("signals"));
+    signals.removeLast();
+    policy.put("signals",signals);
+    policy.put("sufficientRules",List.of(Map.of("id","by-name","signalIds",List.of(NAME),"assertionRef","urn:fixture:rule")));
+    var failure=org.junit.jupiter.api.Assertions.assertThrows(ReviewValidationFailure.class,()->compile(config,proposal));
+    var expected=List.of(lat,lon).stream().map(id->Map.of("id",id,"semanticRef",id+"@"+PUBLICATION,"comparator","DECIMAL_V1")).toList();
+    assertThat(failure.properties()).isEqualTo(Map.of("constraint","SIGNALS_INCOMPLETE",
+        "path","/executionProposal/udp/resolution/governedIdentity/signals","propertyIris",List.of(lat,lon),
+        "propertyCount",2,"expectedSignals",expected));
+    for(var suggestion:expected){
+      var signal=new LinkedHashMap<>(signals.getFirst());
+      signal.putAll(suggestion);
+      signals.add(signal);
+    }
+    assertThatCode(()->compile(config,proposal)).doesNotThrowAnyException();
   }
   @Test void compiledProposalCopiesNestedPolicySoCallerCannotModifyReviewAfterCompilation(){
     var p=proposal();var compiled=compile(config(),p);p.udp().clear();
@@ -294,7 +335,10 @@ class ManagedFileExecutionProposalTest {
         new ManagedFileExecutionProposal.SemanticBinding(CAP,"1",UUID.randomUUID().toString(),PUBLICATION)),PUBLICATION,proposal.udp(),proposal.limits());
     assertThat(compile(c,pinned)).containsEntry("semanticMapping",semantic);
     signals.getLast().put("comparator","TEXT_V1");
-    assertThatThrownBy(()->compile(c,pinned)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    assertThatThrownBy(()->compile(c,pinned)).isInstanceOfSatisfying(ReviewValidationFailure.class,
+        failure->assertThat(failure.properties()).isEqualTo(Map.of("constraint","SIGNAL_COMPARATOR",
+            "path","/executionProposal/udp/resolution/governedIdentity/signals/1/comparator","propertyIris",List.of(CAP),
+            "propertyCount",1,"expectedSignals",List.of(Map.of("id",CAP,"semanticRef",CAP+"@"+PUBLICATION,"comparator","JSON_V1")))));
     signals.getLast().put("comparator","JSON_V1");properties.getLast().put("accessLabel","OPEN");
     assertThatThrownBy(()->compile(c,pinned)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
   }
