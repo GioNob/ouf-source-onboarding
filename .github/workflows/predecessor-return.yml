@@ -8,7 +8,7 @@ on:
       predecessor:
         description: Deployed predecessor commit (abbreviated or full SHA)
         type: string
-        default: '82aabaa'
+        default: '20e90de2'
         required: true
 
 permissions:
@@ -16,10 +16,11 @@ permissions:
 
 jobs:
   predecessor-return:
+    # D-080 (sprint-03 task-58a): 20e90de2 is Onboarding #81 in esercizio (task-51r).
     strategy:
       fail-fast: false
       matrix:
-        predecessor: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.predecessor) || '["a54de876","9eeff596","82aabaa"]') }}
+        predecessor: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.predecessor) || '["20e90de2","a54de876","9eeff596","82aabaa"]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     services:
