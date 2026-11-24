@@ -4,6 +4,20 @@
 
 Preparation accepts `TEXT_NFC_TRIM_V1` on profiled `STRING` columns. Its materialization datatype is `xsd:string` and its governed identity comparator is `TEXT_V1`. The owner verifies the projected types and looks up the published pins before freezing this configuration. Execution and compatibility attestation remain separate lifecycle steps.
 
+### Draft reader checks and recovery
+
+`source.onboarding.create` accepts optional `semanticBindings` in execution proposal format. With bindings, the owner checks the projected input types and runs the same published-reference verifier used at preparation. A successful draft retains the coordinates. Preparation verifies the pins supplied for that review. An exact create replay uses the original command receipt.
+
+Without bindings the draft can proceed. `deferredReaderChecks` lists the field name and transform of each Registry-dependent reader in field-name and transform order. The property is omitted when the list is empty.
+
+A 422 `ONB_READER_UNSUPPORTED` from create carries a `fields` array. Each entry gives `fieldName`, the requested `transform` and `allowedTransforms`. For an unresolved published binding these alternatives work with the field profile and preserve the output datatype without a Registry-dependent reader. An empty list means the caller must revise the bindings or the mapping. For example, a profiled string using `TEXT_NFC_TRIM_V1` can use `IDENTITY` with the same string materialization and comparator. A rejected create leaves the asset and command key available.
+
+A 422 `ONB_DATATYPE_UNRESOLVED` from managed review preparation carries the same entries, the first entry at the top level, and `resolutions`. For `REPLACE_DRAFT`, send create again with the same source ID, asset, profile, name and owner, corrected field decisions and a fresh create key. Then prepare the **returned version** at its returned lock version. The replacement transaction supersedes the previous draft and preserves its receipt. This route requires the latest owner-created draft of an unpublished source. The native `UPDATE_DRAFT` route uses the full version configuration and its current ETag with the HUMAN configuration-write capability. `CORRECT_EXECUTION_PROPOSAL` means to resubmit preparation with corrected publication coordinates. Revision preparation can return `REVISE_CHANGES` to amend the requested revision against the same parent.
+
+A 409 `ONB_REVISION_ASSET_SOURCE_CONFLICT` discloses `boundSourceId` only after the latest-source read checks succeed. Its ordered `resolutions` list can be empty. `CREATE_REVISION` uses same-source create for a replaceable draft, or revision preparation for an eligible revision parent. `UPLOAD_NEW_FILE` starts a fresh upload under the caller's upload grant.
+
+### Missing proposal sections
+
 Draft responses list missing proposal sections in this order.
 
 | Proposal section | Evidence in the retained configuration |

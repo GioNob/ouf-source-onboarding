@@ -45,7 +45,7 @@ class ManagedOnboardingReviewRuntimeTest {
   @Autowired OnboardingService onboarding; @Autowired CanonicalHash hashes; @Autowired JdbcClient db;
   @MockitoBean(answers=Answers.RETURNS_DEEP_STUBS) AuthorizationPolicyRegistry policy;
   private final OnboardingService.Actor human=new OnboardingService.Actor("test-human","HUMAN_USER");
-  private PrincipalContext principal(String tenant,String subject){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,"test-mcp","test-acr","https://issuer.example","test-audience",Set.of(ManagedOnboardingReviewService.PREPARE,ManagedOnboardingReviewService.READ,"ouf.onboarding.configuration.write"),new PrincipalContext.IdentityClaims(Set.of(),"test-acr",Set.of(),null));}
+  private PrincipalContext principal(String tenant,String subject){return new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,"test-mcp","test-acr","https://issuer.example","test-audience",Set.of(ManagedOnboardingReviewService.PREPARE,ManagedOnboardingReviewService.READ,"ouf.managed-source.onboarding.create","ouf.onboarding.configuration.write"),new PrincipalContext.IdentityClaims(Set.of(),"test-acr",Set.of(),null));}
   @BeforeEach void clean(){db.sql("truncate ouf_onboarding.source,ouf_onboarding.managed_file_asset restart identity cascade").update();when(policy.authorizeActive(any(),any(),anyString(),anyString(),any()).allowed()).thenReturn(true);}
   @MockitoBean UdpIdentityActivationVerifier finalUdp;
   private record Governed(PrincipalContext mapper,ManagedOnboardingReviewService.Prepare command,Map<String,Object> review){}
@@ -107,6 +107,76 @@ class ManagedOnboardingReviewRuntimeTest {
   }
 
   @Test void task52cPoiCsvDeclaresMissingProposalAndReplaysOneChallenge()throws Exception{
+    poiCsv(false);
+  }
+
+  @Test void task52dReaderChecksAndSameAssetCorrection()throws Exception{
+    poiCsv(true);
+  }
+
+  @Test void task52dBoundReadersReplayAndRespectSourceVisibility()throws Exception{
+    String tenant="fixture-tenant",source="bound-fixture",cls="urn:fixture:Class",cap="ouf.managed-source.onboarding.create";
+    var mapper=new PrincipalContext(human.subject(),tenant,PrincipalContext.ActorType.HUMAN,"test-mcp","1",
+        "https://issuer.example","test",Set.of(cap,ManagedOnboardingReviewService.READ,"ouf.managed-source.file.upload"),
+        new PrincipalContext.IdentityClaims(Set.of(),"1",Set.of(),null));
+    byte[] csv="name\nvalue\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    UUID asset=(UUID)files.registerOwned(null,"object://fixture/bound.csv",hashes.ofBytes(csv),"text/csv",csv.length,
+        human.subject(),"retention://test",tenant).get("asset_id");
+    UUID profile=(UUID)files.profile(asset,csv,"object://fixture/bound-sample").get("profile_id");
+    var binding=new ManagedFileExecutionProposal.SemanticBinding(cls,"1",UUID.randomUUID().toString(),UUID.randomUUID().toString());
+    when(registryReader.resolve(cls,binding.revisionId(),binding.publicationSetId())).thenReturn(Map.of("semantic_id",cls,
+        "semantic_version","1","publication_set_id",binding.publicationSetId(),"revision_id",binding.revisionId(),"artifact_type","CLASS"));
+    var receipts=mock(PermissionDelegationVerifier.class);
+    when(receipts.verifyManagedFile(any(),anyString(),anyString(),any()))
+        .thenReturn(new PermissionDelegationVerifier.Delegated(mapper,"checked"));
+    var http=MockMvcBuilders.standaloneSetup(new it.comune.trieste.ouf.onboarding.api.ManagedFileMcpApi(receipts,files,runtimeJson,null))
+        .setControllerAdvice(new ProblemHandler()).build();
+    var create=new LinkedHashMap<String,Object>(Map.of("assetId",asset,"profileId",profile,"sourceId",source,
+        "name","Fixture","owner","Fixture","targetClassIri",cls,"semanticRefs",List.of(cls+"@1"),"sourceObjectKeyFields",List.of("name"),
+        "semanticBindings",List.of(binding),"fields",List.of(Map.of("fieldName","name","extractionDecision","INCLUDE",
+            "targetPropertyIri","urn:fixture:name","transform","TEXT_NFC_TRIM_V1","dataAccessLabel","OPEN"))));
+    var checked=ownerPost(http,"create",create,200);
+    assertThat(checked.has("deferredReaderChecks")).isFalse();
+    assertThat(ownerPost(http,"create",create,200)).isEqualTo(checked);
+    verify(registryReader).resolve(cls,binding.revisionId(),binding.publicationSetId());
+    create.remove("semanticBindings");
+    assertThat(ownerPost(http,"create",create,409).required("code").asText()).isEqualTo("ONB_FILE_IDEMPOTENCY_CONFLICT");
+    when(receipts.verifyManagedFile(any(),anyString(),anyString(),any()))
+        .thenReturn(new PermissionDelegationVerifier.Delegated(mapper,"other"));
+    create.put("sourceId","other-fixture");
+    var visible=ownerPost(http,"create",create,409);
+    assertThat(visible.required("code").asText()).isEqualTo("ONB_REVISION_ASSET_SOURCE_CONFLICT");
+    assertThat(visible.required("detail").asText()).isEqualTo("Managed file is bound to another source");
+    assertThat(visible.required("boundSourceId").asText()).isEqualTo(source);
+    assertThat(visible.required("resolutions")).isEqualTo(runtimeJson.valueToTree(List.of("CREATE_REVISION","UPLOAD_NEW_FILE")));
+    var denied=mock(AuthorizationPolicy.AuthorizationDecision.class);
+    when(policy.authorizeActive(any(),any(),eq(ManagedOnboardingReviewService.READ),eq("READ"),any())).thenReturn(denied);
+    var hidden=ownerPost(http,"create",create,409);
+    assertThat(hidden.required("code").asText()).isEqualTo("ONB_REVISION_ASSET_SOURCE_CONFLICT");
+    assertThat(hidden.required("resolutions")).isEqualTo(runtimeJson.valueToTree(List.of("UPLOAD_NEW_FILE")));
+    assertThat(hidden.toString()).doesNotContain(source,"object://","boundSourceId");
+    when(policy.authorizeActive(any(),any(),eq("ouf.managed-source.file.upload"),eq("COMMAND"),any())).thenReturn(denied);
+    assertThat(ownerPost(http,"create",create,409).required("resolutions").size()).isZero();
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_file_onboarding_attempt").query(Long.class).single()).isOne();
+
+    // Interleave a different authorized correction while the first command is resolving a pin.
+    create.put("sourceId",source);
+    create.put("semanticBindings",List.of(binding));
+    doAnswer(call->{
+      assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+      var changed=List.of(new ManagedFileService.FieldDecision("name","INCLUDE","OPEN","urn:fixture:name","IDENTITY",null,null,null));
+      files.onboardIdempotent(asset,profile,source,"Fixture","Fixture",cls,List.of(cls+"@1"),List.of("name"),
+          changed,null,human,"correction","wins",tenant);
+      return Map.of("semantic_id",cls,"semantic_version","1","publication_set_id",binding.publicationSetId(),
+          "revision_id",binding.revisionId(),"artifact_type","CLASS");
+    }).when(registryReader).resolve(cls,binding.revisionId(),binding.publicationSetId());
+    var stale=ownerPost(http,"create",create,412);
+    assertThat(stale.required("code").asText()).isEqualTo("ONB_REVIEW_STALE_VERSION");
+    assertThat(db.sql("select count(*) from ouf_onboarding.onboarding_version where state='DRAFT'").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_onboarding.managed_file_onboarding_attempt").query(Long.class).single()).isEqualTo(2L);
+  }
+
+  private void poiCsv(boolean correctReaders)throws Exception{
     String tenant="test-tenant",source="poi-test",cls="urn:fixture:POI",set=UUID.randomUUID().toString();
     var mapper=principal(tenant,human.subject());
     var receipts=mock(PermissionDelegationVerifier.class);
@@ -152,8 +222,25 @@ class ManagedOnboardingReviewRuntimeTest {
     for(String table:List.of("source","onboarding_version","managed_file_onboarding_attempt"))
       assertThat(db.sql("select count(*) from ouf_onboarding."+table).query(Long.class).single()).isZero();
     create.put("semanticRefs",refs);
+    var sortedFields=columns.subList(0,3).stream().sorted().toList();
+    var issues=sortedFields.stream().map(field->Map.of("fieldName",field,"transform","TEXT_NFC_TRIM_V1",
+        "allowedTransforms",List.of("IDENTITY"))).toList();
+    if(correctReaders){
+      create.put("semanticBindings",bindings);
+      var rejected=ownerPost(http,"create",create,422);
+      assertThat(rejected.required("code").asText()).isEqualTo("ONB_READER_UNSUPPORTED");
+      assertThat(rejected.required("fields")).isEqualTo(runtimeJson.valueToTree(issues));
+      for(String table:List.of("source","onboarding_version","managed_file_onboarding_attempt","approval_challenge"))
+        assertThat(db.sql("select count(*) from ouf_onboarding."+table).query(Long.class).single()).isZero();
+      assertThat(files.asset(asset).get("source_id")).isNull();
+      verify(registryReader).resolve(anyString(),anyString(),eq(set));
+      clearInvocations(registryReader);
+      create.remove("semanticBindings");
+    }
     var draft=ownerPost(http,"create",create,200);
     UUID version=UUID.fromString(draft.required("onboardingVersionId").asText());
+    assertThat(draft.required("deferredReaderChecks")).isEqualTo(runtimeJson.valueToTree(sortedFields.stream()
+        .map(field->Map.of("fieldName",field,"transform","TEXT_NFC_TRIM_V1")).toList()));
     var stored=runtimeJson.valueToTree(onboarding.version(source,version).get("configuration"));
     assertThat(stored.at("/extractionProfile/projection/FILE")).isEqualTo(runtimeJson.valueToTree(columns.subList(0,3)));
     assertThat(stored.at("/sourceObjectIdentityPolicy/sourceFields/0").asText()).isEqualTo("id_redazionale");
@@ -192,11 +279,34 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(onboarding.version(source,version)).containsEntry("state","DRAFT").containsEntry("lock_version",0L);
     assertThat(db.sql("select count(*) from ouf_onboarding.approval_challenge").query(Long.class).single()).isZero();
     verifyNoInteractions(registryReader);
-    when(registryReader.resolve(anyString(),anyString(),eq(set))).thenAnswer(call->Map.of("semantic_id",call.getArgument(0),
-        "semantic_version","1","publication_set_id",set,"revision_id",call.getArgument(1),
-        "artifact_type",cls.equals(call.getArgument(0))?"CLASS":"PROPERTY"));
     prepare.put("executionProposal",new ManagedFileExecutionProposal.Proposal(bindings,set,udp,limits));
     prepare.put("commandKey","prepare-poi");
+    if(correctReaders){
+      var failed=ownerPost(http,"review-prepare",prepare,422);
+      assertThat(failed.required("code").asText()).isEqualTo("ONB_DATATYPE_UNRESOLVED");
+      assertThat(failed.required("fields")).isEqualTo(runtimeJson.valueToTree(issues));
+      assertThat(failed.required("fieldName").asText()).isEqualTo(sortedFields.getFirst());
+      assertThat(failed.required("resolutions")).isEqualTo(runtimeJson.valueToTree(List.of("REPLACE_DRAFT")));
+      assertThat(onboarding.version(source,version)).containsEntry("state","DRAFT").containsEntry("lock_version",0L);
+      for(int i=0;i<3;i++){
+        var corrected=new LinkedHashMap<>(fields.get(i));
+        corrected.put("transform","IDENTITY");
+        fields.set(i,corrected);
+      }
+      when(receipts.verifyManagedFile(any(),anyString(),anyString(),any()))
+          .thenReturn(new PermissionDelegationVerifier.Delegated(mapper,"poi-corrected"));
+      var corrected=ownerPost(http,"create",create,200);
+      assertThat(corrected.has("deferredReaderChecks")).isFalse();
+      assertThat(ownerPost(http,"create",create,200)).isEqualTo(corrected);
+      assertThat(onboarding.version(source,version)).containsEntry("state","SUPERSEDED");
+      assertThat(ownerPost(http,"review-prepare",prepare,412).path("code").asText()).isEqualTo("ONB_REVIEW_STALE_VERSION");
+      prepare.put("onboardingVersionId",corrected.required("onboardingVersionId").asText());
+      prepare.put("commandKey","prepare-corrected");
+    }else{
+      when(registryReader.resolve(anyString(),anyString(),eq(set))).thenAnswer(call->Map.of("semantic_id",call.getArgument(0),
+          "semantic_version","1","publication_set_id",set,"revision_id",call.getArgument(1),
+          "artifact_type",cls.equals(call.getArgument(0))?"CLASS":"PROPERTY"));
+    }
     var frozen=ownerPost(http,"review-prepare",prepare,200);
     assertThat(frozen.required("state").asText()).isEqualTo("IN_REVIEW");
     assertThat(frozen.required("configurationHash").asText()).matches("sha256:[a-f0-9]{64}");
@@ -204,7 +314,7 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(replay.required("challengeId")).isEqualTo(frozen.required("challengeId"));
     assertThat(replay.required("configurationHash")).isEqualTo(frozen.required("configurationHash"));
     assertThat(db.sql("select count(*) from ouf_onboarding.approval_challenge").query(Long.class).single()).isOne();
-    verify(registryReader,times(4)).resolve(anyString(),anyString(),eq(set));
+    verify(registryReader,times(correctReaders?1:4)).resolve(anyString(),anyString(),eq(set));
   }
 
   @ParameterizedTest @ValueSource(booleans={false,true})

@@ -29,10 +29,13 @@ public class OnboardingService {
     if("INTERNAL_MANAGED".equals(kind)&&!"MANAGED".equals(mode))throw bad("ONB_SOURCE_MODE_INVALID","INTERNAL_MANAGED requires MANAGED acquisition");
     int inserted=db.sql("insert into ouf_onboarding.source(source_id,name,source_kind,acquisition_mode,owner_ref,metadata) values(:i,:n,:k,:m,:o,cast(:x as jsonb)) on conflict (source_id) do nothing")
       .param("i",id).param("n",name).param("k",kind).param("m",mode).param("o",owner).param("x",write(metadata)).update();
-    if(inserted==0)throw new DomainFailure(HttpStatus.CONFLICT,"ONB_SOURCE_ID_OCCUPIED",
+    if(inserted==0)throw occupiedSource(id);
+    audit(id,null,correlation,actor,"SOURCE_CREATED",Map.of("sourceKind",kind)); return source(id);
+  }
+  static DomainFailure occupiedSource(String id){
+    return new DomainFailure(HttpStatus.CONFLICT,"ONB_SOURCE_ID_OCCUPIED",
         "Use a different sourceId or prepare an authorized revision with a new file.",
         Map.of("sourceId",id,"nextActions",List.of("REVISION_PREPARE_WITH_NEW_FILE","USE_DIFFERENT_SOURCE_ID")));
-    audit(id,null,correlation,actor,"SOURCE_CREATED",Map.of("sourceKind",kind)); return source(id);
   }
   public Map<String,Object> source(String id){return jsonRow(db.sql("select source_id,name,source_kind,acquisition_mode,status,owner_ref,metadata::text metadata,lock_version,created_at,updated_at from ouf_onboarding.source where source_id=:i").param("i",id).query().listOfRows().stream().findFirst().orElseThrow(()->missing("source")),"metadata");}
   public List<Map<String,Object>> sources(){return db.sql("select source_id,name,source_kind,acquisition_mode,status,owner_ref,metadata::text metadata,lock_version,created_at,updated_at from ouf_onboarding.source order by source_id").query().listOfRows().stream().map(x->jsonRow(x,"metadata")).toList();}
@@ -62,6 +65,31 @@ public class OnboardingService {
     int rows=db.sql("update ouf_onboarding.onboarding_version set configuration=cast(:c as jsonb),lock_version=lock_version+1,updated_at=transaction_timestamp() where source_id=:s and onboarding_version_id=:i and state='DRAFT' and lock_version=:l")
       .param("c",write(configuration)).param("s",sourceId).param("i",id).param("l",expected).update();
     if(rows!=1)throw precondition(); audit(sourceId,id,correlation,actor,"DRAFT_UPDATED",Map.of("expectedLockVersion",expected)); return version(sourceId,id);
+  }
+
+  void supersedeDraft(String source,Map<String,Object> previous,Actor actor,String correlation){
+    UUID version=(UUID)previous.get("onboarding_version_id");
+    if(db.sql("""
+        update ouf_onboarding.onboarding_version set state='SUPERSEDED',configuration_hash=:hash,
+          frozen_at=clock_timestamp(),updated_at=clock_timestamp(),lock_version=lock_version+1
+        where source_id=:source and onboarding_version_id=:version and state='DRAFT' and lock_version=:expected
+        """).param("source",source).param("version",version).param("expected",previous.get("lock_version"))
+        .param("hash",hashes.of(previous.get("configuration"))).update()!=1)throw precondition();
+    audit(source,version,correlation,actor,"DRAFT_SUPERSEDED",Map.of());
+  }
+
+  void checkDraftReaders(Map<String,Object> draft,Map<String,String> profiles){
+    if(!PublishedDatatypes.requiresPreparation(ManagedReviewSnapshot.child(draft,"semanticMapping"),
+        ManagedReviewSnapshot.child(draft,"extractionProfile"),draft.get("semanticReferenceBindings")))return;
+    try{
+      // Keep only coordinates in the draft. Preparation verifies fresh evidence before freezing.
+      PublishedDatatypes.prepare(new LinkedHashMap<>(draft),profiles,datatypeResolver,hashes);
+    }catch(DomainFailure failure){
+      if(!Set.of("ONB_DATATYPE_UNRESOLVED","ONB_VALUE_MAP_UNRESOLVED").contains(failure.code()))throw failure;
+      var details=failure.properties().containsKey("fields")?failure.properties():
+          PublishedDatatypes.readerFailure(draft,profiles,failure).properties();
+      throw new DomainFailure(failure.status(),"ONB_READER_UNSUPPORTED","Review the selected field readers",details);
+    }
   }
 
   @Transactional public Map<String,Object> submit(String sourceId,UUID id,long expected,Actor actor,String correlation){

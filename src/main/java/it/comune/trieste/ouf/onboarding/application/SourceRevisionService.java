@@ -49,12 +49,15 @@ public class SourceRevisionService {
     this.db=db;this.onboarding=onboarding;this.reviews=reviews;this.files=files;this.hashes=hashes;this.policy=policy;
   }
   private static DomainFailure fail(HttpStatus status,String code){return new DomainFailure(status,code,code);}
+  static boolean permitted(AuthorizationPolicyRegistry policy,PrincipalContext p,String source,UUID version,String cap,String operation){
+    return p!=null && p.actorType()==PrincipalContext.ActorType.HUMAN && p.scopes().contains(cap)
+        && policy.authorizeActive(p,new ResourceContext("source",source,p.tenantId(),null,
+            Map.of("onboardingVersionId",version.toString())),cap,operation,Instant.now()).allowed();
+  }
   private void authorize(PrincipalContext p,String cap,String operation,String source,UUID version){
     if(source==null||!source.matches("[A-Za-z0-9_.:-]{1,160}")||version==null)
       throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_IDENTITY_INVALID");
-    if(p==null||p.actorType()!=PrincipalContext.ActorType.HUMAN||!p.scopes().contains(cap)
-        ||!policy.authorizeActive(p,new ResourceContext("source",source,p.tenantId(),null,
-            Map.of("onboardingVersionId",version.toString())),cap,operation,Instant.now()).allowed())
+    if(!permitted(policy,p,source,version,cap,operation))
       throw fail(HttpStatus.FORBIDDEN,"ONB_REVISION_AUTHORIZATION_DENIED");
     var metadata=(Map<?,?>)onboarding.source(source).get("metadata");
     if(metadata.get("managedFileAssetId") instanceof String asset)files.requireOwner(UUID.fromString(asset),p.subjectId());
@@ -128,7 +131,15 @@ public class SourceRevisionService {
     }
     revisionMetadata(proposed,number);
     draft=onboarding.patchVersion(r.sourceId(),version,((Number)draft.get("lock_version")).longValue(),proposed,actor,correlation);
-    var frozen=onboarding.submit(r.sourceId(),version,((Number)draft.get("lock_version")).longValue(),actor,correlation);
+    Map<String,Object> frozen;
+    try{
+      frozen=onboarding.submit(r.sourceId(),version,((Number)draft.get("lock_version")).longValue(),actor,correlation);
+    }catch(DomainFailure failure){
+      if(!"ONB_DATATYPE_UNRESOLVED".equals(failure.code()))throw failure;
+      var properties=new LinkedHashMap<>(failure.properties());
+      properties.put("resolutions",List.of("REVISE_CHANGES"));
+      throw new DomainFailure(failure.status(),failure.code(),failure.getMessage(),properties);
+    }
     // Uses the existing native THS/compatibility/activation machinery, not a new approval authority.
     reviews.registerReview(p,r.sourceId(),version,"revision:"+UUID.randomUUID(),fingerprint,frozen,actor,correlation);
     var row=db.sql("""
@@ -166,16 +177,16 @@ public class SourceRevisionService {
     if(previous.equals(ref.assetId()))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_NO_CHANGE");
     files.requireTenantOwner(previous,p.tenantId(),p.subjectId());
     var base=files.asset(previous);
-    if(!source.equals(base.get("source_id")))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT");
+    if(!source.equals(base.get("source_id")))throw reviews.assetConflict(p,(String)base.get("source_id"));
     files.requireTenantOwner(ref.assetId(),p.tenantId(),p.subjectId());
     // Serialize custody with initial onboarding and other sources competing for an unattached upload.
     db.sql("select asset_id from ouf_onboarding.managed_file_asset where asset_id=:a for update")
         .param("a",ref.assetId()).query(UUID.class).single();
     var asset=files.asset(ref.assetId());
-    if((asset.get("source_id")!=null&&!source.equals(asset.get("source_id")))||
-        db.sql("select exists(select 1 from ouf_onboarding.source where source_id<>:s and metadata->>'managedFileAssetId'=:id)")
-            .param("s",source).param("id",ref.assetId().toString()).query(Boolean.class).single())
-      throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_SOURCE_CONFLICT");
+    if(asset.get("source_id") instanceof String bound && !source.equals(bound))throw reviews.assetConflict(p,bound);
+    var other=db.sql("select source_id from ouf_onboarding.source where source_id<>:s and metadata->>'managedFileAssetId'=:id order by source_id limit 2")
+        .param("s",source).param("id",ref.assetId().toString()).query(String.class).list();
+    if(!other.isEmpty())throw reviews.assetConflict(p,other.size()==1?other.getFirst():null);
     if(!"PROFILED".equals(asset.get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_NOT_PROFILED");
     ManagedCsvRevision.replace(config,base,files.fileProfile(previous,profile),asset,
         files.fileProfile(ref.assetId(),ref.profileId()),number,request.newColumns());

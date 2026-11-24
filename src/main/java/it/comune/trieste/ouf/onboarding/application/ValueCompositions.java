@@ -19,6 +19,7 @@ final class ValueCompositions {
   final Map<String,String> labels=new LinkedHashMap<>();
   final Set<String> typeRefs=new HashSet<>();
   final Set<String> valueMapRefs=new LinkedHashSet<>();
+  final Map<String,Set<String>> fieldReaders=new TreeMap<>();
   final Set<String> used=new HashSet<>();
   private final Map<String,String> fields;
   private final Function<String,Map<?,?>> definition;
@@ -54,6 +55,7 @@ final class ValueCompositions {
     String profile=fields.get(field);
     require(profile==null||rule.supports(profile));
     used.add(field);
+    fieldReaders.computeIfAbsent(field,key->new TreeSet<>()).add(rule.name());
     return read(rule,input.get("transformParams"),false);
   }
   private Output read(ValueReader reader,Object params,boolean many){

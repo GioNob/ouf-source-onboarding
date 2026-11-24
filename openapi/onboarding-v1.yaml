@@ -381,6 +381,44 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
+                properties:
+                  deferredReaderChecks:
+                    type: array
+                    items:
+                      type: object
+                      required: [fieldName, transform]
+                      properties:
+                        fieldName: {type: string}
+                        transform: {type: string}
+        '409':
+          description: Asset binding conflict. Resolutions depend on current authority and source state.
+          content:
+            application/problem+json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+                  - type: object
+                    properties:
+                      boundSourceId: {type: string, description: Present only for a readable source.}
+                      resolutions: {type: array, items: {enum: [CREATE_REVISION, UPLOAD_NEW_FILE]}}
+        '422':
+          description: ONB_READER_UNSUPPORTED includes each rejected field and its allowed alternatives.
+          content:
+            application/problem+json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+                  - type: object
+                    properties:
+                      fields:
+                        type: array
+                        items:
+                          type: object
+                          required: [fieldName, transform, allowedTransforms]
+                          properties:
+                            fieldName: {type: string}
+                            transform: {type: string}
+                            allowedTransforms: {type: array, items: {$ref: '#/components/schemas/ValueReader'}}
         default:
           $ref: '#/components/responses/Problem'
   /sources/{sourceId}/onboarding-versions/{versionId}:
@@ -835,6 +873,30 @@ components:
           type: array
           minItems: 1
           items: {type: string}
+        semanticBindings:
+          type: array
+          minItems: 1
+          description: Optional exact bindings for draft reader verification, in execution proposal format.
+          items:
+            type: object
+            additionalProperties: false
+            required: [semanticId, semanticVersion, revisionId, publicationSetId]
+            properties:
+              semanticId: {type: string, minLength: 1}
+              semanticVersion: {type: string, minLength: 1}
+              revisionId: {type: string, format: uuid}
+              publicationSetId: {type: string, format: uuid}
+              reviewTerms:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [iri]
+                  properties:
+                    iri: {type: string, format: iri}
+                    labelIt: {type: [string, 'null'], maxLength: 2048}
+                    descriptionIt: {type: [string, 'null'], maxLength: 2048}
+                    license: {type: [string, 'null'], maxLength: 2048}
         sourceObjectKeyFields:
           type: array
           items: {type: string}

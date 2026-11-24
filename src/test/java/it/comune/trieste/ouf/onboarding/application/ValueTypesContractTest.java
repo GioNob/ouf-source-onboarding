@@ -201,6 +201,22 @@ class ValueTypesContractTest {
         .isInstanceOfSatisfying(DomainFailure.class,e->assertThat(e.code()).isEqualTo("ONB_DATATYPE_UNRESOLVED"));
   }
 
+  @Test void task52dUnresolvedNestedDatatypeReportsReadersFromPreparationProfiles(){
+    var decimalReaders=List.of("DECIMAL_DOT_V1","DECIMAL_COMMA_V1");
+    var expected=List.of(
+        Map.of("fieldName","lat","transform","DECIMAL_DOT_V1","allowedTransforms",decimalReaders),
+        Map.of("fieldName","lon","transform","DECIMAL_COMMA_V1","allowedTransforms",decimalReaders),
+        Map.of("fieldName","text","transform","IDENTITY","allowedTransforms",List.of("IDENTITY")));
+    assertThatThrownBy(()->PublishedDatatypes.prepare(config(),FIELDS,(id,revision,set)->
+        id.equals(INNER)?null:response(id),hashes)).isInstanceOfSatisfying(DomainFailure.class,failure->{
+      assertThat(failure.code()).isEqualTo("ONB_DATATYPE_UNRESOLVED");
+      assertThat(failure).hasMessage("Published datatype definition unavailable");
+      assertThat(failure.properties()).containsEntry("fields",expected)
+          .containsEntry("fieldName","lat").containsEntry("transform","DECIMAL_DOT_V1")
+          .containsEntry("allowedTransforms",decimalReaders);
+    });
+  }
+
   private static Map<String,Object> split(String reader,Object readerParams){
     return constructor("LIST_SPLIT_V1",List.of(input("value","text","IDENTITY")),
         Map.of("separator","|","itemReader",reader,"itemReaderParams",readerParams));

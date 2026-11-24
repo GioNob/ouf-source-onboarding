@@ -104,49 +104,7 @@ public final class ManagedFileExecutionProposal {
     require(!semantic.containsKey("vocabularyMappings") || list(semantic.get("vocabularyMappings"),0,0).isEmpty());
     require(!config.containsKey("relationshipMappings") || list(config.get("relationshipMappings"),0,0).isEmpty());
     String publication=uuid(proposal.semanticPublicationSetRef());
-    List<?> expectedRefs=list(semantic.get("semanticRefs"),1,Integer.MAX_VALUE);
-    require(new HashSet<>(expectedRefs).size()==expectedRefs.size());
-    var supplied=proposal.semanticBindings()==null?List.<SemanticBinding>of():proposal.semanticBindings();
-    var proposedRefs=new HashSet<String>();
-    for(var pin:supplied){
-      require(pin!=null);
-      proposedRefs.add(atom(pin.semanticId())+"@"+atom(pin.semanticVersion()));
-    }
-    if(!proposedRefs.equals(new HashSet<>(expectedRefs)) || proposedRefs.size()!=supplied.size()){
-      var ref=expectedRefs.stream().map(ManagedFileExecutionProposal::string)
-          .filter(expected->!proposedRefs.contains(expected)).findFirst().orElse(string(expectedRefs.getFirst()));
-      throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_SEMANTIC_REF_VERSION_MISMATCH",
-          "Proposal bindings must match the retained semantic references",Map.of("semanticRef",ref));
-    }
-    var descriptions=new LinkedHashMap<String,Object>();
-    List<Map<String,Object>> bindings=new ArrayList<>();
-    for(SemanticBinding binding:supplied){
-      String id=binding.semanticId(),version=binding.semanticVersion();
-      String set=uuid(binding.publicationSetId());
-      String coordinate=id+"@"+set;
-      // A nested type can be part of the published definition without an item builder.
-      // Preparation verifies the artifact kind of additional pins from other sets.
-      require(publication.equals(set) || !combined.typeRefs.isEmpty()
-          || valueMapRefs.contains(coordinate) || valueMapRefs.contains(id));
-      var pinned=new LinkedHashMap<String,Object>(Map.of("semanticId",id,"semanticVersion",version,
-          "revisionId",uuid(binding.revisionId()),"publicationSetId",set));
-      if(binding.reviewTerms()!=null){
-        require(binding.reviewTerms().size()<=classes.size()+mapped.size());
-        for(var term:binding.reviewTerms()){
-          require(term!=null && (classes.contains(term.iri())||mapped.contains(term.iri())) && !descriptions.containsKey(term.iri()));
-          for(String value:Arrays.asList(term.labelIt(),term.descriptionIt(),term.license()))
-            require(value==null || (value.length()<=2048 && value.chars().noneMatch(Character::isISOControl)));
-          descriptions.put(term.iri(),Map.of("term",term,"binding",pinned));
-        }
-      }
-      bindings.add(pinned);
-    }
-    for(String target:combined.labels.keySet())require(bindings.stream().anyMatch(b->target.equals(b.get("semanticId"))));
-    config.remove("semanticReviewTerms");
-    if(!descriptions.isEmpty())config.put("semanticReviewTerms",descriptions);
-    for(Object raw:list(semantic.get("targetClasses"),1,32)){
-      Map<String,Object> target=map(raw);require(proposedRefs.contains(text(target,"ontologyId")+"@"+text(target,"ontologyVersion")));
-    }
+    bind(config,semantic,proposal.semanticBindings(),publication,classes,mapped,combined.typeRefs,combined.labels.keySet(),valueMapRefs);
     Map<String,Object> udp=copy(proposal.udp());keys(udp,"resolution","materialization");
     Map<String,Object> resolution=object(udp,"resolution"),policy=object(resolution,"governedIdentity");
     MappingCategory.validate(semantic.get("targetClasses"),policy);
@@ -183,8 +141,55 @@ public final class ManagedFileExecutionProposal {
     execution.put("observationPolicy","ACQUISITION_TIME");execution.put("expectedSize",size);
     execution.put("maxRows",limits.maxRows());execution.put("maxColumns",limits.maxColumns());execution.put("maxCellChars",limits.maxCellChars());
     execution.put("mappingRefs",List.of(text(semantic,"mappingId")));execution.put("authorityPolicyRef",text(materialization,"policyRef"));
-    runtime.put("execution",execution);runtime.put("udp",udp);config.put("semanticReferenceBindings",bindings);
+    runtime.put("execution",execution);runtime.put("udp",udp);
     return config;
+  }
+  static void bind(Map<String,Object> config,Map<String,Object> semantic,List<SemanticBinding> supplied,String publication,
+      Set<String> classes,Set<String> mapped,Set<String> typeRefs,Set<String> compositionTargets,Set<String> valueMapRefs){
+    List<?> expectedRefs=list(semantic.get("semanticRefs"),1,Integer.MAX_VALUE);
+    require(new HashSet<>(expectedRefs).size()==expectedRefs.size());
+    if(supplied==null)supplied=List.of();
+    var proposedRefs=new HashSet<String>();
+    for(var pin:supplied){
+      require(pin!=null);
+      proposedRefs.add(atom(pin.semanticId())+"@"+atom(pin.semanticVersion()));
+    }
+    if(!proposedRefs.equals(new HashSet<>(expectedRefs)) || proposedRefs.size()!=supplied.size()){
+      var ref=expectedRefs.stream().map(ManagedFileExecutionProposal::string)
+          .filter(expected->!proposedRefs.contains(expected)).findFirst().orElse(string(expectedRefs.getFirst()));
+      throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_SEMANTIC_REF_VERSION_MISMATCH",
+          "Proposal bindings must match the retained semantic references",Map.of("semanticRef",ref));
+    }
+    var descriptions=new LinkedHashMap<String,Object>();
+    List<Map<String,Object>> bindings=new ArrayList<>();
+    for(SemanticBinding binding:supplied){
+      String id=binding.semanticId(),version=binding.semanticVersion();
+      String set=uuid(binding.publicationSetId());
+      String coordinate=id+"@"+set;
+      // A nested type can be part of the published definition without an item builder.
+      // Preparation verifies the artifact kind of additional pins from other sets.
+      require(publication==null || publication.equals(set) || !typeRefs.isEmpty()
+          || valueMapRefs.contains(coordinate) || valueMapRefs.contains(id));
+      var pinned=new LinkedHashMap<String,Object>(Map.of("semanticId",id,"semanticVersion",version,
+          "revisionId",uuid(binding.revisionId()),"publicationSetId",set));
+      if(binding.reviewTerms()!=null){
+        require(binding.reviewTerms().size()<=classes.size()+mapped.size());
+        for(var term:binding.reviewTerms()){
+          require(term!=null && (classes.contains(term.iri())||mapped.contains(term.iri())) && !descriptions.containsKey(term.iri()));
+          for(String value:Arrays.asList(term.labelIt(),term.descriptionIt(),term.license()))
+            require(value==null || (value.length()<=2048 && value.chars().noneMatch(Character::isISOControl)));
+          descriptions.put(term.iri(),Map.of("term",term,"binding",pinned));
+        }
+      }
+      bindings.add(pinned);
+    }
+    for(String target:compositionTargets)require(bindings.stream().anyMatch(b->target.equals(b.get("semanticId"))));
+    config.remove("semanticReviewTerms");
+    if(!descriptions.isEmpty())config.put("semanticReviewTerms",descriptions);
+    for(Object raw:list(semantic.get("targetClasses"),1,32)){
+      Map<String,Object> target=map(raw);require(proposedRefs.contains(text(target,"ontologyId")+"@"+text(target,"ontologyVersion")));
+    }
+    config.put("semanticReferenceBindings",bindings);
   }
   private static String atom(String value){require(value!=null && !value.isBlank() && value.length()<=2048 && value.chars().noneMatch(c->Character.isWhitespace(c)||c=='@'));return value;}
   private static String uuid(String value){try{require(value!=null && UUID.fromString(value).toString().equals(value));return value;}catch(RuntimeException e){throw invalid();}}

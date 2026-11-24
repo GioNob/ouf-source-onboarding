@@ -33,7 +33,7 @@ class ManagedFileIntakeTenantRuntimeTest {
   String assetState(UUID asset){return db.sql("select to_jsonb(a)::text from ouf_onboarding.managed_file_asset a where asset_id=:a").param("a",asset).query(String.class).single();}
   @Test void nativeIntakeOwnershipSurvivesNewServiceInstanceWithoutUploadOrReviewReceipt(){
     UUID asset=(UUID)owned("object://fixture/native","tenant-a").get("asset_id");
-    var restarted=new ManagedFileService(db,new ObjectMapper(),hashes,profiler,tx,onboarding,jobs,previewPaging);
+    var restarted=new ManagedFileService(db,new ObjectMapper(),hashes,profiler,tx,onboarding,jobs,previewPaging,null,null);
     restarted.requireTenantOwner(asset,"tenant-a","alice");
     assertThat(restarted.ownedAssets("tenant-a","alice",20,null).get("items")).asList().hasSize(1);
     assertThat(db.sql("select count(*) from ouf_onboarding.managed_file_upload_attempt").query(Long.class).single()).isZero();
