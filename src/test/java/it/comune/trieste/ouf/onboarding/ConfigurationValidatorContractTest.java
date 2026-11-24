@@ -110,7 +110,8 @@ class ConfigurationValidatorContractTest {
         .contains("ONB_GOVERNED_IDENTITY_INVALID");
     semantic.put("propertyMappings",List.of(Map.of("sourceField","code","targetPropertyIri","urn:key","transform","identity")));
     policy.put("sourceId","other");assertThat(validator.validate("s",c).findings())
-        .extracting(ConfigurationValidator.Finding::code).contains("ONB_GOVERNED_IDENTITY_INVALID");
+        .filteredOn(finding->finding.code().equals("ONB_GOVERNED_IDENTITY_INVALID"))
+        .singleElement().satisfies(finding->assertThat(finding.message()).contains("POLICY_SOURCE"));
     policy.put("sourceId","s");signal.remove("assertionRef");
     assertThat(validator.validate("s",c).findings()).extracting(ConfigurationValidator.Finding::code)
         .contains("ONB_GOVERNED_IDENTITY_INVALID");
