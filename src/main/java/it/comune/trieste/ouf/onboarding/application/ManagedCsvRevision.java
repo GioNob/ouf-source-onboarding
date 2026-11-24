@@ -86,6 +86,8 @@ public final class ManagedCsvRevision {
 
     String id=asset.get("asset_id").toString(),profileId=profile.get("profile_id").toString();
     String ref=schemaRef(id,profileId);
+    if(config.get("excludedFieldReview") instanceof Map<?,?> excluded && oldProfileId.equals(excluded.get("profileId")))
+      config.put("excludedFieldReview",Map.of("profileId",profileId,"labels",excluded.get("labels")));
     selection.put("assetId",id);
     selection.put("fileProfileId",profileId);
     runtime.put("assetId",id);

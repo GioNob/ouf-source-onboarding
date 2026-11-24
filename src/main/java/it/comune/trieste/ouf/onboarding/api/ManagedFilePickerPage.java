@@ -123,6 +123,8 @@ public class ManagedFilePickerPage {
       connection.setRequestProperty("Authorization", "Bearer " + client.getAccessToken().getTokenValue());
       connection.setRequestProperty("Content-Type", "text/csv");
       connection.setRequestProperty("X-Content-SHA256", hash);
+      String fileName=request.getHeader("X-OUF-File-Name");
+      if(fileName!=null && fileName.matches("[!-~]{1,3072}"))connection.setRequestProperty("X-OUF-File-Name",fileName);
       try (var source = request.getInputStream(); var target = connection.getOutputStream()) {
         copyBounded(source, target, declaredSize);
       }
@@ -165,6 +167,6 @@ public class ManagedFilePickerPage {
         .header("Referrer-Policy", "no-referrer")
         .header("X-Frame-Options", "DENY")
         .header("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-        .body(new ClassPathResource("ths/" + name).getContentAsByteArray());
+        .body(ThsAssets.read(name));
   }
 }

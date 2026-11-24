@@ -31,11 +31,11 @@
  $('checked').onchange=()=>controls(!busy&&card?.state==='PENDING');
  async function load(){
   if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id||''))throw new Error('Apri il collegamento associato alla proposta.');
-  const r=await fetch(endpoint,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+  const r=await ThsSession.fetch(endpoint,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
   if(!r.ok||r.redirected)throw new Error('Proposta non accessibile. Verifica account IAM e autorizzazioni.');
   const data=await r.json();card=data.card;csrfHeader=data.csrfHeader;csrfToken=data.csrfToken;
   if(card.proposalId!==id||!csrfHeader||!csrfToken)throw new Error('Risposta di revisione non valida.');
-  context();
+  ThsSession.bind(JSON.stringify([id, card.proposedHash, card.revision, card.state]), [$('checked')]); context();
   catalogueAdditions(card.addedCapabilities||[]);
   $('reason').textContent=`Motivo: ${card.reason}`;if(card.afterRoles){catalogue(card.beforeRoles,$('before'));catalogue(card.afterRoles,$('after'));}else{grant(card.before,$('before'));grant(card.after,$('after'));}$('details').textContent=JSON.stringify(card,null,2);$('review').hidden=false;
   controls(card.state==='PENDING');message(card.state==='PENDING'?'Verifica la modifica. Nessun permesso è ancora stato cambiato.':outcome());
@@ -46,7 +46,7 @@
   message(action==='confirm'?'Pubblicazione in corso… Attendi l’esito.':'Rifiuto in corso… Attendi l’esito.');
   const slow=setTimeout(()=>message('La risposta sta richiedendo più tempo. Non ripetere la conferma; attendi l’esito oppure ricarica la pagina per verificarlo.'),8000);
   try{
-   const r=await fetch(endpoint+'/'+action,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','If-Match':`"${card.revision}"`,[csrfHeader]:csrfToken},body:JSON.stringify({expectedHash:card.proposedHash})});
+   const r=await ThsSession.fetch(endpoint+'/'+action,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','If-Match':`"${card.revision}"`,[csrfHeader]:csrfToken},body:JSON.stringify({expectedHash:card.proposedHash})});
    if(!r.ok||r.redirected){if([409,410,412].includes(r.status))throw new Error('La proposta è scaduta o il contesto è cambiato. Richiedi una nuova proposta al chatbot.');throw new Error('Esito non verificato. Ricarica la pagina per leggere lo stato della proposta; se necessario accedi nuovamente con IAM. Non ripetere la conferma senza verificarlo.');}
    const result=await r.json();
    if(!['PUBLISHED','REJECTED'].includes(result.state)||(result.state==='PUBLISHED'&&!result.finalPolicyRef))throw new Error('Esito non verificato. Ricarica la pagina per leggere lo stato della proposta.');

@@ -93,7 +93,13 @@ public class SourceRevisionService {
     lock(r.sourceId());
     db.sql("select source_id from ouf_onboarding.source where source_id=:s for update").param("s",r.sourceId()).query(String.class).single();
     var parent=onboarding.version(r.sourceId(),r.parentVersionId());
-    if(!"ACTIVE".equals(parent.get("state"))||((Number)parent.get("lock_version")).longValue()!=r.expectedVersion()
+    boolean initialRejection="REJECTED".equals(parent.get("state"))&&r.assetRef()!=null
+        &&db.sql("""
+            select not exists(select 1 from ouf_onboarding.published_configuration where source_id=:s)
+              and not exists(select 1 from ouf_onboarding.onboarding_version where source_id=:s
+                and (version>:n or state in ('ACTIVE','REVOKED')))
+            """).param("s",r.sourceId()).param("n",parent.get("version")).query(Boolean.class).single();
+    if((!"ACTIVE".equals(parent.get("state"))&&!initialRejection)||((Number)parent.get("lock_version")).longValue()!=r.expectedVersion()
         ||!r.configurationHash().equals(parent.get("configuration_hash"))
         ||!r.configurationHash().equals(hashes.of(parent.get("configuration"))))
       throw fail(HttpStatus.PRECONDITION_FAILED,"ONB_REVISION_PARENT_DRIFT");
@@ -115,12 +121,13 @@ public class SourceRevisionService {
     var row=db.sql("""
         insert into ouf_onboarding.source_property_revision
           (tenant_id,subject_id,command_key,request_hash,source_id,parent_version_id,parent_configuration_hash,
-           onboarding_version_id,publication_effect,replacement_profile_id,new_columns)
-        values(:t,:s,:k,:h,:source,:parent,:ph,:v,:effect,:profile,cast(:columns as jsonb))
+           onboarding_version_id,publication_effect,replacement_profile_id,new_columns,parent_state_at_prepare)
+        values(:t,:s,:k,:h,:source,:parent,:ph,:v,:effect,:profile,cast(:columns as jsonb),:parentState)
         returning parent_version_id,parent_configuration_hash,replacement_profile_id,new_columns
         """)
         .param("t",p.tenantId()).param("s",p.subjectId()).param("k",r.commandKey()).param("h",fingerprint)
         .param("source",r.sourceId()).param("parent",r.parentVersionId()).param("ph",r.configurationHash())
+        .param("parentState",parent.get("state"))
         .param("v",version).param("effect",r.publicationEffect())
         .param("columns",r.newColumns()==null?null:onboarding.write(r.newColumns()),java.sql.Types.VARCHAR)
         .param("profile",r.assetRef()==null?null:r.assetRef().profileId(),java.sql.Types.OTHER).query().singleRow();
@@ -189,7 +196,7 @@ public class SourceRevisionService {
       "preparationAcquires",false,"historicalJobsReplayed",false,"humanActivationRequired",true,
       "description","Attivare questa revisione pubblica una nuova configurazione della stessa fonte. Lo scheduler può avviare una nuova acquisizione secondo la configurazione conservata, anche per un file già acquisito. La preparazione non pubblica, non acquisisce e non ripete decisioni o job storici.");}
   @SuppressWarnings("unchecked") private static Map<String,Object> configuration(Map<String,Object> version){return (Map<String,Object>)version.get("configuration");}
-  private static void revisionMetadata(Map<String,Object> configuration,int number){
+  static void revisionMetadata(Map<String,Object> configuration,int number){
     var bundle=object(configuration,"bundle");var extraction=object(configuration,"extractionProfile");
     String oldRef="onboarding://extraction-profiles/"+extraction.get("profileId")+"/versions/"+extraction.get("version");
     if(bundle.containsKey("extractionProfileRef")){

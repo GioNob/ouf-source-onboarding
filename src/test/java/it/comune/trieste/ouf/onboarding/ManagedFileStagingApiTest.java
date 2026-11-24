@@ -34,11 +34,12 @@ class ManagedFileStagingApiTest {
       assertThat(((InputStream)invocation.getArgument(0)).readAllBytes()).isEqualTo(csv);
       return "object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8";
     });
-    UUID asset=UUID.randomUUID();when(files.registerOwned(eq(null),anyString(),anyString(),eq("text/csv"),eq((long)csv.length),eq("human:operator"),anyString(),eq("tenant-a"))).thenReturn(Map.of("asset_id",asset));
+    request.addHeader("X-OUF-File-Name","Dati%20locali.csv");
+    UUID asset=UUID.randomUUID();when(files.registerOwned(eq(null),anyString(),anyString(),eq("text/csv"),eq((long)csv.length),eq("human:operator"),anyString(),eq("tenant-a"),eq("Dati locali.csv"))).thenReturn(Map.of("asset_id",asset));
     var api=new ManagedFileStagingApi(store,files,hashes,actors);
     var response=api.upload(request,"sha256:"+hashes.ofBytes(csv).substring(7));
     assertThat(response.getStatusCode().value()).isEqualTo(201);
-    verify(files).registerOwned(null,"object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8",hashes.ofBytes(csv),"text/csv",csv.length,"human:operator","retention://managed-files/30d","tenant-a");
+    verify(files).registerOwned(null,"object://managed-files/91f68ba6-4849-451b-a3d7-5856d685e6d8",hashes.ofBytes(csv),"text/csv",csv.length,"human:operator","retention://managed-files/30d","tenant-a","Dati locali.csv");
   }
 
   @Test void mismatchedChecksumCannotWriteToMinio() throws Exception {

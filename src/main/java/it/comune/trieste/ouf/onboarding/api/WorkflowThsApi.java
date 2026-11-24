@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.onboarding.api;
 
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.net.URI;
@@ -53,23 +54,52 @@ public class WorkflowThsApi {
     if(response.statusCode()!=200)return upstream(response);
     CsrfToken csrf=(CsrfToken)request.getAttribute(CsrfToken.class.getName());
     if(csrf==null)throw new ResponseStatusException(HttpStatus.FORBIDDEN,"THS_CSRF_REQUIRED");
-    return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(Map.of("card",json.readTree(response.body()),"csrfHeader",csrf.getHeaderName(),"csrfToken",csrf.getToken()));
+    var card=json.readTree(response.body());
+    if("onboarding".equals(flow)){
+      if(!(card instanceof ObjectNode ownerCard)||!id.toString().equals(card.path("challenge_id").textValue()))
+        throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_REVIEW_INVALID");
+      verifyTerms(ownerCard,access);
+    }
+    return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(Map.of("card",card,"csrfHeader",csrf.getHeaderName(),"csrfToken",csrf.getToken()));
+  }
+
+  private boolean verifyTerms(ObjectNode card,String access)throws InterruptedException{
+    var terms=new PublishedReviewTerms(card);
+    if(terms.canLookUp()){
+      var uri=gateway.resolve("/api/trusted-human/v1/semantic-published-terms?revisionIds="+terms.revisionIds());
+      try{
+        var registry=send(HttpRequest.newBuilder(uri).GET(),access);
+        if(registry.statusCode()==200)terms.read(json.readTree(registry.body()));
+      }catch(IOException|ResponseStatusException unavailable){
+        // A failed registry read must still leave the owner card and negative decisions accessible.
+      }
+    }
+    return terms.attachTo(card);
   }
   @PostMapping("/api/{id}/{action}") public ResponseEntity<String> action(@PathVariable String flow,@PathVariable UUID id,
       @PathVariable String action,@RequestBody byte[] body,HttpServletRequest request)throws Exception{
-    String access=token(request);if(body.length>4096)throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
+    String access=token(request);if(body.length>("onboarding".equals(flow)&&"changes".equals(action)?52*1024:4096))throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
     JsonNode proposed=json.readTree(body);
     if(proposed==null||!proposed.isObject())throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
     if("onboarding".equals(flow)){
       boolean budget="budget".equals(action);
-      if(!Set.of("confirm","reject","activate","resume","budget").contains(action)||proposed.size()!=(budget?7:"resume".equals(action)?4:2)
+      if(!Set.of("confirm","reject","changes","activate","resume","budget").contains(action)||proposed.size()!=(budget?7:"resume".equals(action)?4:"changes".equals(action)?3:2)
           ||!proposed.hasNonNull("configurationHash")||!proposed.has("expectedVersion")
           ||!proposed.get("configurationHash").isTextual()||!proposed.get("configurationHash").asText().matches("sha256:[a-f0-9]{64}")
           ||!proposed.get("expectedVersion").isIntegralNumber()||!proposed.get("expectedVersion").canConvertToLong()||proposed.get("expectedVersion").asLong()<0)
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+      if("changes".equals(action)){
+        var notes=proposed.path("reviewFeedback");
+        if(!notes.isArray()||notes.isEmpty()||notes.size()>128)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+        for(var note:notes)if(!note.isObject()||note.size()!=(note.has("comment")?3:2)
+            ||!Set.of("FIELD","IDENTITY","SEMANTIC","LIMITS").contains(note.path("section").asText(""))
+            ||!note.path("target").isTextual()||note.has("comment")&&(!note.get("comment").isTextual()||note.get("comment").textValue().length()>500))
+          throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+      }
       if("resume".equals(action)&&(!proposed.has("expectedGeneration")||!proposed.get("expectedGeneration").isIntegralNumber()
           ||!proposed.get("expectedGeneration").canConvertToLong()||proposed.get("expectedGeneration").asLong()<1
-          ||!proposed.path("blockedCode").isTextual()||!"ONB_READINESS_DEPENDENCY_403".equals(proposed.get("blockedCode").asText())))
+          ||!proposed.path("blockedCode").isTextual()
+          ||!it.comune.trieste.ouf.onboarding.application.ManagedOnboardingReviewService.humanRecheckCode(proposed.get("blockedCode").asText())))
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
       if(budget&&(!proposed.path("expectedGeneration").isIntegralNumber()||!proposed.path("expectedGeneration").canConvertToLong()
           ||proposed.path("expectedGeneration").asLong()<0||!proposed.path("commandKey").isTextual()
@@ -80,6 +110,18 @@ public class WorkflowThsApi {
           ||proposed.path("maximumAttempts").asInt()!=3||!proposed.path("maximumElapsedSeconds").isIntegralNumber()
           ||!proposed.path("maximumElapsedSeconds").canConvertToInt()||proposed.path("maximumElapsedSeconds").asInt()!=900))
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+      if("confirm".equals(action)){
+        var current=send(HttpRequest.newBuilder(owner(flow,id,"")).GET(),access);
+        if(current.statusCode()!=200)return upstream(current);
+        var card=json.readTree(current.body());
+        if(!(card instanceof ObjectNode ownerCard)||!id.toString().equals(card.path("challenge_id").textValue())
+            ||!proposed.get("configurationHash").equals(card.path("configuration_hash"))
+            ||!card.path("lockVersion").isIntegralNumber()||!card.path("lockVersion").canConvertToLong()
+            ||proposed.get("expectedVersion").longValue()!=card.path("lockVersion").longValue())
+          throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,"THS_REVIEW_STALE_CARD");
+        if(!verifyTerms(ownerCard,access))
+          throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,"THS_REVIEW_TERMS_UNVERIFIED");
+      }
     }else{
       if(!"semantic".equals(flow)||!Set.of("decision","publish").contains(action))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
       if("decision".equals(action)){
@@ -100,7 +142,7 @@ public class WorkflowThsApi {
     if("publish".equals(action))builder.header("Idempotency-Key","ths-semantic-publish:"+id);
     return upstream(send(builder,access));
   }
-  private HttpResponse<String> send(HttpRequest.Builder builder,String access)throws Exception{
+  private HttpResponse<String> send(HttpRequest.Builder builder,String access)throws IOException,InterruptedException{
     var response=http.send(builder.header("Authorization","Bearer "+access).header("Accept","application/json")
         .timeout(Duration.ofSeconds(builder.build().uri().getPath().endsWith("/review/activate")?55:15)).build(),HttpResponse.BodyHandlers.ofString());
     if(response.body().length()>1048576)throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_OWNER_RESPONSE_TOO_LARGE");return response;
@@ -122,7 +164,7 @@ public class WorkflowThsApi {
     return ResponseEntity.ok().contentType(type).cacheControl(CacheControl.noStore())
         .header("X-Content-Type-Options","nosniff").header("Referrer-Policy","no-referrer").header("X-Frame-Options","DENY")
         .header("Content-Security-Policy","default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-        .body(new ClassPathResource("ths/"+name).getContentAsByteArray());
+        .body(ThsAssets.read(name));
   }
 }
 

@@ -9,11 +9,11 @@ test('Resolution compares actual incoming and selected candidate rows, keeps JSO
  const root=path.resolve('src/main/resources/ths');
  const server=http.createServer((req,res)=>{
   const route=req.url.split('?')[0];
-  const name=route.endsWith('/review.js')?'resolution.js':route.endsWith('/review.css')?'resolution.css':route.endsWith('/')?'resolution.html':null;
+  const name=route.endsWith('/session.js')?'session.js':route.endsWith('/review.js')?'resolution.js':route.endsWith('/review.css')?'resolution.css':route.endsWith('/')?'resolution.html':null;
   if(!name){res.writeHead(404).end();return;}
   res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');
   res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-  res.end(fs.readFileSync(path.join(root,name)));
+  res.end(require('./ths-asset.cjs')(name));
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;
  try {browser=await chromium.launch({headless:true});} catch(error) {await new Promise(resolve=>server.close(resolve));throw error;}
