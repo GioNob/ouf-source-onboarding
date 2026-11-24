@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OUF · Rinnovo del budget di analisi</title>
+  <link rel="stylesheet" href="assets/renewal.css">
+  <script src="assets/renewal.js" defer></script>
+</head>
+<body><main>
+  <h1>Rinnovo del budget di analisi</h1>
+  <p id="status" role="status" aria-live="polite">Lettura della proposta…</p>
+  <article id="proposal" hidden>
+    <dl>
+      <dt>Piano di analisi</dt><dd id="plan"></dd>
+      <dt>Versione della proposta</dt><dd id="version"></dd>
+      <dt>Motivo del rinnovo</dt><dd id="reason"></dd>
+    </dl>
+    <p>Colonne ancora da analizzare: <strong id="remaining-count"></strong></p>
+    <details id="positions"><summary>Posizioni nel file</summary><p id="ordinals"></p></details>
+    <section id="history" hidden><h2>Revisione della proposta</h2><ul id="differences"></ul></section>
+    <p>Il totale è il tetto iniziale più l’incremento proposto. Ogni voce può crescere fino al 25% del tetto
+      iniziale. Le risorse già utilizzate vengono sottratte dal totale. Il rinnovo dura al massimo un’ora
+      e termina entro la scadenza dell’autorizzazione al lavoro.</p>
+    <p>Il rinnovo vale fino al <time id="expiry"></time>.</p>
+    <div class="table-scroll" role="region" aria-label="Limiti proposti per il rinnovo" tabindex="0">
+      <table><caption>Limiti e consumi del piano</caption>
+        <thead><tr><th scope="col">Voce</th><th scope="col">Tetto iniziale</th><th scope="col">Consumato</th>
+          <th scope="col">Incremento</th><th scope="col">Tetto totale</th><th scope="col">Disponibile dopo il rinnovo</th>
+          <th scope="col" id="feedback-heading">Chiedi modifiche</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <h2>Cosa succede al lavoro residuo</h2>
+    <p>Con l’approvazione, l’analisi può riprendere sulle colonne elencate (<span id="effect-count"></span>)
+      quando il servizio ha risorse libere e l’autorizzazione è ancora valida. Per questa interruzione puoi
+      concedere un solo rinnovo. Restano ferme le colonne con altri problemi, comprese quelle per cui occorre
+      verificare l’esito di un tentativo precedente. I risultati già ottenuti si conservano.</p>
+    <p>Con una richiesta di modifiche, le colonne elencate restano ferme fino alla decisione sulla nuova proposta.
+      Con la chiusura senza rinnovo, le colonne elencate restano senza analisi, mentre il lavoro sulle altre colonne
+      può proseguire. Il riepilogo indica per ogni colonna
+      se l’analisi è riuscita o dove si è fermata.</p>
+    <fieldset id="actions" hidden disabled><legend>Decisione su questa versione</legend>
+      <p>Per chiedere modifiche, scrivi un commento nelle righe interessate e premi «Chiedi modifiche».</p>
+      <button id="approve" type="button">Approva il rinnovo</button>
+      <button id="changes" type="button" disabled>Chiedi modifiche</button>
+      <button id="close" type="button">Chiudi senza rinnovo</button>
+    </fieldset>
+  </article>
+  <button id="refresh" type="button" hidden>Rileggi la proposta</button>
+</main></body></html>
