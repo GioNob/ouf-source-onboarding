@@ -12,3 +12,10 @@
 .value-map-scroll th:first-child{width:30%}
 .value-map-scroll th,.value-map-scroll td{white-space:pre-wrap;vertical-align:top}
 .value-map-scroll small{display:block;margin-top:.2rem}
+.batch-scroll>table{min-width:91rem}
+.batch-scroll>table>tbody>tr>td{vertical-align:top}
+.batch-scroll>table>tbody>tr>td:nth-child(2){min-width:15rem}
+.batch-scroll td small{display:block}
+.batch-scroll select,.batch-scroll textarea{font:inherit;width:11rem}
+.batch-scroll .batch-incomplete>th{border-left:4px solid #986300;background:#fff5d9}
+.batch-scroll .batch-incomplete>td:last-child small{color:#644200}

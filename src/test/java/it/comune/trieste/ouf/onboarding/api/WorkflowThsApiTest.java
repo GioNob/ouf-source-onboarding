@@ -12,6 +12,7 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -21,6 +22,7 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.core.*;
 import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
 import org.springframework.security.web.csrf.*;
+import org.springframework.web.server.ResponseStatusException;
 
 class WorkflowThsApiTest {
   @Test void task51e06WideTermVerificationRequiresAllBatches(){
@@ -267,6 +269,80 @@ class WorkflowThsApiTest {
       assertThat(posts).hasValue(1);
     }finally{SecurityContextHolder.clearContext();server.stop(0);}
   }
+  @Test void semanticBatchChecksFreshCardAndForwardsOneUnmodifiedDecision()throws Exception{
+    var json=new ObjectMapper();
+    UUID id=UUID.randomUUID();
+    String hash="a".repeat(64);
+    var card=json.createObjectNode().put("kind","REVIEW_BATCH").put("challenge_id",id.toString())
+        .put("target_content_hash",hash).put("status","OPEN").put("itemCount",3);
+    var items=card.putArray("items");
+    var decision=json.createObjectNode().put("expectedContentHash",hash);
+    var choices=decision.putArray("items");
+    var revisions=List.of("21111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222","23333333-3333-4333-8333-333333333333");
+    for(int i=0;i<revisions.size();i++){
+      items.addObject().put("position",i+1).put("revision_id",revisions.get(i));
+      var choice=choices.addObject().put("position",i+1).put("revisionId",revisions.get(i))
+          .put("decision",i==2?"CHANGES_REQUESTED":"APPROVED");
+      if(i==2)choice.put("comment","Usa un tipo con anche l'altitudine.");
+    }
+    var published=new AtomicReference<byte[]>();
+    var posts=new AtomicInteger();
+    var payload=new AtomicReference<>(json.writeValueAsBytes(card));
+    var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+    server.createContext("/api/trusted-human/v1/semantic-approval-challenges/"+id,exchange->{
+      byte[] reply=payload.get();
+      if("POST".equals(exchange.getRequestMethod())){
+        posts.incrementAndGet();
+        published.set(exchange.getRequestBody().readAllBytes());
+        reply="{}".getBytes(StandardCharsets.UTF_8);
+      }
+      exchange.sendResponseHeaders(200,reply.length);
+      try(var stream=exchange.getResponseBody()){stream.write(reply);}
+    });
+    server.start();
+    try{
+      var clients=mock(OAuth2AuthorizedClientService.class);
+      var request=session(clients);
+      var api=new WorkflowThsApi(clients,json,"http://127.0.0.1:"+server.getAddress().getPort());
+      String pretty=json.writerWithDefaultPrettyPrinter().writeValueAsString(decision);
+      // JSON whitespace makes a byte-preserving round trip observable, even at the inclusive limit.
+      byte[] exact=(pretty+" ".repeat(60*1024-pretty.getBytes(StandardCharsets.UTF_8).length)).getBytes(StandardCharsets.UTF_8);
+      api.action("semantic",id,"decision",exact,request);
+      assertThat(published.get()).isEqualTo(exact);
+      assertThat(posts).hasValue(1);
+      var invalidBodies=List.of("[]","{}", "{\"items\":[]}","{\"items\":{},\"expectedContentHash\":\""+hash+"\"}",
+          "{\"items\":[],\"expectedContentHash\":\""+hash+"\"}",new String(exact,StandardCharsets.UTF_8)+" ");
+      for(String bad:invalidBodies){
+        assertThatThrownBy(()->api.action("semantic",id,"decision",bad.getBytes(StandardCharsets.UTF_8),request))
+            .isInstanceOfSatisfying(ResponseStatusException.class,error->{
+              assertThat(error.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+              assertThat(error.getReason()).isEqualTo("THS_REVIEW_INVALID");
+            });
+      }
+      byte[] publish=json.writeValueAsBytes(Map.of("approvalDecisionId",id,"contentHash",hash));
+      assertThatThrownBy(()->api.action("semantic",id,"publish",publish,request))
+          .isInstanceOfSatisfying(ResponseStatusException.class,error->{
+            assertThat(error.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(error.getReason()).isEqualTo("THS_REVIEW_INVALID");
+          });
+      payload.set(json.writeValueAsBytes(card.put("target_content_hash","b".repeat(64))));
+      assertThatThrownBy(()->api.action("semantic",id,"decision",exact,request))
+          .isInstanceOfSatisfying(ResponseStatusException.class,error->{
+            assertThat(error.getStatusCode()).isEqualTo(HttpStatus.PRECONDITION_FAILED);
+            assertThat(error.getReason()).isEqualTo("THS_REVIEW_STALE_CARD");
+          });
+      var definition="x".repeat(1_048_576);
+      ((ObjectNode)items.get(0)).putObject("definition_json").put("text",definition);
+      payload.set(json.writeValueAsBytes(card));
+      assertThat(payload.get().length).isBetween(1_048_577,8*1_048_576);
+      assertThat(json.valueToTree(api.card("semantic",id,request).getBody()).path("card")).isEqualTo(card);
+      payload.set(json.writeValueAsBytes(Map.of("challenge_id",id,"target_content_hash",hash)));
+      assertThatThrownBy(()->api.action("semantic",id,"decision",exact,request))
+          .isInstanceOfSatisfying(ResponseStatusException.class,error->assertThat(error.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE));
+      assertThat(posts).hasValue(1);
+    }finally{server.stop(0);SecurityContextHolder.clearContext();}
+  }
+
   private MockHttpServletRequest session(OAuth2AuthorizedClientService clients){
     var registration=ClientRegistration.withRegistrationId("ouf-ths").clientId("test").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE).redirectUri("http://localhost/callback").authorizationUri("http://localhost/auth").tokenUri("http://localhost/token").build();
     var access=new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER,"private-human-token",Instant.now().minusSeconds(1),Instant.now().plusSeconds(60));

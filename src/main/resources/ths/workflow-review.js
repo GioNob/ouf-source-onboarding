@@ -20,7 +20,7 @@
       link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
     } else element('span', label, parent);
   }
-  function semanticSummary(card, article) {
+  function semanticSummary(card, article, singleDecision = true) {
     const types = {CLASS:'della classe', PROPERTY:'della proprietà', RELATIONSHIP:'della relazione',
       DATATYPE:'del tipo strutturato', VALUE_MAP:'della mappa di valori', VOCABULARY:'del vocabolario',
       CONCEPT:'del concetto', ONTOLOGY:'dell’ontologia'};
@@ -30,7 +30,7 @@
     const open = card.status === 'OPEN' && !expired(card);
     const nativeType = !card.adoptionProvenance &&
       {DATATYPE:'il tipo strutturato', VALUE_MAP:'la mappa di valori'}[card.artifact_type];
-    const heading = nativeType
+    const heading = !singleDecision ? 'Termine in revisione' : nativeType
       ? (open ? 'Stai approvando ' + nativeType : 'Richiesta di approvazione ' + types[card.artifact_type])
       : (open ? 'Stai approvando l’adozione' : 'Richiesta di adozione') + ' ' + (types[card.artifact_type] || 'della definizione');
     element('h2', `${heading} «${label}»${english ? ' (' + english + ')' : ''}`, article);
@@ -56,11 +56,11 @@
     const date = new Date(card.expires_at);
     fact('Scadenza della richiesta', Number.isFinite(date.valueOf()) ? date.toLocaleString('it-IT', {timeZoneName:'short'}) : card.expires_at);
     article.append(facts);
-    if (card.artifact_type === 'DATATYPE' && card.datatypeReview) datatypeSummary(card.datatypeReview, article);
+    if (card.artifact_type === 'DATATYPE' && card.datatypeReview?.componenti) datatypeSummary(card.datatypeReview, article);
     if (card.artifact_type === 'VALUE_MAP' && hasValueMapReview(card)) valueMapSummary(card.valueMapReview, article);
     const warnings = [];
     if (card.artifact_type === 'VALUE_MAP' && !hasValueMapReview(card)) warnings.push('Dettagli della mappa di valori non disponibili. Ricarica la richiesta per poterla approvare.');
-    if (source.licenseWarning || (!nativeType && !source.license)) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
+    if (source.licenseWarning || ((singleDecision || card.adoptionProvenance) && !nativeType && !source.license)) warnings.push(source.licenseWarning || 'Licenza non indicata nella fonte.');
     for (const finding of card.validationFindings || []) {
       warnings.push(typeof finding === 'string' ? finding : finding.message || finding.code || JSON.stringify(finding));
     }
@@ -71,6 +71,7 @@
       for (const warning of warnings) element('li', warning, list);
       section.append(list); article.append(section);
     }
+    if (!singleDecision) return;
     element('h3', 'Cosa comporta l’approvazione', article);
     element('p', 'Approvi questa revisione. Con il successivo comando «Pubblica» la definizione diventa pubblicata e utilizzabile nei mapping delle fonti dell’ente. Non modifica dati esistenti e può essere deprecata in seguito.', article);
   }
@@ -153,12 +154,13 @@
       element('th', c.etichetta ? c.nome + ' · ' + c.etichetta : c.nome, row).scope = 'row';
       for (const value of [c.tipo, c.cardinalità, c.obbligatorio, c.vincoli]) element('td', value, row);
     }
+    if (!review.versionePrecedente && !review.differenze?.length) return;
     element('h3', 'Differenze rispetto alla versione precedente', article);
     element('p', review.versionePrecedente, article);
-    if (!review.differenze.length && review.versionePrecedente !== 'Prima pubblicazione') {
+    if (!review.differenze?.length && review.versionePrecedente !== 'Prima pubblicazione') {
       element('p', 'Nessuna differenza.', article);
     }
-    for (const change of review.differenze) {
+    for (const change of review.differenze || []) {
       element('h4', change.campo + ' · ' + change.modifica, article);
       for (const [key, title] of [['prima', 'Prima'], ['dopo', 'Dopo']]) {
         if (Object.prototype.hasOwnProperty.call(change, key)) {
@@ -410,7 +412,7 @@
     element('h3','Cosa comporta l’approvazione',article);
     element('p','Approvi questa configurazione. Con il successivo comando «Verifica e attiva», superate le verifiche, la fonte diventa attiva. Ingestion acquisisce il file e UDP materializza gli oggetti con le sole proprietà incluse e le regole d’identità mostrate. Le colonne escluse non vengono acquisite. Puoi rivedere la configurazione o disattivare la fonte per fermare le acquisizioni future.',article);
   }
-  const selected = () => [...cards.values()].filter(item => !semantic || item.checkbox.checked);
+  const selected = () => [...cards.values()].filter(item => !semantic || item.checkbox?.checked);
   const expired = card => Date.parse(card.expires_at) <= Date.now();
   const canApprove = item => semantic ? item.card.status === 'OPEN' && !expired(item.card) : item.card.status === 'CREATED' && item.card.onboardingState === 'IN_REVIEW' && !expired(item.card);
   const missingFileSnapshot = card => !card.reviewSnapshot && (card.configuration?.extractionProfile?.selection?.assetId || card.configuration?.semanticMapping?.sourceType?.typeCode === 'FILE');
@@ -456,7 +458,189 @@
     }
     return guidance;
   }
+  const batchDecisions = {APPROVED:'Approva', CHANGES_REQUESTED:'Chiedi modifiche', REJECTED:'Rifiuta'};
+  const batchOutcomes = {APPROVED:'Approvato', CHANGES_REQUESTED:'Modifiche richieste', REJECTED:'Rifiutato'};
+  const comparisonFields = {semantic_id:'Identificativo', label_json:'Etichette', description_json:'Descrizioni', definition_json:'Definizione'};
+
+  function sameContent(left, right) {
+    if (left === right) return true;
+    if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(left) !== Array.isArray(right)) return false;
+    return Object.keys(left).length === Object.keys(right).length &&
+      Object.keys(left).every(key => Object.hasOwn(right, key) && sameContent(left[key], right[key]));
+  }
+  function batchTerm(parent, item, card) {
+    element('strong', item.label_json?.it || item.local_name, parent);
+    element('p', item.semantic_id, parent);
+    if (item.replacesActiveRevision) {
+      const revision = item.replacesActiveRevision;
+      element('p', `Sostituisce la revisione attiva ${revision.revisionNo} (${revision.semanticVersion}).`, parent);
+    }
+    if (item.supersedes) {
+      const {position, comment, previous} = item.supersedes;
+      element('h3', 'Modifiche alla precedente riga ' + position, parent);
+      element('p', 'Commento precedente · ' + comment, parent);
+      const changed = Object.entries(comparisonFields).filter(([key]) => !sameContent(previous[key], item[key]));
+      if (!changed.length) element('p', 'I contenuti confrontati coincidono.', parent);
+      for (const [key, label] of changed) detail(label + ' · prima e dopo', {prima:previous[key] ?? null, dopo:item[key] ?? null}, parent);
+    }
+    const content = element('details', '', parent);
+    element('summary', 'Contenuto da approvare', content);
+    semanticSummary({...item, status:card.status, expires_at:card.expires_at}, content, false);
+    detail('Contenuto completo della voce', item, content);
+  }
+  function batchDecisionForm(row, item, review) {
+    const decision = element('select', '', element('td', '', row));
+    decision.setAttribute('aria-label', 'Decisione per la riga ' + item.position);
+    const empty = element('option', 'Scegli un esito', decision);
+    empty.value = ''; empty.disabled = true; empty.selected = true;
+    for (const [value, label] of Object.entries(batchDecisions)) element('option', label, decision).value = value;
+    const comment = element('textarea', '', element('td', '', row));
+    comment.setAttribute('aria-label', 'Commento per la riga ' + item.position);
+    comment.rows = 2;
+    review.fields.push(decision, comment);
+    decision.onchange = comment.oninput = () => { if (!busy) review.updateBatch(); };
+    return {row, item, decision, comment, hint:element('small', '', comment.parentNode)};
+  }
+  function batchTable(review, editable) {
+    const {card, article} = review;
+    const scroll = element('div', '', article);
+    scroll.className = 'field-scroll batch-scroll'; scroll.tabIndex = 0;
+    scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', 'Termini del lotto');
+    const table = element('table', '', scroll);
+    element('caption', `${card.itemCount} termini nella revisione`, table);
+    const header = element('tr', '', element('thead', '', table));
+    for (const name of ['Posizione','Termine','Tipo','Origine','Intento della ricerca','Versione','Avvisi','Dipendenze','Decisione','Commento'])
+      element('th', name, header).scope = 'col';
+    const body = element('tbody', '', table), rows = [];
+    for (const item of card.items) {
+      const row = element('tr', '', body);
+      element('th', item.position, row).scope = 'row';
+      batchTerm(element('td', '', row), item, card);
+      element('td', item.artifact_type, row);
+      const source = item.adoptionProvenance;
+      const origin = element('td', source ? 'Adozione da discovery' : 'Proposta nativa', row);
+      if (source) {
+        element('small', 'Provider · ' + source.providerId, origin);
+        element('small', 'URI canonico · ' + source.canonicalUri, origin);
+        element('small', 'Editore · ' + source.publisher, origin);
+      }
+      element('td', item.discoveryIntent, row);
+      element('td', item.semantic_version, row);
+      const warnings = element('td', '', row);
+      for (const warning of [...(item.validationFindings || []), ...(item.datatypeReview?.avvisi || [])])
+        element('p', warning.message || warning.code || (typeof warning === 'string' ? warning : JSON.stringify(warning)), warnings);
+      for (const dep of item.externalDependencies || [])
+        element('p', `Dipendenza esterna non pubblicata · ${dep.semanticId} (${dep.state})`, warnings).className = 'warnings';
+      const dependencies = element('td', '', row);
+      for (const position of item.dependsOnPositions || [])
+        element('p', 'Dipende dalla riga ' + position, dependencies).className = 'warnings';
+      if (editable) rows.push(batchDecisionForm(row, item, review));
+      else {
+        const outcome = element('td', batchOutcomes[item.decision] || item.decision, row);
+        if (card.status === 'DECIDED') {
+          element('p', 'Ricevuta della decisione', outcome);
+          element('small', 'Revisione · ' + item.revision_id, outcome);
+          element('small', 'Stato · ' + item.lifecycleStatus, outcome);
+          if (item.publicationSetId) element('small', 'Insieme di pubblicazione · ' + item.publicationSetId, outcome);
+        }
+        element('td', item.comment, row);
+      }
+    }
+    return rows;
+  }
+  function batchResult(counts) {
+    return `Decisioni registrate: ${counts.published} termini pubblicati, ${counts.changesRequested} con modifiche richieste, ${counts.rejected} rifiutati. Torna nella chat: l'agente riceve l'esito e prosegue.`;
+  }
+  function renderBatch(review) {
+    const {card, article} = review;
+    if (!Array.isArray(card.items) || !card.items.length || card.items.length !== card.itemCount)
+      throw new Error('La scheda del lotto è incompleta.');
+    const editable = card.status === 'OPEN' && !expired(card);
+    element('h2', 'Revisione del lotto semantico', article);
+    review.fields = [];
+    const rows = batchTable(review, editable);
+    if (!editable) {
+      if (card.status === 'DECIDED') {
+        const count = decision => card.items.filter(item => item.decision === decision).length;
+        element('p', batchResult({published:count('APPROVED'), changesRequested:count('CHANGES_REQUESTED'), rejected:count('REJECTED')}), article);
+      } else if (card.status === 'EXPIRED' || expired(card))
+        element('p', "La revisione è scaduta senza decisione. Torna nella chat: l'agente può chiederne una nuova.", article);
+      return;
+    }
+    element('h3', 'Cosa comporta l’approvazione', article);
+    element('p', 'I termini approvati diventano attivi e utilizzabili per la mappatura della fonte. Per quelli con modifiche richieste l’agente riceve il commento e prepara una nuova proposta, che tornerà in una nuova revisione. I termini rifiutati non vengono pubblicati.', article);
+    element('p', 'Puoi scrivere fino a 500 caratteri per riga. Se chiedi modifiche, indica cosa cambiare con almeno 10 caratteri non spaziali.', article);
+    const summary = element('p', '', article), limit = element('p', '', article);
+    const confirm = element('button', 'Conferma le decisioni', article);
+    confirm.type = 'button';
+    review.updateBatch = () => {
+      const choices = new Map(rows.map(({item, decision}) => [item.position, decision.value]));
+      const counts = {APPROVED:0, CHANGES_REQUESTED:0, REJECTED:0};
+      let valid = true, commentBytes = 0;
+      const items = rows.map(({item, row, decision, comment, hint}) => {
+        decision.disabled = comment.disabled = busy || !!review.needsRefresh;
+        const choice = decision.value, note = comment.value;
+        const blocked = (item.dependsOnPositions || []).filter(position => choices.get(position) !== 'APPROVED');
+        decision.options[1].disabled = blocked.length > 0;
+        comment.required = choice === 'CHANGES_REQUESTED';
+        let problem = '';
+        if (choice === 'APPROVED' && blocked.length) problem = 'Per approvare occorre approvare anche le righe ' + blocked.join(', ') + '.';
+        else if ([...note].length > 500 || /\p{Cc}/u.test(note)) problem = 'Usa al massimo 500 caratteri, senza caratteri di controllo.';
+        else if (comment.required && [...note.replace(/\s/gu, '')].length < 10) problem = 'Spiega le modifiche con almeno 10 caratteri non spaziali.';
+        hint.textContent = problem;
+        row.classList.toggle('batch-incomplete', !choice || !!problem);
+        if (!choice || problem) valid = false;
+        if (choice) counts[choice]++;
+        commentBytes += new Blob([note]).size;
+        const result = {position:item.position, revisionId:item.revision_id, decision:choice};
+        if (note) result.comment = note;
+        return result;
+      });
+      const request = {expectedContentHash:card.target_content_hash, items};
+      const tooLarge = commentBytes > 32 * 1024 || new Blob([JSON.stringify(request)]).size > 60 * 1024;
+      limit.textContent = tooLarge ? 'Riduci i commenti. Il totale consentito è 32 KiB e la decisione completa deve rientrare in 60 KiB.' : '';
+      summary.textContent = `Approvi e pubblichi ${counts.APPROVED} termini in un solo insieme di pubblicazione. Chiedi modifiche per ${counts.CHANGES_REQUESTED}. Rifiuti ${counts.REJECTED}.`;
+      confirm.disabled = busy || review.needsRefresh || expired(card) || !valid || tooLarge;
+      return confirm.disabled ? null : request;
+    };
+    confirm.onclick = () => {
+      const request = review.updateBatch();
+      if (request) submitBatch(review, request);
+    };
+    review.updateBatch();
+  }
+  async function submitBatch(review, request) {
+    const id = review.card.challenge_id;
+    busy = true; review.needsRefresh = true; controls();
+    try {
+      const response = await ThsSession.fetch(`api/${encodeURIComponent(id)}/decision`, {method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [review.csrfHeader]:review.csrfToken}, body:JSON.stringify(request)});
+      if (!response.ok) throw await ownerError(response);
+      const receipt = await response.json();
+      const message = batchResult(receipt.counts);
+      try { await load(id); status(message); }
+      catch (error) { status(message + ' Aggiorna lo stato per leggere le ricevute. ' + error.message, true); }
+    } catch (error) {
+      try { await load(id); status(error.message + ' Scheda riletta.', true); }
+      catch (readError) { status(error.message + ' ' + readError.message + ' Aggiorna lo stato prima di riprovare.', true); }
+    } finally { busy = false; controls(); }
+  }
+  async function ownerError(response, message = 'Operazione non completata') {
+    const failure = await response.json().catch(() => null);
+    const code = failure?.code || failure?.detail;
+    const reason = typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,159}$/.test(code) ? ' · ' + code : '';
+    const error = new Error(`${message} (HTTP ${response.status}${reason}).`);
+    error.code = code;
+    return error;
+  }
   function controls() {
+    if (semantic) {
+      const reviews = [...cards.values()];
+      const batchView = reviews.length > 0 && reviews.every(item => !item.checkbox);
+      $('actions').hidden = batchView;
+      $('refresh').hidden = batchView && reviews.every(item => item.card.reviewBatchId && item.card.kind !== 'REVIEW_BATCH');
+      for (const item of reviews) item.updateBatch?.();
+    }
     const items = selected(); $('actions').disabled = busy || items.length === 0;
     const flagged = items.some(item => item.flags.some(flag => flag.box.checked));
     $('approve').disabled = flagged || !items.length || !items.every(canApprove) || items.some(item => approvalBlocked(item.card));
@@ -472,6 +656,20 @@
     const flags = [];
     if (card.challenge_id !== id) throw new Error('La risposta non appartiene alla revisione richiesta.');
     const article = document.createElement('article'); article.className = 'card';
+    if (semantic && (card.kind === 'REVIEW_BATCH' || card.reviewBatchId)) {
+      const review = {...response, article};
+      if (card.kind === 'REVIEW_BATCH') renderBatch(review);
+      else {
+        semanticSummary(card, article, false);
+        element('p', 'Questa proposta si decide nella revisione del lotto', article);
+        if (uuid.test(card.reviewBatchId)) element('a', 'Apri la revisione del lotto', article).href = '?challenge=' + card.reviewBatchId;
+      }
+      mountReview(id, review);
+      if (review.fields?.length) {
+        ThsSession.bind(JSON.stringify([id, card.target_content_hash, card.status, card.items.map(row => [row.position,row.revision_id])]), review.fields);
+      }
+      return;
+    }
     if (semantic) semanticSummary(card, article);
     else if (card.reviewSnapshot) reviewCard(card,article,flags);
     else {
@@ -597,10 +795,9 @@
     if (semantic) {
       label.append(checkbox); element('span', 'Ho esaminato questa proposta e la seleziono per la decisione.', label); article.append(label);
     }
-    const previous = cards.get(id); if (previous) { previous.article.replaceWith(article); } else $('cards').append(article);
     const intent = document.createElement('output'); intent.hidden = true; article.append(intent);
     intent.oninput = () => { intent.hidden = !intent.value; };
-    cards.set(id, { card, csrfHeader: response.csrfHeader, csrfToken: response.csrfToken, checkbox, article, reason, intent, flags });
+    mountReview(id, { card, csrfHeader: response.csrfHeader, csrfToken: response.csrfToken, checkbox, article, reason, intent, flags });
     checkbox.onchange = controls;
     const fields = [intent, ...flags.flatMap(flag => [flag.box,flag.comment])];
     if (semantic) fields.push(checkbox);
@@ -608,14 +805,24 @@
     ThsSession.bind(JSON.stringify([id, card.target_content_hash || card.configuration_hash, card.status, card.lifecycleStatus,
       card.lockVersion, card.progress?.activationProgress?.readiness_generation]), fields);
   }
+  function mountReview(id, review) {
+    const previous = cards.get(id);
+    if (previous) previous.article.replaceWith(review.article);
+    else $('cards').append(review.article);
+    cards.set(id, review);
+  }
   async function load(id) {
     const response = await ThsSession.fetch(`api/${encodeURIComponent(id)}`, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
-    if (!response.ok) throw new Error(`Revisione non disponibile (HTTP ${response.status}).`);
+    if (!response.ok) throw await ownerError(response, 'Revisione non disponibile');
     render(id, await response.json());
   }
   async function refresh() {
     if (busy) return; busy = true; controls();
-    try { for (const id of ids) await load(id); status('Esamina le proposte. Approvazione e pubblicazione o attivazione sono decisioni distinte.'); }
+    try {
+      for (const id of ids) await load(id);
+      const hasBatch = semantic && [...cards.values()].some(item => !item.checkbox);
+      status(hasBatch ? 'Scheda di revisione aggiornata.' : 'Esamina le proposte. Approvazione e pubblicazione o attivazione sono decisioni distinte.');
+    }
     catch (error) { status(error.message, true); }
     finally { busy = false; controls(); }
   }
@@ -651,11 +858,9 @@
         if (readinessAction) item.needsRefresh = true;
         const response = await ThsSession.fetch(`api/${encodeURIComponent(id)}/${operation}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', [item.csrfHeader]: item.csrfToken }, body: JSON.stringify(body) });
         if (!response.ok) {
-          const failure = await response.json().catch(() => null);
-          const code = failure?.code || failure?.detail;
-          const reason = typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,159}$/.test(code) ? ' · ' + code : '';
-          if (readinessAction || code === 'ONB_PUBLICATION_ENVELOPE_TOO_LARGE') await load(id).catch(() => {});
-          throw new Error(`Operazione non completata (HTTP ${response.status}${reason}).`);
+          const error = await ownerError(response);
+          if (readinessAction || error.code === 'ONB_PUBLICATION_ENVELOPE_TOO_LARGE') await load(id).catch(() => {});
+          throw error;
         }
         await load(id); completed++;
       }
