@@ -39,6 +39,18 @@ public class ManagedFileMcpApi {
       ManagedFileChatHandoff handoffs){
     this.receipts=receipts;this.files=files;this.json=json;this.handoffs=handoffs;
   }
+  /** readOptions = {xlsx:{headerRows:{"sheet:n":row}}}; anything else is rejected before the owner. */
+  static Map<String,Integer> headerRows(JsonNode options){
+    if(options==null)return null;
+    JsonNode xlsx=options.get("xlsx");
+    if(!options.isObject()||options.size()!=1||xlsx==null||!xlsx.isObject()||xlsx.size()!=1||!xlsx.path("headerRows").isObject())
+      throw new IllegalArgumentException("invalid managed-file arguments");
+    var rows=new java.util.LinkedHashMap<String,Integer>();
+    xlsx.get("headerRows").fields().forEachRemaining(e->{
+      if(!e.getValue().isInt())throw new IllegalArgumentException("invalid managed-file arguments");
+      rows.put(e.getKey(),e.getValue().intValue());});
+    return rows;
+  }
   private JsonNode arguments(byte[] raw,String...keys){
     try {
       JsonNode envelope=json.readTree(raw);
@@ -67,9 +79,14 @@ public class ManagedFileMcpApi {
   @PostMapping("/profile") public ResponseEntity<Map<String,Object>> profile(@RequestBody byte[] raw,HttpServletRequest request){
     String cap="ouf.managed-source.file.profile";
     var delegated=receipts.verifyManagedFile(request.getHeader("X-OUF-Managed-File-Receipt"),request.getRequestURI(),cap,raw);
-    UUID asset=UUID.fromString(arguments(raw,"assetId").get("assetId").asText());
+    JsonNode args;
+    try{args=json.readTree(raw).required("Arguments");}catch(IOException e){throw new IllegalArgumentException("invalid managed-file arguments",e);}
+    // Closed arguments: assetId, plus readOptions.xlsx.headerRows (contract ouf.extraction-unit.v1 §8.2).
+    if(!args.isObject()||!args.hasNonNull("assetId")||!args.get("assetId").isTextual()
+        ||args.size()!=(args.has("readOptions")?2:1))throw new IllegalArgumentException("invalid managed-file arguments");
+    UUID asset=UUID.fromString(args.get("assetId").asText());
     files.requireOwner(asset,delegated.principal().subjectId());
-    var job=files.requestProfile(asset,delegated.idempotencyKey());
+    var job=files.requestProfile(asset,delegated.idempotencyKey(),headerRows(args.get("readOptions")));
     return ResponseEntity.accepted().body(ManagedMcpObservation.profile(Map.of("jobId",job.get("jobId"),"status",job.get("status"))));
   }
   @PostMapping("/preview") public Map<String,Object> preview(@RequestBody byte[] raw,HttpServletRequest request){

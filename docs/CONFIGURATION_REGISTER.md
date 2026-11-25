@@ -67,3 +67,33 @@ Publication carries the approved pair at `semanticMapping.targetClasses[].catego
 V47 stores each unit’s source in `ouf_onboarding.managed_file_unit_binding`, keyed by `(asset_id, unit_ref)`. The DRAFT transaction also retains the first source in `managed_file_asset.source_id`. The `managed_file_effective_binding` view resolves predecessor writes from retained selections.
 
 `ouf.onboarding.units.multiple-sources-per-asset` (`OUF_ONB_UNITS_MULTIPLE_SOURCES_PER_ASSET`) defaults to `false`. Enable it through the approved installation profile only once the rollback predecessor reads unit bindings.
+## XLSX profiling operations (D-065, D-080, task-62f)
+
+| Store | Content | Secrets | Capture | Restore |
+|---|---|---|---|---|
+| `ouf_onboarding.file_profile_job.operation_key`, `read_options` (V48) | For XLSX jobs only: `xlsx-v1:` plus the canonical SHA-256 of the effective options, and the options themselves (`reader`, declared `headerRows`, installation `timeZone` at request time). Unique per asset and operation. NULL for CSV, GeoPackage and predecessor jobs | No | Database backup of the `ouf_onboarding` schema | Restored with the schema; the worker profiles a job with its frozen options, never the current installation zone |
+
+`ouf.onboarding.files.xlsx.max-profile-operations` (`OUF_ONBOARDING_FILES_XLSX_MAX_PROFILE_OPERATIONS`, default 8, range 1–64) bounds the XLSX operations per asset: each one is a new job with its own budget, and the profile worker serves one job at a time. Beyond the bound the request returns `422 ONB_PROFILE_OPERATION_LIMIT`; a replay of an existing operation is still served.
+
+The predecessor ignores both columns. On an XLSX asset with more than one operation it stops with `ONB_PROFILE_HISTORY_RECONCILIATION_REQUIRED` (closed failure); CSV and GeoPackage keep one historical operation per asset. A pending job stopped this way quarantines the asset; after the return, the HUMAN profiling recovery grants a budget per operation and resumes it. If the predecessor completes a pending XLSX operation with its historical reader, that operation keeps the historical profile (`inventoryComplete=false`, not activatable): profile again with different options or upload the file again.
+
+## Managed file intake and XLSX lexical reader (D-065)
+
+Source Onboarding validates these installation settings at startup. Capture and restore the effective values with the installation profile. Keep media types and file sizes aligned with the Gateway. All entries are non-secret.
+
+| Property | Environment | Default | Accepted values or scope |
+|---|---|---|---|
+| `ouf.onboarding.files.media-types` | OUF_ONBOARDING_FILES_MEDIA_TYPES | text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet | Comma-separated supported formats. Add application/geopackage+sqlite3 for GPKG. |
+| `ouf.onboarding.files.csv.max-bytes` | OUF_ONBOARDING_FILES_CSV_MAX_BYTES | 10485760 | 1–10485760 bytes |
+| `ouf.onboarding.files.xlsx.max-bytes` | OUF_ONBOARDING_FILES_XLSX_MAX_BYTES | 10485760 | 1–10485760 bytes |
+| `ouf.onboarding.files.gpkg.max-bytes` | OUF_ONBOARDING_FILES_GPKG_MAX_BYTES | 10485760 | 1–10485760 bytes |
+| `ouf.onboarding.files.xlsx.max-uncompressed-bytes` | OUF_ONBOARDING_FILES_XLSX_MAX_UNCOMPRESSED_BYTES | 104857600 | 1–268435456 bytes across all entries |
+| `ouf.onboarding.files.xlsx.max-entry-bytes` | OUF_ONBOARDING_FILES_XLSX_MAX_ENTRY_BYTES | 67108864 | 1–268435456 bytes in one entry |
+| `ouf.onboarding.files.xlsx.min-inflate-ratio` | OUF_ONBOARDING_FILES_XLSX_MIN_INFLATE_RATIO | 0.01 | Positive compressed / decompressed ratio, up to 1 |
+| `ouf.onboarding.files.xlsx.max-entries` | OUF_ONBOARDING_FILES_XLSX_MAX_ENTRIES | 10000 | 1–10000 ZIP entries |
+| `ouf.onboarding.files.xlsx.max-sheets` | OUF_ONBOARDING_FILES_XLSX_MAX_SHEETS | 64 | 1–64 worksheet units |
+| `ouf.onboarding.files.xlsx.max-rows` | OUF_ONBOARDING_FILES_XLSX_MAX_ROWS | 10000 | 1–10000 nonempty data rows per worksheet |
+| `ouf.onboarding.files.xlsx.max-columns` | OUF_ONBOARDING_FILES_XLSX_MAX_COLUMNS | 1024 | 1–1024 columns per worksheet |
+| `ouf.onboarding.source-time-zone` | OUF_ONBOARDING_SOURCE_TIME_ZONE | Unset | JVM IANA zone ID. A worksheet with DATETIME needs a declared zone. |
+
+After restore, verify the picker formats, upload a synthetic file at the configured limit, then read the date and DST vectors with the declared zone.
