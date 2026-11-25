@@ -117,6 +117,11 @@ paths:
     post:
       operationId: requestManagedFileProfile
       summary: Queue deterministic profiling
+      description: >-
+        For an XLSX workbook the profiling operation is identified by the asset, the reader
+        ouf.xlsx-cell-text.v1 and the effective options (declared header rows and the installation
+        time zone at request time). The same operation returns the same job; different options create
+        a new profile version. readOptions on another format returns 422 ONB_READ_OPTIONS_UNSUPPORTED.
       x-ouf-mcp-capability: ouf.managed-source.file.profile
       parameters:
         - $ref: '#/components/parameters/AssetId'
@@ -126,6 +131,15 @@ paths:
           schema:
             type: string
             minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                readOptions: {$ref: '#/components/schemas/XlsxReadOptions'}
       responses:
         '202':
           description: Profiling job accepted
@@ -776,6 +790,22 @@ components:
   schemas:
     UnitUuid: {"type":"string","format":"uuid","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}
     UnitRef: {"type":"string","maxLength":16,"pattern":"^(table|sheet|layer|collection):(0|[1-9][0-9]{0,3})$"}
+    XlsxReadOptions:
+      type: object
+      additionalProperties: false
+      required: [xlsx]
+      properties:
+        xlsx:
+          type: object
+          additionalProperties: false
+          required: [headerRows]
+          properties:
+            headerRows:
+              type: object
+              minProperties: 1
+              maxProperties: 64
+              propertyNames: {pattern: '^sheet:(0|[1-9][0-9]{0,3})$'}
+              additionalProperties: {type: integer, minimum: 1, maximum: 1048576}
     SourceUnitReference: {"type":"object","additionalProperties":false,"required":["profileId","profileVersion","unitRef","schemaHash"],"properties":{"profileId":{"$ref":"#/components/schemas/UnitUuid"},"profileVersion":{"type":"integer","minimum":1,"maximum":2147483647},"unitRef":{"$ref":"#/components/schemas/UnitRef"},"schemaHash":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}}
     UnitSummary:
       type: object

@@ -67,6 +67,16 @@ Publication carries the approved pair at `semanticMapping.targetClasses[].catego
 V47 stores each unit’s source in `ouf_onboarding.managed_file_unit_binding`, keyed by `(asset_id, unit_ref)`. The DRAFT transaction also retains the first source in `managed_file_asset.source_id`. The `managed_file_effective_binding` view resolves predecessor writes from retained selections.
 
 `ouf.onboarding.units.multiple-sources-per-asset` (`OUF_ONB_UNITS_MULTIPLE_SOURCES_PER_ASSET`) defaults to `false`. Enable it through the approved installation profile only once the rollback predecessor reads unit bindings.
+## XLSX profiling operations (D-065, D-080, task-62f)
+
+| Store | Content | Secrets | Capture | Restore |
+|---|---|---|---|---|
+| `ouf_onboarding.file_profile_job.operation_key`, `read_options` (V48) | For XLSX jobs only: `xlsx-v1:` plus the canonical SHA-256 of the effective options, and the options themselves (`reader`, declared `headerRows`, installation `timeZone` at request time). Unique per asset and operation. NULL for CSV, GeoPackage and predecessor jobs | No | Database backup of the `ouf_onboarding` schema | Restored with the schema; the worker profiles a job with its frozen options, never the current installation zone |
+
+`ouf.onboarding.files.xlsx.max-profile-operations` (`OUF_ONBOARDING_FILES_XLSX_MAX_PROFILE_OPERATIONS`, default 8, range 1–64) bounds the XLSX operations per asset: each one is a new job with its own budget, and the profile worker serves one job at a time. Beyond the bound the request returns `422 ONB_PROFILE_OPERATION_LIMIT`; a replay of an existing operation is still served.
+
+The predecessor ignores both columns. On an XLSX asset with more than one operation it stops with `ONB_PROFILE_HISTORY_RECONCILIATION_REQUIRED` (closed failure); CSV and GeoPackage keep one historical operation per asset. A pending job stopped this way quarantines the asset; after the return, the HUMAN profiling recovery grants a budget per operation and resumes it. If the predecessor completes a pending XLSX operation with its historical reader, that operation keeps the historical profile (`inventoryComplete=false`, not activatable): profile again with different options or upload the file again.
+
 ## Managed file intake and XLSX lexical reader (D-065)
 
 Source Onboarding validates these installation settings at startup. Capture and restore the effective values with the installation profile. Keep media types and file sizes aligned with the Gateway. All entries are non-secret.

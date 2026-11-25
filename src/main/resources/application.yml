@@ -30,6 +30,7 @@ ouf:
       xlsx.max-sheets: ${OUF_ONBOARDING_FILES_XLSX_MAX_SHEETS:64}
       xlsx.max-rows: ${OUF_ONBOARDING_FILES_XLSX_MAX_ROWS:10000}
       xlsx.max-columns: ${OUF_ONBOARDING_FILES_XLSX_MAX_COLUMNS:1024}
+      xlsx.max-profile-operations: ${OUF_ONBOARDING_FILES_XLSX_MAX_PROFILE_OPERATIONS:8}
     wait-max-seconds: ${OUF_ONB_WAIT_MAX_SECONDS:3600}
     handoff-retention-seconds: ${OUF_ONB_HANDOFF_RETENTION_SECONDS:86400}
     approval-challenge-ttl: PT10M

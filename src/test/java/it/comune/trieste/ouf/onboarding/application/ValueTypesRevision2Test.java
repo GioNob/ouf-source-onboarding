@@ -67,10 +67,13 @@ class ValueTypesRevision2Test {
       var xlsx=new ManagedFileProfiler().profile(bytes.toByteArray(),"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       for(int i=0;i<cells.size();i++){
         var csv=csv("code\n\""+cells.get(i)+"\"\n");
-        assertThat(xlsx.distinctCellValues().get("").get("code_"+i)).isEqualTo(csv.distinctCellValues().get("").get("code"));
+        assertThat(xlsx.distinctCellValues().get("sheet:0").get("code_"+i)).isEqualTo(csv.distinctCellValues().get("").get("code"));
       }
-      assertThat(xlsx.distinctCellValues().get("")).doesNotContainKey("nome");
-      assertThat(xlsx.sample().getFirst()).containsEntry("nome","[REDACTED]");
+      // ouf.xlsx-cell-text.v1 keys values by unit and keeps the sample inside the worksheet (task-62f).
+      assertThat(xlsx.distinctCellValues().get("sheet:0")).doesNotContainKey("nome");
+      @SuppressWarnings("unchecked") var unit=((java.util.List<java.util.Map<String,Object>>)xlsx.metadata().get("sheets")).getFirst();
+      @SuppressWarnings("unchecked") var sample=(java.util.List<java.util.Map<String,String>>)unit.get("sample");
+      assertThat(sample.getFirst()).containsEntry("nome","[REDACTED]");
     }
   }
 

@@ -81,7 +81,8 @@ public class ManagedProfileJobs {
         """).query().listOfRows();
     for(var j:candidates){
       n=now();UUID a=(UUID)j.get("asset_id"),id=(UUID)j.get("job_id");var input=asset(a);var s=session(j);
-      if(db.sql("select count(*) from ouf_onboarding.file_profile_job where asset_id=:a").param("a",a).query(Long.class).single()!=1){terminal(j,"ONB_PROFILE_HISTORY_RECONCILIATION_REQUIRED","Multiple retained profile jobs require reconciliation","UNKNOWN",quarantine);continue;}
+      // One historical operation per asset (operation_key NULL); an XLSX operation is unique per asset and key (V48).
+      if(db.sql("select count(*) from ouf_onboarding.file_profile_job where asset_id=:a and operation_key is not distinct from cast(:o as text)").param("a",a).param("o",j.get("operation_key")).query(Long.class).single()!=1){terminal(j,"ONB_PROFILE_HISTORY_RECONCILIATION_REQUIRED","Multiple retained profile jobs require reconciliation","UNKNOWN",quarantine);continue;}
       if(!Set.of("STAGED","PROFILED").contains(input.get("status"))){terminal(j,"ONB_PROFILE_CUSTODY_CHANGED","Asset is not admitted for profiling","CUSTODY_CHANGED",quarantine);continue;}
       if(j.get("input_binding_hash")==null&&number(j,"attempts")>0||j.get("input_binding_hash")!=null&&!binding(input).equals(j.get("input_binding_hash"))){
         terminal(j,"ONB_PROFILE_INPUT_RECONCILIATION_REQUIRED","Retained input binding requires reconciliation","CUSTODY_CHANGED",quarantine);continue;}
@@ -160,7 +161,8 @@ public class ManagedProfileJobs {
     expected(j,a,d.expectedVersion(),d.expectedGeneration(),d.inputBindingHash());require(j.get("input_binding_hash")==null||binding(a).equals(j.get("input_binding_hash")),"ONB_PROFILE_INPUT_RECONCILIATION_REQUIRED");var q=quarantine(assetId,job);var s=session(j);
     require(reviewHash(j,a,q).equals(d.reviewHash()),"ONB_PROFILE_STALE_REVIEW");
     require(eligible(j,q)&&(s.isEmpty()||!"ACTIVE".equals(s.get("state"))||!now().isBefore(instant(s.get("expires_at"))))&&number(j,"attempts")<=Integer.MAX_VALUE-3,"ONB_PROFILE_RECOVERY_RECONCILIATION_REQUIRED");
-    require(db.sql("select count(*) from ouf_onboarding.file_profile_job where asset_id=:a").param("a",assetId).query(Long.class).single()==1,"ONB_PROFILE_HISTORY_RECONCILIATION_REQUIRED");
+    // One retained job per operation: the historical one (NULL) or one XLSX operation (V48, task-62f).
+    require(db.sql("select count(*) from ouf_onboarding.file_profile_job where asset_id=:a and operation_key is not distinct from cast(:o as text)").param("a",assetId).param("o",j.get("operation_key")).query(Long.class).single()==1,"ONB_PROFILE_HISTORY_RECONCILIATION_REQUIRED");
     if(!s.isEmpty()&&"ACTIVE".equals(s.get("state")))db.sql("update ouf_onboarding.managed_profile_budget_session set state='EXHAUSTED' where session_id=:s and state='ACTIVE'").param("s",s.get("session_id")).update();
     UUID id=UUID.randomUUID(),decision=UUID.randomUUID();
     db.sql("""

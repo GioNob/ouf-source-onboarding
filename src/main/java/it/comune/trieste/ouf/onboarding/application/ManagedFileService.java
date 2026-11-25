@@ -183,13 +183,26 @@ public class ManagedFileService {
     if(subject==null||subject.isBlank()||!subject.equals(asset(assetId).get("uploaded_by")))
       throw new DomainFailure(HttpStatus.FORBIDDEN,"ONB_FILE_OWNER_DENIED","Managed file is not owned by this subject");
   }
-  public Map<String,Object> profile(UUID assetId,byte[] bytes,String sampleRef){
+  public Map<String,Object> profile(UUID assetId,byte[] bytes,String sampleRef){return profile(assetId,bytes,sampleRef,null);}
+  /** Options frozen by the job (null for a historical operation, profiled with the installation defaults). */
+  private ManagedFileProfiler.ReadOptions readOptions(Object stored){
+    if(stored==null)return null;
+    try{
+      var node=json.readTree(stored.toString());
+      var rows=new LinkedHashMap<String,Integer>();
+      node.path("headerRows").fields().forEachRemaining(e->rows.put(e.getKey(),e.getValue().intValue()));
+      var zone=node.hasNonNull("timeZone")?java.time.ZoneId.of(node.get("timeZone").asText()):null;
+      return new ManagedFileProfiler.ReadOptions(zone,rows);
+    }catch(com.fasterxml.jackson.core.JsonProcessingException e){throw new IllegalStateException("ONB_PROFILE_OPERATION_INVALID",e);}
+  }
+  private Map<String,Object> profile(UUID assetId,byte[] bytes,String sampleRef,ManagedFileProfiler.ReadOptions options){
     var asset=asset(assetId);
     if(((Number)asset.get("size_bytes")).longValue()!=bytes.length)
       throw invalid("ONB_FILE_SIZE_MISMATCH","Staged size does not match downloaded content");
     if(!hashes.ofBytes(bytes).equals(asset.get("content_hash")))
       throw invalid("ONB_FILE_HASH_MISMATCH","Staged content hash does not match downloaded content");
-    var result=profiler.profile(bytes,String.valueOf(asset.get("media_type")));
+    var media=String.valueOf(asset.get("media_type"));
+    var result=options==null?profiler.profile(bytes,media):profiler.profile(bytes,media,options);
     String distinct=write(result.distinctCellValues());
     return tx.execute(status->{
       db.sql("select 1 as acquired from pg_advisory_xact_lock(hashtextextended(:i,0))")
@@ -208,6 +221,61 @@ public class ManagedFileService {
           .param("a",assetId).update();
       return fileProfile(assetId,profileId);
     });
+  }
+  static final String XLSX_MEDIA_TYPE="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  @org.springframework.beans.factory.annotation.Value("${ouf.onboarding.files.xlsx.max-profile-operations:8}")
+  void maxProfileOperations(int value){if(value<1||value>64)throw new IllegalArgumentException("ouf.onboarding.files.xlsx.max-profile-operations must be between 1 and 64");maxProfileOperations=value;}
+  private int maxProfileOperations=8;
+  /** Contract ouf.extraction-unit.v1 §8.1: an XLSX operation is asset, reader version and effective options. */
+  public Map<String,Object> requestProfile(UUID assetId,String idempotencyKey,Map<String,Integer> headerRows){
+    var asset=asset(assetId);
+    boolean xlsx=XLSX_MEDIA_TYPE.equals(asset.get("media_type"));
+    if(headerRows!=null&&!xlsx)throw invalid("ONB_READ_OPTIONS_UNSUPPORTED","Read options apply to XLSX workbooks only");
+    if(!xlsx)return requestProfile(assetId,idempotencyKey);
+    if(idempotencyKey==null||idempotencyKey.isBlank())throw invalid("ONB_IDEMPOTENCY_KEY_REQUIRED","Idempotency-Key must not be blank");
+    var rows=new TreeMap<String,Integer>();
+    if(headerRows!=null){
+      if(headerRows.isEmpty()||headerRows.size()>64)throw new DomainFailure(HttpStatus.BAD_REQUEST,"ONB_READ_OPTIONS_INVALID","Declare from 1 to 64 header rows");
+      headerRows.forEach((unit,row)->{
+        if(unit==null||!unit.matches("sheet:(0|[1-9][0-9]{0,3})")||row==null||row<1||row>1048576)
+          throw new DomainFailure(HttpStatus.BAD_REQUEST,"ONB_READ_OPTIONS_INVALID","Invalid declared header row");
+        rows.put(unit,row);});
+    }
+    var zone=profiler.sourceTimeZone();
+    var options=new LinkedHashMap<String,Object>();
+    options.put("reader",it.comune.trieste.ouf.onboarding.application.xlsx.XlsxUnitReader.RULE);
+    options.put("headerRows",rows);
+    if(zone!=null)options.put("timeZone",zone.getId());
+    String operation="xlsx-v1:"+hashes.of(options);
+    String stored=write(options);
+    return tx.execute(status->{
+      db.sql("select asset_id from ouf_onboarding.managed_file_asset where asset_id=:a for update").param("a",assetId).query(UUID.class).single();
+      var exact=db.sql("select * from ouf_onboarding.file_profile_job where asset_id=:a and idempotency_key=:k").param("a",assetId).param("k",idempotencyKey).query().listOfRows();
+      if(!exact.isEmpty()){
+        var row=exact.getFirst();
+        // A replay of a predecessor job without declared rows stays that job; any other change is a new operation.
+        if(operation.equals(row.get("operation_key"))||row.get("operation_key")==null&&headerRows==null||sameDeclaration(row.get("read_options"),rows))return jobView(row);
+        throw conflict("ONB_FILE_PROFILE_IDEMPOTENCY_CONFLICT","Idempotency key used for a different profiling operation");
+      }
+      var same=db.sql("select * from ouf_onboarding.file_profile_job where asset_id=:a and operation_key=:o").param("a",assetId).param("o",operation).query().listOfRows();
+      if(!same.isEmpty())return jobView(same.getFirst());
+      // Finite operations per asset (contract §8.1): each one is a new job with its own budget.
+      long operations=db.sql("select count(*) from ouf_onboarding.file_profile_job where asset_id=:a and operation_key is not null").param("a",assetId).query(Long.class).single();
+      if(operations>=maxProfileOperations)throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_PROFILE_OPERATION_LIMIT","The workbook reached the profiling operations allowed by this installation");
+      UUID jobId=UUID.randomUUID();
+      db.sql("insert into ouf_onboarding.file_profile_job(job_id,asset_id,idempotency_key,budget_profile,operation_key,read_options) values(:i,:a,:k,'managed-profile-initial.v1',:o,cast(:r as jsonb))")
+          .param("i",jobId).param("a",assetId).param("k",idempotencyKey).param("o",operation).param("r",stored).update();
+      return profileJob(assetId,jobId);
+    });
+  }
+  /** A replay of the same key and the same declared rows is the same command, even if the installation zone changed since. */
+  private boolean sameDeclaration(Object stored,Map<String,Integer> rows){
+    if(stored==null)return false;
+    try{
+      var declared=new TreeMap<String,Integer>();
+      json.readTree(stored.toString()).path("headerRows").fields().forEachRemaining(e->declared.put(e.getKey(),e.getValue().intValue()));
+      return declared.equals(rows);
+    }catch(com.fasterxml.jackson.core.JsonProcessingException e){return false;}
   }
   public Map<String,Object> requestProfile(UUID assetId,String idempotencyKey){
     asset(assetId);if(idempotencyKey==null||idempotencyKey.isBlank())throw invalid("ONB_IDEMPOTENCY_KEY_REQUIRED","Idempotency-Key must not be blank");
@@ -231,8 +299,9 @@ public class ManagedFileService {
     return profileJobs.claim(worker,lease,this::profileQuarantine).map(row->{var out=new LinkedHashMap<>(row);out.putAll(asset((UUID)row.get("asset_id")));return out;});
   }
   public Map<String,Object> completeProfile(UUID jobId,String worker,long generation,byte[] bytes,String sampleRef){
-    var row=db.sql("select asset_id from ouf_onboarding.file_profile_job where job_id=:j").param("j",jobId).query().singleRow();UUID asset=(UUID)row.get("asset_id");
-    profileJobs.complete(jobId,worker,generation,()->profile(asset,bytes,sampleRef));return profileJob(asset,jobId);
+    var row=db.sql("select asset_id,read_options from ouf_onboarding.file_profile_job where job_id=:j").param("j",jobId).query().singleRow();UUID asset=(UUID)row.get("asset_id");
+    var options=readOptions(row.get("read_options"));
+    profileJobs.complete(jobId,worker,generation,()->profile(asset,bytes,sampleRef,options));return profileJob(asset,jobId);
   }
   public Map<String,Object> failProfile(UUID jobId,String worker,long generation,String errorCode,String detail,Duration retryAfter,boolean retryable){
     // The only runtime caller supplies the typed failure policy; arbitrary raw exception text is not persisted.
@@ -904,6 +973,6 @@ public class ManagedFileService {
     return Map.of("ontologyId",first.substring(0,at),"ontologyVersion",first.substring(at+1),"classIri",classIri);
   }
   private static String required(String value,String code){if(value==null||value.isBlank())throw invalid(code,"Required field configuration is missing");return value;}
-  private Map<String,Object> jobView(Map<String,Object> row){Map<String,Object> out=new LinkedHashMap<>(row);if("SUCCEEDED".equals(row.get("state")) && row.get("profile_id") instanceof UUID id)out.put("unitSummary",new SourceUnitProfiles(fileProfile((UUID)row.get("asset_id"),id),hashes).summary());out.put("jobId",row.get("job_id"));out.put("status","READY".equals(row.get("state"))?"QUEUED":row.get("state"));out.put("createdAt",row.get("created_at"));out.put("updatedAt",row.get("updated_at"));out.put("nextRetryAt",row.get("next_attempt_at"));out.put("resultRef",row.get("profile_id"));out.put("errorCode",row.get("error_code"));return out;}
+  private Map<String,Object> jobView(Map<String,Object> row){Map<String,Object> out=new LinkedHashMap<>(row);out.remove("operation_key");out.remove("read_options");if("SUCCEEDED".equals(row.get("state")) && row.get("profile_id") instanceof UUID id)out.put("unitSummary",new SourceUnitProfiles(fileProfile((UUID)row.get("asset_id"),id),hashes).summary());out.put("jobId",row.get("job_id"));out.put("status","READY".equals(row.get("state"))?"QUEUED":row.get("state"));out.put("createdAt",row.get("created_at"));out.put("updatedAt",row.get("updated_at"));out.put("nextRetryAt",row.get("next_attempt_at"));out.put("resultRef",row.get("profile_id"));out.put("errorCode",row.get("error_code"));return out;}
 }
 

@@ -13,11 +13,31 @@ public class ManagedFileProfiler {
   public record Profile(String format,Map<String,Object> metadata,List<ColumnProfile> columns,List<String> candidateKeys,
       List<Map<String,String>> sample,Map<String,Map<String,List<String>>> distinctCellValues) {}
 
+  /** Effective read options of one profiling operation (contract ouf.extraction-unit.v1 §8.1). */
+  public record ReadOptions(java.time.ZoneId timeZone,Map<String,Integer> headerRows) {
+    public static final ReadOptions NONE=new ReadOptions(null,Map.of());
+    public ReadOptions { headerRows=Map.copyOf(headerRows==null?Map.of():headerRows); }
+    boolean declared() { return !headerRows.isEmpty(); }
+  }
+
   private final ManagedFileFormatAdapter csv = new CsvFormatAdapter();
-  private final ManagedFileFormatAdapter xlsx = new XlsxFormatAdapter();
+  private final ManagedFileFormatAdapter xlsx;
   private final ManagedFileFormatAdapter geopackage = new GeoPackageFormatAdapter();
 
-  public Profile profile(byte[] bytes,String mediaType){if(bytes.length==0||bytes.length>MAX_BYTES)throw new IllegalArgumentException("file size outside profiling limits");return switch(mediaType){case "application/zip"->shapefile(bytes);case "application/x-msaccess","application/vnd.ms-access"->access(bytes);case "application/geopackage+sqlite3"->geopackage.profile(bytes);case "text/csv"->csv.profile(bytes);case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"->xlsx.profile(bytes);default->throw new IllegalArgumentException("unsupported media type");};}
+  /** Development and test default: no declared zone, protocol default archive limits. */
+  public ManagedFileProfiler() { this(null, it.comune.trieste.ouf.onboarding.application.xlsx.XlsxArchive.Limits.defaults()); }
+  @org.springframework.beans.factory.annotation.Autowired
+  public ManagedFileProfiler(ManagedFileContentInspector inspector) { this(inspector.sourceTimeZone(), inspector.xlsxLimits()); }
+  private final java.time.ZoneId zone;
+  ManagedFileProfiler(java.time.ZoneId zone, it.comune.trieste.ouf.onboarding.application.xlsx.XlsxArchive.Limits limits) {
+    this.zone = zone;
+    xlsx = new XlsxFormatAdapter(zone, limits);
+  }
+  /** Installation zone used when an operation is requested; null when the installation declares none. */
+  public java.time.ZoneId sourceTimeZone() { return zone; }
+
+  public Profile profile(byte[] bytes,String mediaType){return profile(bytes,mediaType,null);}
+  public Profile profile(byte[] bytes,String mediaType,ReadOptions options){if(options!=null&&options.declared()&&!"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".equals(mediaType))throw new IllegalArgumentException("read options unsupported");if(bytes.length==0||bytes.length>MAX_BYTES)throw new IllegalArgumentException("file size outside profiling limits");return switch(mediaType){case "application/zip"->shapefile(bytes);case "application/x-msaccess","application/vnd.ms-access"->access(bytes);case "application/geopackage+sqlite3"->geopackage.profile(bytes);case "text/csv"->csv.profile(bytes);case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"->options==null?xlsx.profile(bytes):xlsx.profile(bytes,options);default->throw new IllegalArgumentException("unsupported media type");};}
   private Profile shapefile(byte[] bytes){
     try(var reader=new it.comune.trieste.ouf.managed.ShapefileReader(bytes)){
       var layers=new ArrayList<Map<String,Object>>();
