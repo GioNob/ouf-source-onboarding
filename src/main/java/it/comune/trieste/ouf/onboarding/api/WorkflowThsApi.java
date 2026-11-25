@@ -31,6 +31,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class WorkflowThsApi {
   private static final int OWNER_RESPONSE_CHARS=1_048_576;
   private static final int EXPANDED_CARD_BYTES=8*1_048_576;
+  private static final int BATCH_DECISION_BYTES=60*1024;
   private static final Duration OWNER_TIMEOUT=Duration.ofSeconds(15);
   private static final String SEMANTIC_CHALLENGES="/api/trusted-human/v1/semantic-approval-challenges/";
   private record OwnerResponse(int statusCode,String body) {}
@@ -91,10 +92,11 @@ public class WorkflowThsApi {
   }
   @PostMapping("/api/{id}/{action}") public ResponseEntity<String> action(@PathVariable String flow,@PathVariable UUID id,
       @PathVariable String action,@RequestBody byte[] body,HttpServletRequest request)throws Exception{
-    String access=token(request);if(body.length>("onboarding".equals(flow)&&"changes".equals(action)?52*1024:4096))throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
-    JsonNode proposed=json.readTree(body);
-    if(proposed==null||!proposed.isObject())throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+    String access=token(request);
     if("onboarding".equals(flow)){
+      if(body.length>("changes".equals(action)?52*1024:4096))throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
+      JsonNode proposed=json.readTree(body);
+      if(proposed==null||!proposed.isObject())throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
       boolean budget="budget".equals(action);
       if(!Set.of("confirm","reject","changes","activate","resume","budget").contains(action)||proposed.size()!=(budget?7:"resume".equals(action)?4:"changes".equals(action)?3:2)
           ||!proposed.hasNonNull("configurationHash")||!proposed.has("expectedVersion")
@@ -140,15 +142,28 @@ public class WorkflowThsApi {
       }
     }else{
       if(!"semantic".equals(flow)||!Set.of("decision","publish").contains(action))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+      var current=send(HttpRequest.newBuilder(owner(flow,id,"")).GET(),access);
+      if(current.statusCode()!=200)return upstream(current);
+      var card=json.readTree(current.body());
+      boolean batch=isReviewBatch(card);
+      if(batch&&("publish".equals(action)||body.length>BATCH_DECISION_BYTES))throw invalidReview();
+      if(!batch&&body.length>4096)throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
+      JsonNode proposed;
+      if(batch){
+        try{proposed=json.readerFor(JsonNode.class).with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readValue(body);}
+        catch(com.fasterxml.jackson.core.JsonProcessingException malformed){throw invalidReview();}
+      }else proposed=json.readTree(body);
+      if(proposed==null||!proposed.isObject())throw invalidReview();
       if("decision".equals(action)){
-        if(proposed.size()!=2||!proposed.hasNonNull("expectedContentHash")||!proposed.hasNonNull("decision")
-            ||!proposed.get("expectedContentHash").isTextual()||!proposed.get("expectedContentHash").asText().matches("[a-f0-9]{64}")
-            ||!proposed.get("decision").isTextual()||!Set.of("APPROVED","REJECTED").contains(proposed.get("decision").asText()))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
-        var current=send(HttpRequest.newBuilder(owner(flow,id,"")).GET(),access);
-        if(current.statusCode()!=200)return upstream(current);
-        if(!Objects.equals(proposed.get("expectedContentHash").asText(),json.readTree(current.body()).path("target_content_hash").asText()))
+        if(!proposed.path("expectedContentHash").isTextual()||!proposed.get("expectedContentHash").asText().matches("[a-f0-9]{64}"))throw invalidReview();
+        if(batch){
+          var items=proposed.path("items");
+          var count=card.path("itemCount");
+          if(!count.isIntegralNumber()||!count.canConvertToInt()||!items.isArray()||items.size()!=count.intValue())throw invalidReview();
+        }else if(proposed.size()!=2||!Set.of("APPROVED","REJECTED").contains(proposed.path("decision").asText("")))throw invalidReview();
+        if(!proposed.get("expectedContentHash").equals(card.path("target_content_hash")))
           throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,"THS_REVIEW_STALE_CARD");
-        body=json.writeValueAsBytes(Map.of("decision",proposed.get("decision").asText()));
+        if(!batch)body=json.writeValueAsBytes(Map.of("decision",proposed.get("decision").asText()));
       }else if(proposed.size()!=2||!proposed.hasNonNull("approvalDecisionId")||!proposed.hasNonNull("contentHash")
           ||!proposed.get("approvalDecisionId").isTextual()||!proposed.get("approvalDecisionId").asText().matches("[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}")
           ||!proposed.get("contentHash").isTextual()||!proposed.get("contentHash").asText().matches("[a-f0-9]{64}"))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
@@ -182,12 +197,21 @@ public class WorkflowThsApi {
       throw failure;
     }
     String body=received.toString(StandardCharsets.UTF_8);
-    if(body.length()>OWNER_RESPONSE_CHARS && !(response.statusCode()==200 && (onboardingCard||semanticCard&&isValueMapCard(body))))
+    if(body.length()>OWNER_RESPONSE_CHARS && !(response.statusCode()==200 && (onboardingCard||semanticCard&&isExpandedSemanticCard(body))))
       throw responseTooLarge();
     return new OwnerResponse(response.statusCode(),body);
   }
-  private boolean isValueMapCard(String body){
-    try{return "VALUE_MAP".equals(json.readTree(body).path("artifact_type").textValue());}
+  private static ResponseStatusException invalidReview(){
+    return new ResponseStatusException(HttpStatus.BAD_REQUEST,"THS_REVIEW_INVALID");
+  }
+  private static boolean isReviewBatch(JsonNode card){
+    return "REVIEW_BATCH".equals(card.path("kind").textValue());
+  }
+  private boolean isExpandedSemanticCard(String body){
+    try{
+      var card=json.readTree(body);
+      return isReviewBatch(card)||"VALUE_MAP".equals(card.path("artifact_type").textValue());
+    }
     catch(com.fasterxml.jackson.core.JsonProcessingException failure){return false;}
   }
   private static ResponseStatusException responseTooLarge(){
