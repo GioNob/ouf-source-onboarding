@@ -72,7 +72,7 @@ public class PermissionThsSecurity {
       ClientRegistrationRepository registrations, AuthenticationSuccessHandler thsLoginSuccess) throws Exception {
     http.securityMatcher("/trusted-human/authorization/**","/trusted-human/managed-files/**","/trusted-human/resolution/**",
         "/trusted-human/onboarding/**","/trusted-human/semantic/**","/trusted-human/ingestion-run-recovery/**",
-        "/oauth2/**","/login/oauth2/**");
+        AnalysisRenewalThs.PATH + "/**", "/oauth2/**","/login/oauth2/**");
     http.authorizeHttpRequests(a -> a.requestMatchers("/oauth2/**","/login/oauth2/**").permitAll().anyRequest().authenticated());
     var resolver = new DefaultOAuth2AuthorizationRequestResolver(registrations,"/oauth2/authorization");
     resolver.setAuthorizationRequestCustomizer(OAuth2AuthorizationRequestCustomizers.withPkce());
@@ -155,7 +155,9 @@ public class PermissionThsSecurity {
           }
           r.setAttribute(ServletAuthorization.TRUSTED_PRINCIPAL, principal);
           r.setAttribute("ouf.permissionThsSession", Boolean.TRUE);
-          if ("GET".equals(r.getMethod()) && r.getRequestURI().contains("/api/"))
+          if ("GET".equals(r.getMethod()) && (r.getRequestURI().contains("/api/") ||
+              r.getRequestURI().startsWith(r.getContextPath() + AnalysisRenewalThs.PATH + "/")
+                  && "application/json".equals(r.getHeader("Accept"))))
             s.setHeader("X-OUF-Review-Actor", draftBinding(principal.context()));
         } catch (BadJwtException | IllegalArgumentException | OAuth2AuthenticationException invalidIdentity) {
           ThsErrors.respond(r, s, 403);

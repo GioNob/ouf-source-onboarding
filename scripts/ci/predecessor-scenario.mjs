@@ -214,7 +214,7 @@ export async function writeCandidate(fixture, {legacyReview, parent, file}) {
   return {review, child, readiness, typed, mapping};
 }
 
-export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child, readiness, typed, mapping}, predecessorHasDistinctValues) {
+export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}, {review, child, readiness, typed, mapping}, predecessorHasDistinctValues, predecessorIsDeployedLine = false) {
   assert.deepEqual((await version(fixture, typed)).configuration.semanticMapping, mapping);
   const original = await version(fixture, legacy);
   assert.equal(original.configuration_hash, legacyReview.configurationHash);
@@ -240,9 +240,10 @@ export async function verifyReturn(fixture, {legacy, legacyReview, parent, file}
   // task-52c derives the proposal requirement from the retained configuration (nothing is stored), so a
   // predecessor replays the same draft as DRAFT_READY without the derived fields.
   const derived = new Set(['executionProposalRequired', 'missingSections']);
-  const replayed = Object.fromEntries(Object.entries(child)
+  // D-080 (sprint-03 task-58a): the deployed line (#81, with 52c and 52d) replays the identical draft.
+  const replayed = predecessorIsDeployedLine ? child : Object.fromEntries(Object.entries(child)
     .filter(([key]) => !derived.has(key) && (predecessorHasDistinctValues || !additive.has(key))));
-  if (replayed.reasonCode === 'EXECUTION_PROPOSAL_REQUIRED') replayed.reasonCode = 'DRAFT_READY';
+  if (!predecessorIsDeployedLine && replayed.reasonCode === 'EXECUTION_PROPOSAL_REQUIRED') replayed.reasonCode = 'DRAFT_READY';
   assert.deepEqual(await createDraft(fixture, file, 'PERSONAL', 'create-child'), replayed);
   const prepared = await prepare(fixture, child, 'return-review');
   assert.equal(prepared.state, 'IN_REVIEW');

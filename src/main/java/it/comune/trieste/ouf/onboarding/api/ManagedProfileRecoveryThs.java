@@ -75,11 +75,14 @@ public class ManagedProfileRecoveryThs {
     }catch(Exception unavailable){pending.cancel(true);if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"THS_PROFILE_OWNER_UNAVAILABLE");}
   }
   static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]>{
+    private final int maximumBytes;
+    BoundedBody(){this(65536);}
+    BoundedBody(int maximumBytes){this.maximumBytes=maximumBytes;}
     private final CompletableFuture<byte[]> result=new CompletableFuture<>();private final ByteArrayOutputStream bytes=new ByteArrayOutputStream();private Flow.Subscription subscription;
     @Override public CompletionStage<byte[]> getBody(){return result;}
     @Override public void onSubscribe(Flow.Subscription s){subscription=s;s.request(1);}
     @Override public void onNext(List<ByteBuffer> buffers){
-      for(var buffer:buffers){if(buffer.remaining()>65536-bytes.size()){subscription.cancel();result.completeExceptionally(new IOException("THS_PROFILE_RESPONSE_LIMIT"));return;}
+      for(var buffer:buffers){if(buffer.remaining()>maximumBytes-bytes.size()){subscription.cancel();result.completeExceptionally(new IOException("THS_PROFILE_RESPONSE_LIMIT"));return;}
         byte[] part=new byte[buffer.remaining()];buffer.get(part);bytes.writeBytes(part);}subscription.request(1);
     }
     @Override public void onError(Throwable error){result.completeExceptionally(new IOException("THS_PROFILE_OWNER_UNAVAILABLE"));}

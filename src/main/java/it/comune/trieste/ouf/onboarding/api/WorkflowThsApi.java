@@ -42,11 +42,15 @@ public class WorkflowThsApi {
   public WorkflowThsApi(OAuth2AuthorizedClientService clients,ObjectMapper json,
       @Value("${ouf.workflow.ths.gateway-base-url}") String baseUrl){
     this.clients=clients;this.json=json;
-    gateway=URI.create(baseUrl);
+    gateway=gatewayOrigin(baseUrl);
+  }
+  static URI gatewayOrigin(String baseUrl){
+    URI gateway=URI.create(baseUrl);
     if(gateway.getHost()==null||gateway.getRawUserInfo()!=null||gateway.getRawQuery()!=null||gateway.getRawFragment()!=null
         ||!(gateway.getPath().isEmpty()||"/".equals(gateway.getPath()))
         ||!("https".equals(gateway.getScheme())||"http".equals(gateway.getScheme())&&Set.of("localhost","127.0.0.1").contains(gateway.getHost())))
       throw new IllegalArgumentException("THS_WORKFLOW_GATEWAY_INVALID");
+    return gateway;
   }
   private URI owner(String flow,UUID id,String suffix){
     String path=switch(flow){case "onboarding"->"/api/trusted-human/v1/approval-challenges/"+id+"/review";

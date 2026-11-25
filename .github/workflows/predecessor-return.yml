@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       predecessor:
-        description: Deployed predecessor commit (abbreviated or full SHA)
+        description: 'Sorgente, non governato. Seleziona matrix per tutti i predecessori storici oppure indica un singolo SHA.'
         type: string
-        default: '82aabaa'
+        default: matrix
         required: true
 
 permissions:
@@ -16,10 +16,23 @@ permissions:
 
 jobs:
   predecessor-return:
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
-        predecessor: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.predecessor) || '["a54de876","9eeff596","82aabaa"]') }}
+        predecessor: >-
+          ${{ fromJSON(github.event_name != 'workflow_dispatch' && '["governed"]' ||
+                      inputs.predecessor == 'matrix' && '["20e90de2","a54de876","9eeff596","82aabaa"]' ||
+                      format('[{0}]', toJSON(inputs.predecessor))) }}
+    # ONB-58P-01 / D-080: immagine governata di Onboarding #81 in esercizio (DN-L1-4).
+    env:
+      PREDECESSOR_COMMIT: '20e90de2d8e6aee541243de2abba5a235adb1def'
+      PREDECESSOR_RUN: '45386515847'
+      PREDECESSOR_ARTIFACT: '14917601146'
+      PREDECESSOR_ZIP_SHA256: '79cf75390d5ba9d22549d2354fd0ba2d9a5ca967b2e82ff767377142f52ff56e'
+      PREDECESSOR_IMAGE_ID: 'sha256:cb536c8a105d1e7797a810ad447aed64da76fe9a9cf2a6c572407ae0851c9084'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     services:
@@ -41,9 +54,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Build both revisions and exercise the return on candidate data
+      - name: 'Verify and load the governed image of Onboarding #81'
+        if: github.event_name != 'workflow_dispatch'
+        id: governed
         env:
-          PREDECESSOR: ${{ matrix.predecessor }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/predecessor-image.py >> "$GITHUB_OUTPUT"
+      - name: Build the candidate and exercise the return on candidate data
+        env:
+          PREDECESSOR_MODE: ${{ github.event_name == 'workflow_dispatch' && 'source' || 'governed' }}
+          PREDECESSOR: ${{ github.event_name == 'workflow_dispatch' && matrix.predecessor || env.PREDECESSOR_COMMIT }}
+          LOADED_PREDECESSOR_IMAGE: ${{ steps.governed.outputs.image }}
           CI_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
           OUF_ONB_DB_PASSWORD: local-ci-only
         run: bash scripts/ci/predecessor-return.sh
