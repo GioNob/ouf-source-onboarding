@@ -10,7 +10,7 @@ final class ManagedUnitRevision {
   /** Replace the bytes of a selected sheet/layer only while its approved interpretation and key still hold. */
   static void replace(Map<String,Object> config,Map<String,Object> base,Map<String,Object> oldProfile,
       SourceUnitProfiles.Unit from,Map<String,Object> asset,SourceUnitProfiles.Unit to,SourceUnitProfiles.Reference pin,
-      int version,List<ManagedCsvRevision.NewColumn> newColumns) {
+      int version,List<ManagedCsvRevision.NewColumn> newColumns,AcquisitionLimits acquisitionLimits) {
     if (!from.ready() || !to.ready() || !from.kind().equals(to.kind()) || !from.readParameters().equals(to.readParameters())
         || !Objects.equals(from.geometry(false),to.geometry(false)) || !from.declared().equals(to.declared()))
       throw fail(HttpStatus.CONFLICT,"ONB_UNIT_SCHEMA_CHANGED");
@@ -49,10 +49,10 @@ final class ManagedUnitRevision {
       if(was==null || next==null || !List.of("name","role","nativeType","dataType").stream().allMatch(k->was.get(k).equals(next.get(k))))
         throw fail(HttpStatus.CONFLICT,"ONB_UNIT_SCHEMA_CHANGED");
     }
-    long rows=((Number)to.evidence().get(to.layer()?"featureCount":"rows")).longValue();
-    if (!(execution.get("maxRows") instanceof Number maxRows) || rows>maxRows.longValue()
-        || !(execution.get("maxColumns") instanceof Number maxColumns) || after.size()>maxColumns.longValue())
-      throw fail(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_REVISION_EXECUTION_LIMIT_EXCEEDED");
+    var measures=acquisitionLimits.unitMeasures(to.kind(),to.evidence(),to.columns().size());
+    if (!execution.containsKey("maxRows") || !execution.containsKey("maxColumns")
+        || measures.rows().observed()==null || !measures.withinInstallation()) throw limitExceeded();
+    var replacement=measures.replacement(execution,ManagedUnitRevision::limitExceeded);
 
     var decisions=newColumns==null?List.<ManagedCsvRevision.NewColumn>of():newColumns;
     var unique=new ArrayList<>(to.candidates());
@@ -65,7 +65,12 @@ final class ManagedUnitRevision {
     selection.put("unitProfileRef",pin.asMap());
     runtime.put("unitRef",to.ref());
     execution.put("unitRef",to.ref());
+    execution.putAll(replacement);
     bindAsset(selection,runtime,execution,bundle,asset,pin.profileId().toString(),version);
+  }
+
+  private static DomainFailure limitExceeded() {
+    return fail(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_REVISION_EXECUTION_LIMIT_EXCEEDED");
   }
 
   private static Map<String,Map<String,Object>> index(SourceUnitProfiles.Unit unit){

@@ -185,7 +185,7 @@ class ManagedPreviewPagingTest {
   @Test void f1_01_csvProfileAndColumnsFingerprints() {
     var raw = new ManagedFileProfiler().profile("id;email\n1;a@example.test\n2;\n".getBytes(java.nio.charset.StandardCharsets.UTF_8), "text/csv");
     var hashes = new CanonicalHash(json);
-    assertThat(hashes.of(json.convertValue(raw, Map.class))).isEqualTo("sha256:37e0267ca01560f86593964698f3927a72ce97d4badb9f609aeba7a8c34a6fb8");
+    assertThat(hashes.of(json.convertValue(raw, Map.class))).isEqualTo("sha256:6794ebaf11a479b52fc0607d280f6329788d34bb693ce96790a2e1fb5c1ed30c");
     var preview = new LinkedHashMap<String,Object>();
     preview.put("assetId", UUID.fromString("00000000-0000-4000-8000-000000000001"));
     preview.put("profileId", UUID.fromString("00000000-0000-4000-8000-000000000002"));

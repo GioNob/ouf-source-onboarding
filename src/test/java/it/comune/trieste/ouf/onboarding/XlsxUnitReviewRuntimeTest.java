@@ -54,7 +54,9 @@ class XlsxUnitReviewRuntimeTest {
     return files.completeProfile(job,"test",((Number)lease.get("generation")).longValue(),bytes,"object://samples/fixture");
   }
 
-  @Test @SuppressWarnings("unchecked") void f62f_11_realSheetReachesCompiledProposalAndThsCard() throws Exception {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+  @SuppressWarnings("unchecked") void f62f_11_realSheetReachesCompiledProposalAndThsCard(boolean restrict) throws Exception {
     byte[] bytes=XlsxProfileOperationRuntimeTest.workbook();
     String source="xlsx-review";
     UUID asset=register(bytes);
@@ -79,7 +81,7 @@ class XlsxUnitReviewRuntimeTest {
         "policyRef","urn:fixture:identity","governedIdentity",identity),"materialization",Map.of("policyRef","urn:fixture:authority",
         "properties",List.of(materialized),"bitemporalProperties",List.of(),"checkpointInterval",1)));
     var proposal=new ManagedFileExecutionProposal.Proposal(List.of(adopted),adopted.publicationSetId(),udp,
-        new ManagedFileExecutionProposal.Limits(100,2,1000),"ouf.managed-unit-execution-proposal.v1");
+        restrict ? new ManagedFileExecutionProposal.Limits(100,2,1000) : null,"ouf.managed-unit-execution-proposal.v1");
     var mapper=new PrincipalContext(SUBJECT,TENANT,PrincipalContext.ActorType.HUMAN,"test-mcp","test-acr","https://issuer.example","test-audience",
         Set.of(ManagedOnboardingReviewService.PREPARE,ManagedOnboardingReviewService.READ,"ouf.managed-source.onboarding.create","ouf.onboarding.configuration.write"),
         new PrincipalContext.IdentityClaims(Set.of(),"test-acr",Set.of(),null));
@@ -95,7 +97,17 @@ class XlsxUnitReviewRuntimeTest {
     assertThat(runtime.get("readParameters")).isEqualTo(unit.get("readParameters"));
     // D-081: the THS card shows the worksheet, its header row, date system, zone and cell rule.
     var card=reviews.humanCard(mapper,UUID.fromString(String.valueOf(review.get("challengeId"))));
-    var file=(Map<String,Object>)((Map<String,Object>)card.get("reviewSnapshot")).get("file");
+    var snapshot=(Map<String,Object>)card.get("reviewSnapshot");
+    var limits=Map.of("maxRows",restrict?100:103,"maxColumns",restrict?2:10,"maxCellChars",restrict?1000:1_000_000);
+    assertThat(execution).containsAllEntriesOf(limits);
+    assertThat(snapshot.get("LIMITS")).isEqualTo(limits);
+    var basis=(Map<String,Map<String,Object>>)snapshot.get("LIMITS_BASIS");
+    assertThat(basis.get("maxRows")).containsEntry("observed",3).containsEntry("ceiling",103);
+    assertThat(basis.get("maxColumns")).containsEntry("observed",2).containsEntry("ceiling",10);
+    assertThat(basis.get("maxCellChars")).containsEntry("observed",null).containsEntry("ceiling",1_000_000);
+    limits.forEach((key,value)->assertThat(basis.get(key)).containsEntry("effective",value)
+        .containsEntry("origin",restrict?"RESTRICTED":"DERIVED"));
+    var file=(Map<String,Object>)snapshot.get("file");
     assertThat(file).containsEntry("format","XLSX").containsEntry("rows",3).containsEntry("columns",2);
     assertThat((String)file.get("unitDescription")).contains("Foglio «Edicole»").contains("riga 1").contains("sistema 1900")
         .contains("Europe/Rome").contains("ouf.xlsx-cell-text.v1");

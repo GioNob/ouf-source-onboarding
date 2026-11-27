@@ -275,11 +275,21 @@ paths:
                     candidateAction: {enum: [WITHDRAW, RESTART_DRAFT]}
                     executionProposal:
                       oneOf:
-                        - {$ref: '../docs/contracts/managed-file-execution-proposal.schema.json'}
+                        - allOf:
+                            - {$ref: '#/components/schemas/ManagedExecutionFields'}
+                          unevaluatedProperties: false
                         - {$ref: '#/components/schemas/ManagedUnitExecutionProposal'}
       responses:
         '200': {description: Prepared review receipt}
         '409': {description: ONB_UNIT_PROFILE_CHANGED or ONB_UNIT_SCHEMA_CHANGED or ONB_UNIT_SELECTION_CHANGED}
+        '422':
+          description: >-
+            ONB_ACQUISITION_LIMIT_BELOW_PROFILE identifies the limit, observed value and ceiling.
+            ONB_ACQUISITION_LIMIT_INSTALLATION_EXCEEDED reports the limit, observed value and installationMaximum.
+            ONB_GOVERNED_IDENTITY_INVALID identifies the violated constraint and its path.
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
         default: {$ref: '#/components/responses/Problem'}
   /managed-file-mcp/preview:
     servers: [{url: /api/internal/v1/onboarding}]
@@ -815,11 +825,16 @@ components:
         readyUnits: {type: integer, minimum: 0}
         singleReadyUnitRef: {$ref: '#/components/schemas/UnitRef'}
     ManagedUnitExecutionProposal:
-      type: object
-      additionalProperties: false
-      required: [contract, semanticBindings, semanticPublicationSetRef, udp, limits]
+      allOf:
+        - {$ref: '#/components/schemas/ManagedExecutionFields'}
+      required: [contract]
       properties:
         contract: {const: ouf.managed-unit-execution-proposal.v1}
+      unevaluatedProperties: false
+    ManagedExecutionFields:
+      type: object
+      required: [semanticBindings, semanticPublicationSetRef, udp]
+      properties:
         semanticBindings: {$ref: '../docs/contracts/managed-file-execution-proposal.schema.json#/properties/semanticBindings'}
         semanticPublicationSetRef: {$ref: '../docs/contracts/managed-file-execution-proposal.schema.json#/properties/semanticPublicationSetRef'}
         udp: {$ref: '../docs/contracts/managed-file-execution-proposal.schema.json#/properties/udp'}
@@ -1151,6 +1166,10 @@ components:
         metadata:
           type: object
           properties:
+            maxCellChars:
+              type: integer
+              minimum: 0
+              description: Maximum raw CSV data-cell length in UTF-16 units, excluding the header. Absent for unmeasured profiles.
             layers:
               type: array
               items:

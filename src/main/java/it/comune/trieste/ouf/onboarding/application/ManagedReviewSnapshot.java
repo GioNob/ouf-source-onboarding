@@ -11,7 +11,7 @@ final class ManagedReviewSnapshot {
   static List<?> list(Object value){return value instanceof List<?> items?items:List.of();}
   static Map<?,?> child(Map<?,?> map,String key){return object(map.get(key));}
 
-  static Map<String,Object> build(Map<?,?> config,Map<?,?> asset,Map<?,?> profile,Object owner,Object name){
+  static Map<String,Object> build(Map<?,?> config,Map<?,?> asset,Map<?,?> profile,Object owner,Object name,AcquisitionLimits acquisitionLimits){
     var extraction=child(config,"extractionProfile");
     var runtime=child(extraction,"runtime");
     var mapping=child(config,"semanticMapping");
@@ -114,13 +114,12 @@ final class ManagedReviewSnapshot {
     var file=new LinkedHashMap<String,Object>();
     file.put("name",asset.get("display_name"));file.put("assetId",asset.get("asset_id"));
     file.put("size",asset.get("size_bytes"));file.put("format",profile.get("format"));
-    file.put("rows",child(profile,"metadata").get("rows"));
-    if(file.get("rows")==null)file.put("rows",profile.get("rowCount")!=null?profile.get("rowCount"):profile.get("featureCount"));
+    var measures=acquisitionLimits.measures(profile);
+    file.put("rows",measures.rows().observed());
     file.put("columns",fields.size());
     if("SHEET".equals(runtime.get("unitKind"))){
       var parameters=child(child(runtime,"readParameters"),"xlsx");
       var zone=parameters.get("timeZone");
-      file.put("rows",profile.get("rows"));
       file.put("unitDescription","Foglio «"+parameters.get("sheet")+"». L’intestazione è alla riga "+parameters.get("headerRow")
           +". Le date usano il sistema "+parameters.get("dateSystem")+" e il fuso "+(zone==null?"non dichiarato":zone)
           +". La regola "+parameters.get("cellText")+" legge il valore salvato delle formule.");
@@ -145,6 +144,12 @@ final class ManagedReviewSnapshot {
     }
     if(!definitions.isEmpty())snapshot.put("DATATYPE",definitions);
     snapshot.put("FIELD",fields);snapshot.put("IDENTITY",identity);snapshot.put("SEMANTIC",semantics);snapshot.put("LIMITS",limits);
+    var basis=new LinkedHashMap<String,Object>();
+    for(var measure:measures.ordered()){
+      if(limits.get(measure.limit()) instanceof Number effective)
+        basis.put(measure.limit(),measure.basis(effective.intValue()));
+    }
+    snapshot.put("LIMITS_BASIS",basis);
     return snapshot;
   }
   static List<?> reviewBindings(List<?> bindings){

@@ -12,6 +12,12 @@ Envelope and decoding failures return HTTP 422 with `ONB_REVIEW_ARGUMENTS_INVALI
 
 When `source.onboarding.read` returns `IN_REVIEW` with `challengeExpired=true`, follow the returned `nextAction`. Send `review.prepare` for that version and current lock with a fresh command key and omit `executionProposal`. Concurrent identical requests return the same replacement. Opening the new URL displays the frozen candidate. One explicit HUMAN click confirms it. V42 retains both challenge IDs and the actor. A replay of an earlier command reads current progress.
 
+## Managed file acquisition limits
+
+The frozen review stores effective values in `LIMITS`. Feedback and revision differences use these same targets. For each explicit limit, `LIMITS_BASIS` records its effective value, observed count (null for an unmeasured cell), ceiling, installation maximum, percentage and minimum headroom at freeze time. The Italian card identifies derived and restricted limits. A value above the current ceiling also appears in the warnings. A frozen card without a basis keeps the historical numeric display.
+
+A replacement CSV within its parent's effective limits retains them. If a measured dimension outgrows the parent, Onboarding proposes all three ceilings from the replacement profile for human review. A measurement above an installation maximum produces the revision finding `EXECUTION_LIMIT_EXCEEDED`. Ingestion enforces the approved limits before delivering records.
+
 ## Conditional owner observation
 
 The [owner observation contract](../contracts/onboarding-managed-mcp-observation-v1.json) publishes the closed vocabularies for `workflowState`, `reasonCode` and `allowedActions`. Existing fields are still available. Actions describe eligibility on the observed version. Commands recheck authorization, versions and command-specific input. MCP owns the `next` block.

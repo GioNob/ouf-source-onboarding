@@ -57,6 +57,9 @@ class ManagedOnboardingReviewRuntimeTest {
     UUID asset=(UUID)files.registerOwned(null,"object://fixture/edicole.csv",hashes.ofBytes(csv),"text/csv",
         csv.length,human.subject(),"retention://test",tenant).get("asset_id");
     UUID profile=(UUID)files.profile(asset,csv,"object://fixture/edicole-sample.json").get("profile_id");
+    var retained=files.fileProfile(asset,profile);
+    var preview=files.previewProfile(asset,profile,tenant,human.subject());
+    for(var result:List.of(retained,preview))assertThat(((Map<?,?>)result.get("metadata")).get("maxCellChars")).isEqualTo(7);
     var fields=List.of(new ManagedFileService.FieldDecision("name","INCLUDE","OPEN",property,"IDENTITY",null,null,null),
         new ManagedFileService.FieldDecision("unused","EXCLUDE","OPEN",null,null,null,null,null));
     var refs=List.of(semanticId+"@"+adopted.semanticVersion());
@@ -73,8 +76,7 @@ class ManagedOnboardingReviewRuntimeTest {
     var udp=Map.<String,Object>of("resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1",
         "policyRef","urn:fixture:identity","governedIdentity",policy),"materialization",Map.of("policyRef","urn:fixture:authority",
         "properties",List.of(materialized),"bitemporalProperties",List.of(),"checkpointInterval",1));
-    var proposal=new ManagedFileExecutionProposal.Proposal(List.of(adopted),adopted.publicationSetId(),udp,
-        new ManagedFileExecutionProposal.Limits(100,2,1000));
+    var proposal=new ManagedFileExecutionProposal.Proposal(List.of(adopted),adopted.publicationSetId(),udp,null);
     var mapper=principal(tenant,human.subject());
     var command=new ManagedOnboardingReviewService.Prepare(source,version,0,"review:edicole",proposal);
     return new Governed(mapper,command,reviews.prepare(mapper,command,"prepare"));
@@ -278,8 +280,8 @@ class ManagedOnboardingReviewRuntimeTest {
     assertThat(required.required("code").asText()).isEqualTo("ONB_EXECUTION_PROPOSAL_REQUIRED");
     assertThat(required.required("missingSections")).isEqualTo(missing);
     var rule=Map.of("id","r","signalIds",List.of(signals.getFirst().get("id")),"assertionRef","urn:fixture:rule");
-    var identity=Map.of("ref","urn:policy","version","1","sourceId",source,"tenantId",tenant,"canonicalClass",cls,
-        "allowAutoNew",false,"maxCandidates",5,"signals",signals,"sufficientRules",List.of(rule));
+    var identity=new LinkedHashMap<String,Object>(Map.of("ref","urn:policy","version","1","sourceId",source,"tenantId",tenant,"canonicalClass",cls,
+        "allowAutoNew",false,"maxCandidates",5,"signals",signals,"sufficientRules",List.of(rule)));
     var udp=Map.<String,Object>of("resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1","policyRef","urn:policy","governedIdentity",identity),
         "materialization",Map.of("policyRef","urn:authority","checkpointInterval",1,"properties",properties,"bitemporalProperties",List.of()));
     var limits=new ManagedFileExecutionProposal.Limits(100,18,1000);
@@ -317,6 +319,32 @@ class ManagedOnboardingReviewRuntimeTest {
       prepare.put("onboardingVersionId",corrected.required("onboardingVersionId").asText());
       prepare.put("commandKey","prepare-corrected");
     }else{
+      String identityPath="/executionProposal/udp/resolution/governedIdentity";
+      identity.put("signals",List.of(signals.get(1))); // Only the official name has a signal.
+      var incomplete=ownerPost(http,"review-prepare",prepare,422);
+      var missingIds=List.of("urn:fixture:POIID","urn:fixture:fullAddress");
+      assertThat(incomplete.required("constraint").asText()).isEqualTo("SIGNALS_INCOMPLETE");
+      assertThat(incomplete.required("path").asText()).isEqualTo(identityPath+"/signals");
+      assertThat(incomplete.required("propertyCount").intValue()).isEqualTo(2);
+      assertThat(incomplete.required("propertyIris")).isEqualTo(runtimeJson.valueToTree(missingIds));
+      assertThat(incomplete.required("expectedSignals")).isEqualTo(runtimeJson.valueToTree(missingIds.stream()
+          .map(id->Map.of("id",id,"semanticRef",id+"@"+set,"comparator","TEXT_V1")).toList()));
+      identity.put("signals",signals);
+      identity.put("sufficientRules",List.of(Map.of("id","r","signalIds",List.of("dato-sintetico"),"assertionRef","urn:fixture:rule")));
+      var badRule=ownerPost(http,"review-prepare",prepare,422);
+      assertThat(badRule.required("constraint").asText()).isEqualTo("RULE_MEMBERS");
+      assertThat(badRule.required("path").asText()).isEqualTo(identityPath+"/sufficientRules/0/signalIds");
+      assertThat(badRule.required("ruleIds")).isEqualTo(runtimeJson.valueToTree(List.of("r")));
+      for(var problem:List.of(incomplete,badRule)){
+        assertThat(problem.required("code").asText()).isEqualTo("ONB_GOVERNED_IDENTITY_INVALID");
+        assertThat(problem.required("detail").asText()).isEqualTo("ONB_GOVERNED_IDENTITY_INVALID");
+        assertThat(problem.toString()).doesNotContain("dato-sintetico");
+      }
+      assertThat(onboarding.version(source,version)).containsEntry("state","DRAFT").containsEntry("lock_version",0L);
+      for(String table:List.of("managed_onboarding_review","approval_challenge"))
+        assertThat(db.sql("select count(*) from ouf_onboarding."+table).query(Long.class).single()).isZero();
+      verifyNoInteractions(registryReader);
+      identity.put("sufficientRules",List.of(rule)); // The corrected command keeps prepare-poi.
       when(registryReader.resolve(anyString(),anyString(),eq(set))).thenAnswer(call->Map.of("semantic_id",call.getArgument(0),
           "semantic_version","1","publication_set_id",set,"revision_id",call.getArgument(1),
           "artifact_type",cls.equals(call.getArgument(0))?"CLASS":"PROPERTY"));
@@ -864,6 +892,12 @@ class ManagedOnboardingReviewRuntimeTest {
     registry.publish(semanticId,"1.1.0","Seconda");
     assertThat(registry.snapshots.get(registry.active)).isNotEqualTo(originalBytes);
     assertThat(reviews.prepare(mapper,command,"retry")).isEqualTo(review);
+    var original=command.executionProposal();
+    var changed=new ManagedFileExecutionProposal.Proposal(original.semanticBindings(),original.semanticPublicationSetRef(),
+        original.udp(),new ManagedFileExecutionProposal.Limits(101,null,null));
+    var reused=new ManagedOnboardingReviewService.Prepare(command.sourceId(),command.onboardingVersionId(),
+        command.expectedVersion(),command.commandKey(),changed);
+    assertThatThrownBy(()->reviews.prepare(mapper,reused,"retry")).hasMessage("ONB_REVIEW_COMMAND_CONFLICT");
     var card=reviews.humanCard(mapper,(UUID)review.get("challengeId"));
     var config=(Map<?,?>)card.get("configuration");
     assertThat(((Map<?,?>)config.get("semanticMapping")).get("semanticRefs")).isEqualTo(refs);

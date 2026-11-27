@@ -286,6 +286,19 @@
     if (!term.license || term.licenseWarning) warnings.push(term.labelIt + ' · ' + (term.licenseWarning || 'licenza non indicata nel registro.'));
     if (!term.descriptionIt) warnings.push(term.labelIt + ' · descrizione italiana assente nel registro.');
   }
+  function showLimit(target, basis, item, warnings) {
+    const number = value => value.toLocaleString('it-IT');
+    const origin = {DERIVED:'calcolato dall’Onboarding',RESTRICTED:'ristretto dall’agente',ABOVE_CEILING:'superiore al tetto attuale'};
+    element('span',limitNames[target] + ' · Valore approvato ' + number(basis.effective) + ' (' + origin[basis.origin] + ')',item);
+    const measured = basis.observed != null;
+    element('p','Valore reale nel file · ' + (measured ? number(basis.observed) : 'non misurato per questo profilo'),item);
+    const maximum = number(basis.installationMaximum);
+    const calculation = measured
+      ? 'valore reale + ' + number(basis.marginPercent) + ' %, arrotondato per eccesso, almeno + ' + number(basis.minHeadroom) + ', con un minimo di 1 ed entro il massimo d’installazione di ' + maximum
+      : 'massimo d’installazione di ' + maximum;
+    element('p','Tetto ' + number(basis.ceiling) + ' (' + calculation + ').',item);
+    if (basis.origin === 'ABOVE_CEILING') warnings.push(limitNames[target] + ' · Il valore approvato di ' + number(basis.effective) + ' supera il tetto attuale di ' + number(basis.ceiling) + '.');
+  }
   function showWarnings(warnings, article) {
     if (!warnings.length) return;
     const section = element('section','',article); section.className = 'warnings'; element('h3','Avvisi da esaminare',section);
@@ -376,11 +389,18 @@
       if (section === 'SEMANTIC' && snap.bindings?.length) {
         detail('Versioni e insiemi di pubblicazione vincolati alla configurazione',snap.bindings.map(pinnedReference),article);
       }
+      if (section === 'LIMITS' && Object.keys(snap.LIMITS_BASIS || {}).length) {
+        element('p','Se il file supera uno dei limiti, l’acquisizione si ferma prima di consegnare qualsiasi riga. Una revisione con un file nuovo oltre questi limiti richiede nuovi limiti.',article);
+      }
       const list = element('ul','',article); list.className = 'review-items';
       for (const [target,value] of Object.entries(snap[section])) {
         const item = element('li','',list);
         if (section === 'IDENTITY') element('span',identityText(target,value,label),item);
-        if (section === 'LIMITS') element('span',limitNames[target] + ' · ' + (value ?? unavailable),item);
+        if (section === 'LIMITS') {
+          const basis = snap.LIMITS_BASIS?.[target];
+          if (basis) showLimit(target,basis,item,warnings);
+          else element('span',limitNames[target] + ' · ' + (value ?? unavailable),item);
+        }
         if (section === 'SEMANTIC') {
           semanticReference(card,target,item,warnings);
         }

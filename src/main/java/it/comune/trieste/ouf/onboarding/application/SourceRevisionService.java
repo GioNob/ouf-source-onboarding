@@ -49,8 +49,10 @@ public class SourceRevisionService {
       this(sourceId,parentVersionId,expectedVersion,configurationHash,commandKey,publicationEffect,changes,assetRef,null);
     }
   }
+  private final AcquisitionLimits acquisitionLimits;
   public SourceRevisionService(JdbcClient db,OnboardingService onboarding,ManagedOnboardingReviewService reviews,
-      ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy){
+      ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy,AcquisitionLimits acquisitionLimits){
+    this.acquisitionLimits=acquisitionLimits;
     this.db=db;this.onboarding=onboarding;this.reviews=reviews;this.files=files;this.hashes=hashes;this.policy=policy;
   }
   private static DomainFailure fail(HttpStatus status,String code){return new DomainFailure(status,code,code);}
@@ -205,12 +207,12 @@ public class SourceRevisionService {
     if(!other.isEmpty())throw reviews.assetConflict(p,other.size()==1?other.getFirst():null);
     if(!"PROFILED".equals(asset.get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_NOT_PROFILED");
     var incoming=files.fileProfile(ref.assetId(),ref.profileId());
-    if(pin==null)ManagedCsvRevision.replace(config,base,oldProfile,asset,incoming,number,request.newColumns());
+    if(pin==null)ManagedCsvRevision.replace(config,base,oldProfile,asset,incoming,number,request.newColumns(),acquisitionLimits);
     else {
       var fromUnits=new SourceUnitProfiles(files.fileProfile(previous,previousProfile),hashes);
       var from=fromUnits.find(ManagedFileService.unitRef(oldProfile));
       var to=new SourceUnitProfiles(incoming,hashes).verify(pin);
-      ManagedUnitRevision.replace(config,base,oldProfile,from,asset,to,pin,number,request.newColumns());
+      ManagedUnitRevision.replace(config,base,oldProfile,from,asset,to,pin,number,request.newColumns(),acquisitionLimits);
     }
     files.bindUnit(ref.assetId(),unit,source);
   }

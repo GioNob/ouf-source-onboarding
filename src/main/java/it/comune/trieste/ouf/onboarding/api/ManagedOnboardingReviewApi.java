@@ -73,6 +73,11 @@ public class ManagedOnboardingReviewApi {
   private static <T>T invoke(String phase,String correlation,Supplier<T> operation){
     try{return operation.get();}
     catch(InvalidArguments invalid){
+      if(invalid.path.equals("Arguments.executionProposal.limits") || invalid.path.startsWith("Arguments.executionProposal.limits.")){
+        String code="ONB_MANAGED_EXECUTION_PROPOSAL_INVALID";
+        LOG.warn("code={} phase=decode correlationId={} path={}",code,correlation,invalid.path);
+        throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,code,code);
+      }
       LOG.warn("code={} phase=decode correlationId={} path={}",INVALID,correlation,invalid.path);
       throw invalid;
     }catch(DomainFailure | SecurityException | DataAccessException | RestClientException expected){
@@ -93,6 +98,14 @@ public class ManagedOnboardingReviewApi {
       requireText(args,"commandKey");
       if(!args.path("expectedVersion").isIntegralNumber() || !args.path("expectedVersion").canConvertToLong())
         throw new InvalidArguments("Arguments.expectedVersion");
+      var limits=args.path("executionProposal").path("limits");
+      if(!limits.isMissingNode()){
+        if(!limits.isObject())throw new InvalidArguments("Arguments.executionProposal.limits");
+        for(String key:List.of("maxRows","maxColumns","maxCellChars")){
+          if(limits.has(key) && (!limits.get(key).isIntegralNumber() || !limits.get(key).canConvertToInt()))
+            throw new InvalidArguments("Arguments.executionProposal.limits."+key);
+        }
+      }
       return reviews.prepare(caller.principal(),decode(args,ManagedOnboardingReviewService.Prepare.class),correlation);
     });
   }

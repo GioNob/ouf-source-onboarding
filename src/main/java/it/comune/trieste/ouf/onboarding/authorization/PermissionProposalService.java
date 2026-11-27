@@ -17,16 +17,27 @@ import org.springframework.transaction.annotation.Transactional;
 public class PermissionProposalService {
  public static final String READ="authorization.permissions.read", PROPOSE="authorization.permissions.propose", STATUS="authorization.proposal.read";
  @org.springframework.beans.factory.annotation.Value("${ouf.authorization.ths.public-origin:}") private String publicOrigin;
+ private final PermissionConstraintCatalogue constraints;
  private final JdbcClient db;private final ObjectMapper json;private final CanonicalHash hash;
  private final AuthorizationPolicyRegistry registry;private final AuthorizationAdminService admin;private final AuthorizationReviewService review;private final SuperadminAuthority authority;private final OufRoleCatalogueStore roles;
- public PermissionProposalService(JdbcClient db,ObjectMapper json,CanonicalHash hash,AuthorizationPolicyRegistry registry,AuthorizationAdminService admin,AuthorizationReviewService review,SuperadminAuthority authority,OufRoleCatalogueStore roles){this.db=db;this.json=json;this.hash=hash;this.registry=registry;this.admin=admin;this.review=review;this.authority=authority;this.roles=roles;}
+ public PermissionProposalService(JdbcClient db,ObjectMapper json,CanonicalHash hash,AuthorizationPolicyRegistry registry,
+     AuthorizationAdminService admin,AuthorizationReviewService review,SuperadminAuthority authority,
+     OufRoleCatalogueStore roles,PermissionConstraintCatalogue constraints){
+  this.db=db;this.json=json;this.hash=hash;this.registry=registry;this.admin=admin;
+  this.review=review;this.authority=authority;this.roles=roles;this.constraints=constraints;
+ }
  public record Change(String operation,String grantId,Grant grant,String reason,OufRoleCatalogue.Snapshot roleCatalogue){
   public Change(String operation,String grantId,Grant grant,String reason){this(operation,grantId,grant,reason,null);}
  }
- public record Receipt(UUID proposalId,long revision,String state,Instant expiresAt,String approvalPath,String finalPolicyRef){}
- public record Card(UUID proposalId,long revision,String state,String tenant,String proposedBy,String reason,String baseActiveRef,String proposedHash,Instant expiresAt,Grant before,Grant after,String finalPolicyRef,OufRoleCatalogue.Snapshot beforeRoles,OufRoleCatalogue.Snapshot afterRoles,List<CapabilityDescriptor> addedCapabilities){}
+ public record Receipt(UUID proposalId,long revision,String state,Instant expiresAt,String approvalPath,String finalPolicyRef,
+     List<PermissionConstraintCatalogue.Finding> constraintWarnings){}
+ public record Card(UUID proposalId,long revision,String state,String tenant,String proposedBy,String reason,
+     String baseActiveRef,String proposedHash,Instant expiresAt,Grant before,Grant after,String finalPolicyRef,
+     OufRoleCatalogue.Snapshot beforeRoles,OufRoleCatalogue.Snapshot afterRoles,List<CapabilityDescriptor> addedCapabilities,
+     List<PermissionConstraintCatalogue.Finding> constraintWarnings,List<PermissionConstraintCatalogue.Finding> constraintViolations,
+     boolean truncated){}
  public record Confirmation(String expectedHash){}
- private record Proposal(UUID id,String tenant,String subject,String requestHash,String baseRef,String baseHash,String proposedHash,PolicyBundle policy,Change change,String state,long revision,Instant expires,String finalRef){}
+ private record Proposal(UUID id,String tenant,String subject,String requestHash,String baseRef,String baseHash,String proposedHash,PolicyBundle policy,Change change,OufRoleCatalogue.Snapshot beforeRoles,String state,long revision,Instant expires,String finalRef){}
  private DomainFailure fail(HttpStatus s,String c){return new DomainFailure(s,c,c);}
  private Instant now(){return db.sql("select clock_timestamp()").query((r,n)->r.getTimestamp(1).toInstant()).single();}
  private String ref(PolicyBundle p){return p.bundleId()+":"+p.version();}
@@ -60,7 +71,17 @@ public class PermissionProposalService {
   if("UPSERT".equals(c.operation())){if(c.grant()==null||!c.grantId().equals(c.grant().grantId())||!p.tenantId().equals(c.grant().tenantId()))throw new IllegalArgumentException("AUTH_PROPOSAL_GRANT_INVALID");}
   else if(c.grant()!=null)throw new IllegalArgumentException("AUTH_REVOKE_MUST_NOT_HAVE_GRANT");
  }
- private Proposal load(UUID id,String tenant){return db.sql("select * from ouf_authorization.permission_proposal where proposal_id=:id and tenant_id=:tenant").param("id",id).param("tenant",tenant).query((r,n)->new Proposal(r.getObject("proposal_id",UUID.class),r.getString("tenant_id"),r.getString("proposed_by"),r.getString("request_hash"),r.getString("base_active_ref"),r.getString("base_hash"),r.getString("proposed_hash"),decode(r.getString("proposed_policy"),PolicyBundle.class),decode(r.getString("change_payload"),Change.class),r.getString("state"),r.getLong("revision"),r.getTimestamp("expires_at").toInstant(),r.getString("final_policy_ref"))).optional().orElseThrow(()->fail(HttpStatus.NOT_FOUND,"AUTH_PROPOSAL_NOT_FOUND"));}
+ private Proposal load(UUID id,String tenant){
+  return db.sql("select * from ouf_authorization.permission_proposal where proposal_id=:id and tenant_id=:tenant")
+      .param("id",id).param("tenant",tenant).query((r,n)->{
+       String before=r.getString("before_role_catalogue");
+       return new Proposal(r.getObject("proposal_id",UUID.class),r.getString("tenant_id"),r.getString("proposed_by"),
+           r.getString("request_hash"),r.getString("base_active_ref"),r.getString("base_hash"),r.getString("proposed_hash"),
+           decode(r.getString("proposed_policy"),PolicyBundle.class),decode(r.getString("change_payload"),Change.class),
+           before==null?null:decode(before,OufRoleCatalogue.Snapshot.class),r.getString("state"),r.getLong("revision"),
+           r.getTimestamp("expires_at").toInstant(),r.getString("final_policy_ref"));
+      }).optional().orElseThrow(()->fail(HttpStatus.NOT_FOUND,"AUTH_PROPOSAL_NOT_FOUND"));
+ }
  private String state(Proposal q){return q.state().equals("PENDING")&&!now().isBefore(q.expires())?"EXPIRED":q.state();}
  private String approvalPath(UUID id){
   if(publicOrigin==null||publicOrigin.isBlank())throw fail(HttpStatus.SERVICE_UNAVAILABLE,"AUTH_THS_ORIGIN_REQUIRED");
@@ -68,7 +89,10 @@ public class PermissionProposalService {
   if(!"https".equals(uri.getScheme())||uri.getHost()==null||uri.getRawUserInfo()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null||(uri.getPath()!=null&&!uri.getPath().isEmpty()&&!uri.getPath().equals("/")))throw new IllegalStateException("invalid THS HTTPS origin");
   return publicOrigin.replaceAll("/+$","")+"/trusted-human/authorization/?proposal="+id;
  }
- private Receipt receipt(Proposal q){return new Receipt(q.id(),q.revision(),state(q),q.expires(),approvalPath(q.id()),q.finalRef());}
+ private PermissionConstraintCatalogue.Assessment assessment(Proposal q){
+  return constraints.assess(q.tenant(),q.beforeRoles(),q.change(),q.policy().grants());
+ }
+ private Receipt receipt(Proposal q){return new Receipt(q.id(),q.revision(),state(q),q.expires(),approvalPath(q.id()),q.finalRef(),assessment(q).warnings());}
  @Transactional public Receipt propose(PrincipalContext p,Change change,String idempotency){
   var active=delegated(p,PROPOSE,"COMMAND");validate(change,p);
   if(idempotency==null||!idempotency.matches("[A-Za-z0-9_.:-]{1,128}"))throw new IllegalArgumentException("AUTH_IDEMPOTENCY_REQUIRED");
@@ -79,18 +103,20 @@ public class PermissionProposalService {
   var previous=active.grants().stream().filter(g->g.grantId().equals(change.grantId())).findFirst();
   if(previous.isPresent()&&!p.tenantId().equals(previous.get().tenantId()))throw fail(HttpStatus.FORBIDDEN,"AUTH_OTHER_TENANT_GRANTS_PROTECTED");
   if(change.operation().equals("REVOKE")&&previous.isEmpty())throw fail(HttpStatus.NOT_FOUND,"AUTH_GRANT_NOT_FOUND");
-  if(!roleChange(change)&&previous.isPresent()&&previous.get().equals(change.grant()))throw fail(HttpStatus.CONFLICT,"AUTH_PROPOSAL_NO_CHANGE");
   var grants=new ArrayList<>(active.grants());
   var capabilities=active.capabilities();
+  var beforeRoles=roles.current(p.tenantId());
   if(roleChange(change)){
    capabilities=roles.proposalCapabilities(change.roleCatalogue(),capabilities);
    var compiled=roles.compile(change.roleCatalogue(),p,capabilities);
-   if(roles.current(p.tenantId()).equals(change.roleCatalogue()))throw fail(HttpStatus.CONFLICT,"AUTH_PROPOSAL_NO_CHANGE");
+   if(beforeRoles.equals(change.roleCatalogue()))throw fail(HttpStatus.CONFLICT,"AUTH_PROPOSAL_NO_CHANGE");
    grants.removeIf(g->g.tenantId().equals(p.tenantId())&&g.grantId().startsWith(OufRoleCatalogue.PREFIX));grants.addAll(compiled);
   }else{grants.removeIf(g->g.grantId().equals(change.grantId()));if(change.grant()!=null)grants.add(change.grant());}
   var time=now();var proposed=new PolicyBundle(active.bundleId(),Math.addExact(active.version(),1),time,capabilities,grants);
+  constraints.assess(p.tenantId(),beforeRoles,change,proposed.grants()).requireApplicable();
+  if(previous.isPresent()&&previous.get().equals(change.grant()))throw fail(HttpStatus.CONFLICT,"AUTH_PROPOSAL_NO_CHANGE");
   var id=UUID.randomUUID();db.sql("insert into ouf_authorization.permission_proposal(proposal_id,tenant_id,proposed_by,idempotency_key,request_hash,base_active_ref,base_hash,proposed_hash,proposed_policy,change_payload,before_role_catalogue,expires_at) values(:id,:tenant,:subject,:key,:request,:base,:basehash,:hash,cast(:policy as jsonb),cast(:change as jsonb),cast(:before as jsonb),:expires)")
-   .param("id",id).param("tenant",p.tenantId()).param("subject",p.subjectId()).param("key",idempotency).param("request",requestHash).param("base",ref(active)).param("basehash",hash.of(active)).param("hash",proposalHash(proposed,change)).param("policy",encode(proposed)).param("change",encode(change)).param("before",roleChange(change)?encode(roles.current(p.tenantId())):null).param("expires",Timestamp.from(time.plusSeconds(900))).update();
+   .param("id",id).param("tenant",p.tenantId()).param("subject",p.subjectId()).param("key",idempotency).param("request",requestHash).param("base",ref(active)).param("basehash",hash.of(active)).param("hash",proposalHash(proposed,change)).param("policy",encode(proposed)).param("change",encode(change)).param("before",encode(beforeRoles)).param("expires",Timestamp.from(time.plusSeconds(900))).update();
   audit("PROPOSE_PERMISSION",id.toString(),p,ref(active));return receipt(load(id,p.tenantId()));
  }
  @Transactional public Receipt status(PrincipalContext p,UUID id){delegated(p,STATUS,"READ");var q=load(id,p.tenantId());if(!q.subject().equals(p.subjectId()))throw fail(HttpStatus.NOT_FOUND,"AUTH_PROPOSAL_NOT_FOUND");return receipt(q);}
@@ -99,14 +125,14 @@ public class PermissionProposalService {
   var q=load(id,p.tenantId());
   var base=registry.load(q.policy().bundleId(),Long.parseLong(q.baseRef().substring(q.baseRef().lastIndexOf(':')+1)));
   var before=base.grants().stream().filter(g->g.grantId().equals(q.change().grantId())).findFirst().orElse(null);
-  var beforeRoles=roleChange(q.change())?decode(db.sql("select before_role_catalogue::text from ouf_authorization.permission_proposal where proposal_id=:id")
-      .param("id",id).query(String.class).single(),OufRoleCatalogue.Snapshot.class):null;
+  var beforeRoles=roleChange(q.change())?q.beforeRoles():null;
+  var checks=assessment(q);
   Set<String> baseIds=new HashSet<>();
   for(var descriptor:base.capabilities())baseIds.add(descriptor.capabilityId());
   var added=q.policy().capabilities().stream().filter(c->!baseIds.contains(c.capabilityId())).toList();
   audit("READ_PERMISSION_CARD",id.toString(),p,q.baseRef());
   return new Card(q.id(),q.revision(),state(q),q.tenant(),q.subject(),q.change().reason(),q.baseRef(),q.proposedHash(),
-      q.expires(),before,q.change().grant(),q.finalRef(),beforeRoles,q.change().roleCatalogue(),added);
+      q.expires(),before,q.change().grant(),q.finalRef(),beforeRoles,q.change().roleCatalogue(),added,checks.warnings(),checks.violations(),checks.truncated());
  }
  @Transactional public Receipt decide(PrincipalContext p,UUID id,long revision,Confirmation confirmation,boolean accept){
   var active=review.authorized(p);var q=load(id,p.tenantId());
@@ -117,6 +143,7 @@ public class PermissionProposalService {
   String finalRef=null;
   if(accept){
    if(!q.baseRef().equals(ref(active))||!q.baseHash().equals(hash.of(active)))throw fail(HttpStatus.CONFLICT,"AUTH_ACTIVE_CHANGED_NEW_PROPOSAL_REQUIRED");
+   assessment(q).requireApplicable(); // Pending proposals may predate the release catalogue.
    var actor=new AuthorizationAdminService.Actor(p.subjectId(),p.tenantId(),"HUMAN",ref(active),UUID.randomUUID().toString(),p);
    if(roleChange(q.change()))roles.stage(q.change().roleCatalogue(),p,ref(q.policy()),q.policy().capabilities());
    var draft=admin.create(q.policy(),actor);var published=admin.publish(draft.id(),draft.revision(),actor);finalRef=ref(published.policy());

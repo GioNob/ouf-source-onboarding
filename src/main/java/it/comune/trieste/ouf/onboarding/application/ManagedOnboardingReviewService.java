@@ -6,6 +6,7 @@ import it.comune.trieste.ouf.onboarding.domain.*;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -16,6 +17,7 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /** Prepares one immutable source review. A delegated request cannot approve or activate it. */
+@EnableConfigurationProperties(AcquisitionLimits.class)
 @Service
 public class ManagedOnboardingReviewService {
   public static final String PREPARE="ouf.managed-source.onboarding.review.prepare";
@@ -28,6 +30,7 @@ public class ManagedOnboardingReviewService {
   private final String publicOrigin;
   private final TransactionTemplate tx;
   private final ManagedValueMapPreparation valueMaps;
+  private final AcquisitionLimits acquisitionLimits;
   public record Prepare(String sourceId,UUID onboardingVersionId,long expectedVersion,
       String commandKey,ManagedFileExecutionProposal.Proposal executionProposal,
       @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
@@ -43,10 +46,11 @@ public class ManagedOnboardingReviewService {
   }
   public ManagedOnboardingReviewService(JdbcClient db,OnboardingService onboarding,
       ManagedFileService files,CanonicalHash hashes,AuthorizationPolicyRegistry policy,TransactionTemplate tx,
-      ManagedValueMapPreparation valueMaps,
+      ManagedValueMapPreparation valueMaps, AcquisitionLimits acquisitionLimits,
       @Value("${ouf.authorization.ths.public-origin:}") String publicOrigin){
     this.db=db;this.onboarding=onboarding;this.files=files;this.hashes=hashes;
     this.policy=policy;this.publicOrigin=publicOrigin;this.tx=tx;this.valueMaps=valueMaps;
+    this.acquisitionLimits=acquisitionLimits;
   }
   private static DomainFailure fail(HttpStatus status,String code){return new DomainFailure(status,code,code);}
   private static void identity(String source,UUID version){
@@ -213,6 +217,14 @@ public class ManagedOnboardingReviewService {
       var missing=ManagedFileExecutionProposal.missingSections(configuration);
       if(!missing.isEmpty())throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_EXECUTION_PROPOSAL_REQUIRED",
           "Complete the execution proposal before preparing this draft",Map.of("missingSections",missing));
+      var extraction=ManagedReviewSnapshot.child(configuration,"extractionProfile");
+      var execution=ManagedReviewSnapshot.child(ManagedReviewSnapshot.child(extraction,"runtime"),"execution");
+      var selection=ManagedReviewSnapshot.child(extraction,"selection");
+      if(selection.containsKey("fileProfileId") && List.of("INTERNAL_MANAGED_CSV","INTERNAL_MANAGED_XLSX","INTERNAL_MANAGED_GEOPACKAGE")
+          .contains(Objects.toString(execution.get("acquisitionMode"),""))){
+        var profile=files.evidenceFor(extraction);
+        for(var measure:acquisitionLimits.measures(profile).ordered())measure.requireWithinInstallation();
+      }
     }
     var draft=request.executionProposal()==null?configuration:compileProposal(p,request,current,configuration);
     var selection=PublishedDatatypes.valueMapSelection(draft);
@@ -267,7 +279,7 @@ public class ManagedOnboardingReviewService {
         configuration=upgraded;
       }
       var asset=files.scopedAsset(files.asset(selected),ManagedFileService.unitRef(evidence),request.sourceId(),p);
-      return ManagedFileExecutionProposal.compile(configuration,asset,p.tenantId(),request.executionProposal());
+      return ManagedFileExecutionProposal.compile(configuration,asset,evidence,p.tenantId(),request.executionProposal(),acquisitionLimits);
   }
 
   private Map<String,Object> finishPreparation(PrincipalContext p,Prepare request,String fingerprint,String correlation,
@@ -445,7 +457,7 @@ public class ManagedOnboardingReviewService {
     if(!Objects.equals(asset.get("source_id"),version.get("source_id"))||!Objects.equals(asset.get("content_hash"),runtime.get("contentHash")))
       throw fail(HttpStatus.CONFLICT,"ONB_REVIEW_CONFIGURATION_DRIFT");
     var source=onboarding.source((String)version.get("source_id"));
-    return ManagedReviewSnapshot.build(config,asset,profile,source.get("owner_ref"),source.get("name"));
+    return ManagedReviewSnapshot.build(config,asset,profile,source.get("owner_ref"),source.get("name"),acquisitionLimits);
   }
   private void freezeSnapshot(Map<String,Object> version){
     db.sql("insert into ouf_onboarding.managed_review_snapshot values(:v,cast(:snapshot as jsonb))")

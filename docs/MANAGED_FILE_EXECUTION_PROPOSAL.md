@@ -1,8 +1,20 @@
 # Managed CSV execution proposal
 
-`ManagedFileExecutionProposal.compile` completes an owner-retained managed CSV DRAFT for human review. The caller supplies exact published semantic bindings, one selected publication set, an explicit governed UDP resolution/materialization policy and finite parser limits. The owner derives source, immutable asset, profile, staging/hash/size, mapping and adapter references. Neither configuration state nor runtime authority changes in this pure compiler.
+`ManagedFileExecutionProposal.compile` completes an owner-retained managed CSV DRAFT for human review. The caller supplies exact published semantic bindings, one selected publication set, an explicit governed UDP resolution/materialization policy. The caller may restrict the parser limits. The owner derives source, immutable asset, profile, staging/hash/size, mapping and adapter references. Neither configuration state nor runtime authority changes in this pure compiler.
 
 Preparation accepts `TEXT_NFC_TRIM_V1` on profiled `STRING` columns. Its materialization datatype is `xsd:string` and its governed identity comparator is `TEXT_V1`. The owner verifies the projected types and looks up the published pins before freezing this configuration. Execution and compatibility attestation remain separate lifecycle steps.
+
+### Acquisition limits
+
+Onboarding reads the selected profile. Rows count data records and columns count the complete header, including excluded fields. For CSV, the optional integer `metadata.maxCellChars` measures the longest decoded data cell before trimming, in UTF-16 units. The profiler skips the UTF-8 BOM and uses RFC 4180 with the selected delimiter. Header-only files and files with only empty data cells have a measured maximum cell length of zero. Historical profiles without this key and XLSX profiles have no cell measurement.
+
+For each dimension, the ceiling is `min(installationMaximum, max(1, observed + minHeadroom, ceil(observed × (100 + marginPercent) / 100)))`. An unmeasured cell uses the installation maximum. Both `executionProposal.limits` and its individual integer fields are optional. An omitted field takes the ceiling. A supplied field takes the smaller of the request and the ceiling. Only the effective numbers enter the execution configuration.
+
+For example, `"limits": {"maxRows": 100}` requests a row limit and leaves columns and cell length at their derived ceilings. OpenAPI references the same closed `limits` object as the CSV JSON contract. It accepts only `maxRows`, `maxColumns` and `maxCellChars`.
+
+When replacing a file for a `SHEET` or `LAYER`, the approved parent execution must already contain `maxRows` and `maxColumns`. A missing bound returns `ONB_REVISION_EXECUTION_LIMIT_EXCEEDED`. Historical CSV revisions can still derive missing bounds from the replacement profile.
+
+HTTP 422 identifies the first failed dimension in row, column, cell order. A measured count above installation capacity returns `ONB_ACQUISITION_LIMIT_INSTALLATION_EXCEEDED` with `limit`, `observed` and `installationMaximum`. A requested limit below the measurement returns `ONB_ACQUISITION_LIMIT_BELOW_PROFILE` with `limit`, `observed` and `ceiling`. Invalid shapes or values outside the absolute integer ranges (1–1,000,000 rows or cell units, 1–10,000 columns) return `ONB_MANAGED_EXECUTION_PROPOSAL_INVALID`.
 
 ### Draft reader checks and recovery
 
@@ -28,7 +40,7 @@ Draft responses list missing proposal sections in this order.
 | `udp.materialization` | Materialization policy in the same UDP object |
 | `limits` | Finite `maxRows`, `maxColumns` and `maxCellChars` in execution |
 
-The retained version-1 exact-key CSV profiles used before governed proposals can prepare with their historical limits. The list reports missing inputs. Compilation still verifies the complete submitted proposal against the asset, profile, owner and mapping.
+The retained version-1 exact-key CSV profiles used before governed proposals can prepare with their historical limits. The list reports missing execution sections. Onboarding supplies missing parser limits when compiling a proposal. Compilation still verifies the complete submitted proposal against the asset, profile, owner and mapping.
 
 Every `create.semanticRefs` entry uses `semanticId@semanticVersion`. A UUID suffix returns HTTP 422 with `ONB_SEMANTIC_REF_FORM_INVALID` and the zero-based `index`. Supply the publication set UUID in the separate proposal fields. A binding set that differs from the retained references returns HTTP 422 with `ONB_SEMANTIC_REF_VERSION_MISMATCH` and `semanticRef`. It identifies the first missing retained coordinate, or the first retained coordinate if all are covered and the proposal contains surplus bindings. The draft can be prepared again with corrected bindings.
 
@@ -43,5 +55,27 @@ An incomplete or unavailable lookup leaves the card readable. Confirmation requi
 Integration dependency (task-33a): the onboarding adapter expects a JSON object with a `terms` array of active revision records and a `missing` array of revision IDs. The task-33a handoff reports that the Gateway route excludes `published-terms`. The browser tests use fixtures. Verification against the registry requires the published endpoint and its Gateway route.
 
 The UDP proposal must compare every mapped canonical property, retain source/class/tenant scope and exact publication references, and preserve each owner access label. The compiler supplies no uniqueness assertion, merge approval or authority ranking: these are explicit caller-proposed, human-reviewed fields. Sufficient rules and authority order are retained for that review. No data is read, no provider request made, no token issued and no transaction or retry state created.
+
+### Governed identity diagnostics
+
+An identity rejection from `POST /api/internal/v1/onboarding/managed-file-mcp/review-prepare` returns HTTP 422 with `code` and fixed `detail` both equal to `ONB_GOVERNED_IDENTITY_INVALID`. The problem reports the first violated `constraint`. Its `path` is a JSON Pointer relative to the arguments, rooted at `/executionProposal/udp/resolution`. Object shape errors point to the object, field errors to the field, and array entries use zero-based indices. Correct the proposal and submit it again, with the same `commandKey` or with the new one supplied by the MCP `next`. The rejected command records nothing and leaves the draft and its lock version available for that correction.
+
+| Constraint | What to correct |
+|---|---|
+| `RESOLUTION_SHAPE` | Supply the resolution fields, the governed identity strategy and a nonblank strategy version. |
+| `POLICY_FIELDS` | Supply the required policy fields and remove unknown fields. |
+| `POLICY_REFERENCE` | Match the policy's nonblank `ref` and `version` to `policyRef` and `strategyVersion`. |
+| `POLICY_SOURCE`, `POLICY_TENANT`, `POLICY_CLASS` | Use the draft's source, the caller's tenant and a mapped target class. |
+| `POLICY_BOUNDS` | Use a boolean `allowAutoNew`, an integer `maxCandidates` from 1 through 1000, 1–1024 signals, 1–32 sufficient rules and up to 32 optional distinct rules. |
+| `SIGNAL_SHAPE`, `SIGNAL_ASSERTION_REF` | Supply the signal fields, a nonblank ID and a nonblank assertion reference. |
+| `SIGNAL_NOT_MAPPED`, `SIGNAL_DUPLICATE`, `SIGNAL_FLAGS` | Use one signal per mapped property and set both flags to `false`. |
+| `SIGNAL_COMPARATOR`, `SIGNAL_SEMANTIC_REF` | Use the declared datatype's comparator and the property ID followed by `@` and the selected publication set. |
+| `SIGNALS_INCOMPLETE` | Add a signal for each missing property, even when a sufficient rule uses only a subset. |
+| `RULE_SHAPE`, `RULE_DUPLICATE` | Supply the rule fields and a nonblank assertion reference. Give each rule a nonblank ID unique across both rule lists. |
+| `RULE_MEMBERS`, `DISTINCT_RULE_MEMBERS` | Use 1–32 distinct declared signal IDs in a sufficient rule, or 2–32 in a distinct rule. |
+
+`SIGNAL_NOT_MAPPED`, `SIGNAL_DUPLICATE`, `SIGNAL_FLAGS`, `SIGNAL_COMPARATOR`, `SIGNAL_SEMANTIC_REF` and `SIGNALS_INCOMPLETE` include `propertyCount` (the full distinct count) and `propertyIris` (up to 64 distinct IRIs in lexical order). Comparator, semantic reference and incomplete coverage errors also include `expectedSignals` in the same order, with `id`, `semanticRef` and `comparator` derived from the mapping and publication. For incomplete coverage these are the missing signals to add. Keep the assertion reference and flags explicit in each completed signal.
+
+`RULE_DUPLICATE`, `RULE_MEMBERS` and `DISTINCT_RULE_MEMBERS` include `ruleIds` (up to 32). The pointer identifies the offending entry even when its identifier is malformed. Diagnostic lists carry identifiers only. Raw cell values, unknown field names, rule members and submitted assertion text are never copied into the problem.
 
 The JSON contract is [managed-file-execution-proposal.schema.json](contracts/managed-file-execution-proposal.schema.json). Unknown fields in request DTOs must be rejected at the owner API as well as MCP schema validation. Compiler tests cover owner-input drift, missing/duplicate/wrong semantic pins, access escalation, omitted mapped properties, false typed materialization, publication-scoped identity and immutable preparation inputs. These tests are not evidence of a deployed end-to-end run.

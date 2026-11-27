@@ -30,7 +30,7 @@ public final class ManagedCsvRevision {
   }
 
   static void replace(Map<String,Object> config,Map<String,Object> previous,Map<String,Object> oldProfile,
-      Map<String,Object> asset,Map<String,Object> profile,int version,List<NewColumn> newColumns){
+      Map<String,Object> asset,Map<String,Object> profile,int version,List<NewColumn> newColumns,AcquisitionLimits acquisitionLimits){
     var extraction=object(config,"extractionProfile");
     var runtime=object(extraction,"runtime");
     var selection=object(extraction,"selection");
@@ -84,12 +84,16 @@ public final class ManagedCsvRevision {
     require(!mapped.isEmpty()&&mapped.size()==projected.size()&&mapped.keySet().equals(new HashSet<>(projected)));
     var nextColumns=columns(profile);
     var decisions=newColumns==null?List.<NewColumn>of():newColumns;
-    checkColumns(columns(oldProfile),nextColumns,mapped,keys.getFirst(),strings(profile.get("candidate_keys")),decisions);
     var metadata=object(profile,"metadata");
     String delimiter=text(metadata,"delimiter");
     require(Set.of(",",";").contains(delimiter));
-    if(number(metadata,"rows")>number(execution,"maxRows")||nextColumns.size()>number(execution,"maxColumns"))
+    require(metadata.get("rows") instanceof Number);
+    var measures=acquisitionLimits.measures(profile);
+    if (!measures.withinInstallation())
       throw new Incompatible(List.of(new Finding("EXECUTION_LIMIT_EXCEEDED",null,null,null)));
+    var replacement=measures.replacement(execution,
+        () -> new Incompatible(List.of(new Finding("UNSUPPORTED_CSV_CONTRACT",null,null,null))));
+    checkColumns(previousColumns,nextColumns,mapped,keys.getFirst(),strings(profile.get("candidate_keys")),decisions);
     var additions=decisions.stream().filter(d->"MAP".equals(d.decision())).toList();
     if(!additions.isEmpty())extendMappings(config,additions);
 
@@ -98,6 +102,7 @@ public final class ManagedCsvRevision {
       config.put("excludedFieldReview",Map.of("profileId",profileId,"labels",excluded.get("labels")));
     ManagedUnitRevision.bindAsset(selection,runtime,execution,bundle,asset,profileId,version);
     runtime.put("csvDelimiter",delimiter);
+    execution.putAll(replacement);
   }
 
   static void checkColumns(Map<String,String> before,Map<String,String> after,Map<String,String> mapped,
