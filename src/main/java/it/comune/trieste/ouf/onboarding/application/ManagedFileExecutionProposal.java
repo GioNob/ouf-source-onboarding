@@ -6,7 +6,7 @@ import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import org.springframework.http.HttpStatus;
 import static it.comune.trieste.ouf.onboarding.application.ManagedReviewSnapshot.child;
 
-/** Pure preparation of an explicitly typed CSV execution profile. It issues no approval or runtime authority. */
+/** Compiles the selected managed unit and the approved semantic mapping into an execution profile. */
 public final class ManagedFileExecutionProposal {
   static String datatype(String transform){return ValueReader.DATATYPES.get(ValueReader.named(transform).output);}
   public record ReviewTerm(String iri,String labelIt,String descriptionIt,String license) {}
@@ -20,7 +20,28 @@ public final class ManagedFileExecutionProposal {
   public record Proposal(List<SemanticBinding> semanticBindings,String semanticPublicationSetRef,
                          Map<String,Object> udp,
                          @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-                         Limits limits) {}
+                         Limits limits,
+                         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                         @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=ContractValue.class) String contract) {
+    public Proposal(List<SemanticBinding> semanticBindings,String semanticPublicationSetRef,Map<String,Object> udp,Limits limits) {
+      this(semanticBindings,semanticPublicationSetRef,udp,limits,null);
+    }
+  }
+  /** Only omission selects the historical branch. An explicit JSON null is invalid. */
+  public static final class ContractValue extends com.fasterxml.jackson.databind.JsonDeserializer<String> {
+    @Override public String deserialize(com.fasterxml.jackson.core.JsonParser parser,com.fasterxml.jackson.databind.DeserializationContext context)
+        throws java.io.IOException {
+      if(!parser.hasToken(com.fasterxml.jackson.core.JsonToken.VALUE_STRING))
+        return context.reportInputMismatch(String.class,"Execution contract must be a string");
+      return parser.getText();
+    }
+    @Override public String getNullValue(com.fasterxml.jackson.databind.DeserializationContext context)
+        throws com.fasterxml.jackson.databind.JsonMappingException {
+      return context.reportInputMismatch(String.class,"Execution contract must be a string");
+    }
+    @Override public Object getAbsentValue(com.fasterxml.jackson.databind.DeserializationContext context){return null;}
+  }
+  static final String UNIT_CONTRACT="ouf.managed-unit-execution-proposal.v1";
   private ManagedFileExecutionProposal() {}
 
   static List<String> missingSections(Map<?,?> config) {
@@ -70,9 +91,36 @@ public final class ManagedFileExecutionProposal {
         && sourceId.equals(object(bundle,"source").get("sourceId"))
         && "INTERNAL_MANAGED".equals(object(bundle,"source").get("sourceKind"))
         && "MANAGED".equals(object(bundle,"source").get("acquisitionMode"))
-        && "MANAGED".equals(runtime.get("mode")) && "ONE_ROW_ONE_SOURCE_OBJECT".equals(runtime.get("recordModel")));
-    require(!runtime.containsKey("format") && !runtime.containsKey("layer")
-        && Set.of(",",";").contains(text(runtime,"csvDelimiter")));
+        && "MANAGED".equals(runtime.get("mode")));
+    boolean layer="LAYER".equals(runtime.get("unitKind")),sheet="SHEET".equals(runtime.get("unitKind"));
+    boolean explicit=UNIT_CONTRACT.equals(proposal.contract());
+    require(explicit || proposal.contract()==null && !layer && !sheet);
+    require((layer?"ONE_FEATURE_ONE_SOURCE_OBJECT":"ONE_ROW_ONE_SOURCE_OBJECT").equals(runtime.get("recordModel")));
+    if(sheet || layer) {
+      require(!runtime.containsKey("csvDelimiter") && (sheet?"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"application/geopackage+sqlite3").equals(asset.get("media_type")));
+      String ref=text(runtime,"unitRef");
+      require(ref.matches((sheet?"sheet":"layer")+":(0|[1-9][0-9]{0,3})")
+          && ref.equals(object(object(extraction,"selection"),"unitProfileRef").get("unitRef")));
+      var read=object(runtime,"readParameters");
+      keys(read,sheet?"xlsx":"geopackage");
+      if(sheet){
+        var xlsx=object(read,"xlsx");
+        if(xlsx.containsKey("timeZone")){
+          keys(xlsx,"sheet","sheetIndex","headerRow","dateSystem","timeZone","cellText");
+          try { java.time.ZoneId.of(text(xlsx,"timeZone")); } catch(java.time.DateTimeException invalidZone) { throw invalid(); }
+        }else keys(xlsx,"sheet","sheetIndex","headerRow","dateSystem","cellText");
+        text(xlsx,"sheet");integer(xlsx.get("sheetIndex"),0,Integer.MAX_VALUE);integer(xlsx.get("headerRow"),1,1048576);
+        require(!runtime.containsKey("sheet") && !runtime.containsKey("layer") && Set.of("1900","1904").contains(text(xlsx,"dateSystem"))
+            && "ouf.xlsx-cell-text.v1".equals(xlsx.get("cellText")));
+      }else{
+        var gpkg=object(read,"geopackage");keys(gpkg,"layer","sourceCrs","geometryColumn");
+        for(String key:gpkg.keySet())require(text(runtime,key).equals(gpkg.get(key)));
+      }
+    }else{
+      require(!asset.containsKey("media_type") || "text/csv".equals(asset.get("media_type")));
+      require(!runtime.containsKey("format") && !runtime.containsKey("unitRef") && !runtime.containsKey("unitKind")
+          && !runtime.containsKey("readParameters") && !runtime.containsKey("layer") && Set.of(",",";").contains(text(runtime,"csvDelimiter")));
+    }
     require(assetId.equals(String.valueOf(asset.get("asset_id")))
         && sourceId.equals(asset.get("source_id"))
         && text(runtime,"stagingRef").equals(asset.get("staging_ref"))
@@ -113,7 +161,19 @@ public final class ManagedFileExecutionProposal {
     require(!config.containsKey("relationshipMappings") || list(config.get("relationshipMappings"),0,0).isEmpty());
     String publication=uuid(proposal.semanticPublicationSetRef());
     bind(config,semantic,proposal.semanticBindings(),publication,classes,mapped,combined.typeRefs,combined.labels.keySet(),valueMapRefs);
-    Map<String,Object> udp=copy(proposal.udp());keys(udp,"resolution","materialization");
+    Map<String,Object> udp=copy(proposal.udp());
+    if(layer) {
+      keys(udp,"resolution","materialization","spatial");
+      var spatialGeometry=object(object(udp,"spatial"),"geometry");
+      String geometryColumn=text(runtime,"geometryColumn");
+      var identityFields=list(object(config,"sourceObjectIdentityPolicy").get("sourceFields"),1,256);
+      require(fields.containsAll(identityFields) && !identityFields.contains(geometryColumn)
+          && new HashSet<>(identityFields).size()==identityFields.size());
+      require(text(runtime,"sourceCrs").equals(spatialGeometry.get("expectedSourceCrs")));
+      require(list(semantic.get("propertyMappings"),1,ManagedFileLimits.MAX_COLUMNS).stream().map(ManagedFileExecutionProposal::map)
+          .anyMatch(m->geometryColumn.equals(m.get("sourceField")) && "IDENTITY".equals(m.get("transform"))
+              && m.get("targetPropertyIri").equals(spatialGeometry.get("sourceField"))));
+    } else keys(udp,"resolution","materialization");
     new GovernedIdentityProposal(declaredDatatypes,publication)
         .validateExecution(udp.get("resolution"),semantic.get("targetClasses"),sourceId,classes,tenant);
     Map<String,Object> materialization=object(udp,"materialization");
@@ -135,11 +195,20 @@ public final class ManagedFileExecutionProposal {
       for(Object authority:list(property.get("authorityOrder"),0,32))require(authorities.add(string(authority)));
     }
     require(properties.equals(mapped));
+    if(layer) {
+      var geometry=object(object(udp,"spatial"),"geometry");
+      require(Objects.equals(labels.get(text(geometry,"sourceField")),text(geometry,"accessLabel")));
+    }
     Map<String,Object> execution=new LinkedHashMap<>();
-    execution.put("acquisitionMode","INTERNAL_MANAGED_CSV");execution.put("adapterId","managed-tabular-v1");
+    execution.put("acquisitionMode",layer?"INTERNAL_MANAGED_GEOPACKAGE":sheet?"INTERNAL_MANAGED_XLSX":"INTERNAL_MANAGED_CSV");
+    execution.put("adapterId",layer?"managed-geopackage-v1":sheet?"managed-xlsx-v1":"managed-tabular-v1");
+    if(sheet || layer){
+      for(String key:List.of("unitRef","unitKind","readParameters"))execution.put(key,runtime.get(key));
+      if(layer)for(String key:List.of("layer","sourceCrs","geometryColumn"))execution.put(key,runtime.get(key));
+    }
     execution.put("adapterRuntimeVersion","1.0.0");execution.put("sourceSchemaRef",text(bundle,"schemaRef"));
     execution.put("sourceSchemaId",sourceId);execution.put("sourceSchemaVersion",text(extraction,"version"));
-    execution.put("semanticPublicationSetRef",publication);execution.put("adapterProfileRef","adapter://managed-tabular/1");
+    execution.put("semanticPublicationSetRef",publication);execution.put("adapterProfileRef",layer?"adapter://managed-geopackage/1":sheet?"adapter://managed-xlsx/1":"adapter://managed-tabular/1");
     execution.put("observationPolicy","ACQUISITION_TIME");execution.put("expectedSize",size);
     execution.put("maxRows",limits.maxRows());execution.put("maxColumns",limits.maxColumns());execution.put("maxCellChars",limits.maxCellChars());
     execution.put("mappingRefs",List.of(text(semantic,"mappingId")));execution.put("authorityPolicyRef",text(materialization,"policyRef"));

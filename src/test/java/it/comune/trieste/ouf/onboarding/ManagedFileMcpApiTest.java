@@ -86,14 +86,14 @@ class ManagedFileMcpApiTest {
     when(receipts.verifyManagedFile(null,request.getRequestURI(),"ouf.managed-source.onboarding.create",raw))
         .thenReturn(new PermissionDelegationVerifier.Delegated(principal,"idem"));
     when(files.onboardIdempotent(any(),any(),anyString(),anyString(),anyString(),anyString(),
-        anyList(),anyList(),anyList(),isNull(),any(),anyString(),anyString(),anyString(),isNull(),isNull(),isNull(),eq(principal)))
+        anyList(),anyList(),anyList(),isNull(),any(),anyString(),anyString(),anyString(),isNull(),isNull(),isNull(),eq(principal),isNull()))
         .thenReturn(Map.of("state","DRAFT","lockVersion",0));
     var api=new ManagedFileMcpApi(receipts,files,new ObjectMapper(),mock(ManagedFileChatHandoff.class));
     assertThat(api.create(raw,request)).containsEntry("allowedActions",java.util.List.of(
         it.comune.trieste.ouf.onboarding.application.ManagedMcpObservation.Action.PREPARE_REVIEW));
     var actor=org.mockito.ArgumentCaptor.forClass(it.comune.trieste.ouf.onboarding.application.OnboardingService.Actor.class);
     verify(files).onboardIdempotent(eq(asset),eq(profile),eq("cinema"),eq("Cinema"),eq("Comune"),eq("https://example.org/Cinema"),
-        eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"),eq("tenant-a"),isNull(),isNull(),isNull(),eq(principal));
+        eq(java.util.List.of("core@1")),eq(java.util.List.of()),argThat(x->x.size()==1&&"cinema".equals(x.get(0).fieldName())),isNull(),actor.capture(),eq("corr"),eq("idem"),eq("tenant-a"),isNull(),isNull(),isNull(),eq(principal),isNull());
     assertThat(actor.getValue().subject()).isEqualTo("human:alice");
     assertThat(actor.getValue().type()).isEqualTo("HUMAN_USER");
     assertThat(actor.getValue().capabilities()).containsExactly("ouf.managed-source.onboarding.create");
@@ -163,10 +163,10 @@ class ManagedFileMcpApiTest {
         "params",Map.of("separator"," ")));
     args.put("compositions",compositions);
     when(files.onboardIdempotent(any(),any(),anyString(),anyString(),anyString(),anyString(),
-        anyList(),anyList(),anyList(),isNull(),any(),anyString(),anyString(),anyString(),eq(category),eq(compositions),isNull(),eq(p)))
+        anyList(),anyList(),anyList(),isNull(),any(),anyString(),anyString(),anyString(),eq(category),eq(compositions),isNull(),eq(p),isNull()))
         .thenReturn(Map.of("state","DRAFT","lockVersion",0));
     api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request);
-    verify(files).onboardIdempotent(any(),any(),eq("sue-test"),any(),any(),any(),eq(refs),any(),argThat(x->x.size()==1024 && x.getFirst().transformParams().equals(Map.of("crs","EPSG:4326"))),isNull(),any(),eq("wide"),eq("wide-command"),eq("tenant-a"),eq(category),eq(compositions),isNull(),eq(p));
+    verify(files).onboardIdempotent(any(),any(),eq("sue-test"),any(),any(),any(),eq(refs),any(),argThat(x->x.size()==1024 && x.getFirst().transformParams().equals(Map.of("crs","EPSG:4326"))),isNull(),any(),eq("wide"),eq("wide-command"),eq("tenant-a"),eq(category),eq(compositions),isNull(),eq(p),isNull());
     fields.add(Map.of("fieldName","overflow","extractionDecision","EXCLUDE","dataAccessLabel","OPEN"));
     assertThatThrownBy(()->api.create(json.writeValueAsBytes(Map.of("Arguments",args,"CorrelationID","wide")),request)).hasMessageContaining("explicit field");
     verifyNoMoreInteractions(files);

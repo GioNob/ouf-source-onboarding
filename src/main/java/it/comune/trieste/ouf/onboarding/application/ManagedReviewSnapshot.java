@@ -114,9 +114,18 @@ final class ManagedReviewSnapshot {
     var file=new LinkedHashMap<String,Object>();
     file.put("name",asset.get("display_name"));file.put("assetId",asset.get("asset_id"));
     file.put("size",asset.get("size_bytes"));file.put("format",profile.get("format"));
-    file.put("rows",child(profile,"metadata").get("rows"));
-    if(file.get("rows")==null)file.put("rows",profile.get("rowCount")!=null?profile.get("rowCount"):profile.get("featureCount"));
+    var measures=acquisitionLimits.measures(profile);
+    file.put("rows",measures.rows().observed());
     file.put("columns",fields.size());
+    if("SHEET".equals(runtime.get("unitKind"))){
+      var parameters=child(child(runtime,"readParameters"),"xlsx");
+      var zone=parameters.get("timeZone");
+      file.put("unitDescription","Foglio «"+parameters.get("sheet")+"». L’intestazione è alla riga "+parameters.get("headerRow")
+          +". Le date usano il sistema "+parameters.get("dateSystem")+" e il fuso "+(zone==null?"non dichiarato":zone)
+          +". La regola "+parameters.get("cellText")+" legge il valore salvato delle formule.");
+    }else if("LAYER".equals(runtime.get("unitKind"))){
+      file.put("unitDescription","Layer «"+runtime.get("layer")+"». Ogni elemento geometrico diventa un oggetto sorgente. Il sistema di riferimento è "+runtime.get("sourceCrs")+".");
+    }
     var snapshot=new LinkedHashMap<String,Object>();
     snapshot.put("sourceName",name);snapshot.put("owner",owner);snapshot.put("file",file);
     // JSONB objects have no insertion order. Keep the original header order separately.
@@ -136,7 +145,7 @@ final class ManagedReviewSnapshot {
     if(!definitions.isEmpty())snapshot.put("DATATYPE",definitions);
     snapshot.put("FIELD",fields);snapshot.put("IDENTITY",identity);snapshot.put("SEMANTIC",semantics);snapshot.put("LIMITS",limits);
     var basis=new LinkedHashMap<String,Object>();
-    for(var measure:acquisitionLimits.measures(profile).ordered()){
+    for(var measure:measures.ordered()){
       if(limits.get(measure.limit()) instanceof Number effective)
         basis.put(measure.limit(),measure.basis(effective.intValue()));
     }

@@ -7,8 +7,7 @@
   "required": [
     "semanticBindings",
     "semanticPublicationSetRef",
-    "udp",
-    "limits"
+    "udp"
   ],
   "properties": {
     "semanticBindings": {
@@ -351,11 +350,6 @@
     "limits": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "maxRows",
-        "maxColumns",
-        "maxCellChars"
-      ],
       "properties": {
         "maxRows": {
           "type": "integer",

@@ -2,14 +2,130 @@ package it.comune.trieste.ouf.onboarding.application;
 
 import static org.assertj.core.api.Assertions.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.util.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class ManagedFileExecutionProposalTest {
   private static final String ASSET="6609b245-86ed-4315-8ce0-73f2a8555bf3",PROFILE="7984c39c-7396-4248-ab0a-f2efc390b49c";
   private static final String REVISION="00000000-0000-4000-8000-000000000001",PUBLICATION="00000000-0000-4000-8000-000000000002";
   private static final String SOURCE="fixture-source",CLASS="https://schema.org/PerformingArtsTheater",NAME="https://schema.org/name",CAP="urn:fixture:sourcePostalCode",ONTOLOGY="urn:fixture:imported-ontology";
   private final ObjectMapper json=new ObjectMapper();
+  private record UnitReplacement(Map<String,Object> compiled, Map<String,Object> execution,
+      Map<String,Object> previous, SourceUnitProfiles.Unit from, Map<String,Object> incoming,
+      SourceUnitProfiles.Unit to, SourceUnitProfiles.Reference pin) {
+    void replace(AcquisitionLimits limits) {
+      ManagedUnitRevision.replace(compiled,previous,Map.of("profile_id",PROFILE),from,incoming,to,pin,2,null,limits);
+    }
+  }
+
+  private UnitReplacement unitReplacement(boolean layer) {
+    var c=config();var a=asset();var p=proposal();
+    var runtime=object(object(c,"extractionProfile"),"runtime");
+    runtime.remove("csvDelimiter");
+    var parameters=layer?Map.of("geopackage",Map.of("layer","buildings","sourceCrs","EPSG:4326","geometryColumn","cap")):Map.of("xlsx",Map.of("sheet","south","sheetIndex",1,"headerRow",2,"dateSystem","1904","cellText",SourceUnitProfiles.XLSX_READER));
+    String ref=layer?"layer:0":"sheet:1",kind=layer?"LAYER":"SHEET";
+    runtime.put("unitRef",ref);runtime.put("unitKind",kind);
+    object(object(c,"extractionProfile"),"selection").put("unitProfileRef",Map.of("unitRef",ref));
+    runtime.put("readParameters",parameters);
+    if(layer) {
+      a.put("media_type","application/geopackage+sqlite3");runtime.put("recordModel","ONE_FEATURE_ONE_SOURCE_OBJECT");
+      runtime.put("layer","buildings");runtime.put("geometryColumn","cap");runtime.put("sourceCrs","EPSG:4326");
+      p.udp().put("spatial",Map.of("policyRef","policy://geometry","relationships",List.of(),"geometry",
+          Map.of("sourceField",CAP,"expectedSourceCrs","EPSG:4326","canonicalSrid",4326,"accessLabel","RESTRICTED",
+              "normalizationVersion","1","crsPolicy",Map.of("sourceAxisOrder","XY","mismatchAction","REJECT"))));
+    } else {
+      a.put("media_type","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");runtime.put("format","XLSX");
+    }
+    var profile=Map.<String,Object>of("unitKind",kind,layer?"featureCount":"rows",1,
+        "inferred_schema",List.of(Map.of("name","nome_teatro"),Map.of("name","cap")));
+    assertThatThrownBy(()->ManagedFileExecutionProposal.compile(c,a,profile,"fixture-tenant",p,AcquisitionLimitsTest.DEFAULTS)).hasMessage("ONB_MANAGED_EXECUTION_PROPOSAL_INVALID");
+    var explicit=new ManagedFileExecutionProposal.Proposal(p.semanticBindings(),p.semanticPublicationSetRef(),p.udp(),
+        new ManagedFileExecutionProposal.Limits(1,20,1000),ManagedFileExecutionProposal.UNIT_CONTRACT);
+    assertThatThrownBy(()->ManagedFileExecutionProposal.compile(c,a,profile,"other-tenant",explicit,AcquisitionLimitsTest.DEFAULTS))
+        .isInstanceOfSatisfying(ReviewValidationFailure.class,failure->assertThat(failure.properties()).isEqualTo(Map.of(
+            "constraint","POLICY_TENANT","path","/executionProposal/udp/resolution/governedIdentity/tenantId")));
+    var compiled=ManagedFileExecutionProposal.compile(c,a,profile,"fixture-tenant",explicit,AcquisitionLimitsTest.DEFAULTS);
+    var execution=object(object(object(compiled,"extractionProfile"),"runtime"),"execution");
+    assertThat(execution).containsEntry("adapterId",layer?"managed-geopackage-v1":"managed-xlsx-v1")
+        .containsEntry("acquisitionMode",layer?"INTERNAL_MANAGED_GEOPACKAGE":"INTERNAL_MANAGED_XLSX")
+        .containsEntry("readParameters",parameters).doesNotContainKey("csvDelimiter");
+    if(layer)assertThat(execution).containsEntry("geometryColumn","cap").containsEntry("layer","buildings").containsEntry("sourceCrs","EPSG:4326");
+    else assertThat(execution).doesNotContainKeys("sheet","headerRow");
+    var evidence=new LinkedHashMap<String,Object>();
+    evidence.put(layer?"featureCount":"rows",1);
+    if(layer)evidence.putAll(Map.of("primaryKey","nome_teatro","geometryType","POINT","srsId",4326,
+        "geometryColumn","cap","sourceCrs","EPSG:4326"));
+    var first=Map.<String,Object>of("name","nome_teatro","dataType","STRING","nullable",false,"distinctValues",1);
+    var before=Map.<String,Object>of("name","cap","dataType",layer?"GEOMETRY":"STRING","nullable",false,"distinctValues",1);
+    var nextKey=new LinkedHashMap<>(first);nextKey.put("distinctValues",2);
+    var after=new LinkedHashMap<>(before);after.put("nullable",true);after.put("distinctValues",2);
+    var from=new SourceUnitProfiles.Unit(ref,kind,layer?"buildings":"south",evidence,List.of(first,before),
+        List.of("nome_teatro"),new LinkedHashMap<>(parameters));
+    var nextEvidence=new LinkedHashMap<>(evidence);nextEvidence.put(layer?"featureCount":"rows",2);
+    var to=new SourceUnitProfiles.Unit(ref,kind,from.name(),nextEvidence,List.of(nextKey,after),
+        List.of("nome_teatro"),new LinkedHashMap<>(parameters));
+    var h=new it.comune.trieste.ouf.onboarding.domain.CanonicalHash(json);
+    assertThat(h.of(from.structure())).isNotEqualTo(h.of(to.structure()));
+    var pin=new SourceUnitProfiles.Reference(UUID.randomUUID(),2,ref,h.of(to.structure()));
+    var incoming=new LinkedHashMap<>(a);incoming.put("asset_id",UUID.randomUUID());
+    assertThat(execution).containsEntry("maxRows",1).containsEntry("maxColumns",10).containsEntry("maxCellChars",1000);
+    return new UnitReplacement(compiled,execution,a,from,incoming,to,pin);
+  }
+
+  @Test void f1_06_compileUnitsAndReplaceWithDifferentCounts() {
+    for(boolean layer:List.of(false,true)) {
+      var fixture=unitReplacement(layer);
+      var tight=new AcquisitionLimits(1,10,1000,25,0,0,0);
+      assertThatThrownBy(()->fixture.replace(tight)).hasMessage("ONB_REVISION_EXECUTION_LIMIT_EXCEEDED");
+      fixture.replace(AcquisitionLimitsTest.DEFAULTS);
+      assertThat(fixture.execution()).containsEntry("maxRows",102).containsEntry("maxColumns",10).containsEntry("maxCellChars",1_000_000);
+      assertThat(fixture.execution()).containsEntry("sourceSchemaVersion","2").containsEntry("readParameters",fixture.to().readParameters());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"SHEET,maxRows", "SHEET,maxColumns", "LAYER,maxRows", "LAYER,maxColumns"})
+  void unitRevisionRejectsMissingParentBound(String kind, String missing) {
+    var fixture=unitReplacement("LAYER".equals(kind));
+    fixture.execution().put("maxRows",2);
+    fixture.execution().remove(missing);
+    var parent=clone(fixture.compiled());
+
+    assertThatThrownBy(()->fixture.replace(AcquisitionLimitsTest.DEFAULTS))
+        .isInstanceOfSatisfying(DomainFailure.class,
+            failure->assertThat(failure.code()).isEqualTo("ONB_REVISION_EXECUTION_LIMIT_EXCEEDED"));
+    assertThat(clone(fixture.compiled())).isEqualTo(parent);
+  }
+
+  @Test void f1_14_onlyAnAbsentContractSelectsTheHistoricalProposal() throws Exception {
+    var node=(com.fasterxml.jackson.databind.node.ObjectNode)json.valueToTree(proposal());
+    assertThat(node.has("contract")).isFalse();
+    assertThat(json.treeToValue(node,ManagedFileExecutionProposal.Proposal.class).contract()).isNull();
+    var p=proposal();
+    for(String contract:Arrays.asList(null,ManagedFileExecutionProposal.UNIT_CONTRACT)){
+      var omitted=new ManagedFileExecutionProposal.Proposal(p.semanticBindings(),p.semanticPublicationSetRef(),p.udp(),null,contract);
+      var wire=json.valueToTree(omitted);
+      assertThat(wire.has("limits")).isFalse();
+      assertThat(json.treeToValue(wire,ManagedFileExecutionProposal.Proposal.class)).isEqualTo(omitted);
+    }
+    node.putNull("contract");
+    assertThatThrownBy(()->json.treeToValue(node,ManagedFileExecutionProposal.Proposal.class))
+        .isInstanceOf(com.fasterxml.jackson.databind.JsonMappingException.class);
+  }
+
+  @Test void f1_02_csvDraftAndCompiledProposalFingerprints() {
+    var hashes=new it.comune.trieste.ouf.onboarding.domain.CanonicalHash(json);
+    assertThat(hashes.of(config())).isEqualTo("sha256:7d207f8c86c7b87ca0fc0804655e702b080534dfe2e26a80081dcc5471628f85");
+    var csv=proposal();
+    var explicit=new ManagedFileExecutionProposal.Proposal(csv.semanticBindings(),csv.semanticPublicationSetRef(),csv.udp(),csv.limits(),
+        ManagedFileExecutionProposal.UNIT_CONTRACT);
+    for(var p:List.of(csv,explicit))
+      assertThat(hashes.of(compile(config(),p))).isEqualTo("sha256:6e2a2b960c08375b69eea7039821dfef17f1e361bca4c396b0b25f9a013b9d9c");
+  }
+
   @Test void importedOntologyCanContainExternalStandardTermsWithoutChangingOwnerIdentityOrProjection(){
     var existing=config();var before=clone(existing);var compiled=compile(existing,proposal());
     assertThat(existing).isEqualTo(before);
@@ -285,6 +401,26 @@ class ManagedFileExecutionProposalTest {
               .extracting(ManagedCsvRevision.Finding::code).containsExactly("EXECUTION_LIMIT_EXCEEDED"));
       assertThat(draft).isEqualTo(clone(parent));
     }
+  }
+
+  @Test void historicalCsvRevisionRecoversMissingParentRowLimit() {
+    var parent=compile(config(),proposal());
+    var execution=object(object(object(parent,"extractionProfile"),"runtime"),"execution");
+    execution.remove("maxRows");
+    var previous=asset();
+    previous.put("media_type","text/csv");
+    var next=new LinkedHashMap<>(previous);
+    next.put("asset_id",UUID.randomUUID());
+    var schema=List.of(Map.of("name","nome_teatro","dataType","STRING"),Map.of("name","cap","dataType","STRING"));
+    var before=Map.<String,Object>of("profile_id",PROFILE,"format","CSV","metadata",Map.of("rows",1,"delimiter",";"),
+        "inferred_schema",schema);
+    var after=new LinkedHashMap<>(before);
+    after.put("profile_id",UUID.randomUUID());
+    after.put("candidate_keys",List.of("nome_teatro"));
+
+    ManagedCsvRevision.replace(parent,previous,before,next,after,2,List.of(),AcquisitionLimitsTest.DEFAULTS);
+
+    assertThat(execution).containsEntry("maxRows",101).containsEntry("maxColumns",10).containsEntry("maxCellChars",1_000_000);
   }
 
   @Test void wideExecutionPreservesAllPropertiesAndRejectsThe1025th() {

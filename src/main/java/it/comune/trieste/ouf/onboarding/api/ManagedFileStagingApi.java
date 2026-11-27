@@ -3,8 +3,8 @@ package it.comune.trieste.ouf.onboarding.api;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileService;
 import it.comune.trieste.ouf.authorization.ServletAuthorization;
 import it.comune.trieste.ouf.onboarding.application.ManagedFileStagingStore;
-import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
 import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
+import it.comune.trieste.ouf.onboarding.application.ManagedFileContentInspector;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.io.InputStream;
@@ -23,15 +23,15 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @ConditionalOnBean(ManagedFileStagingStore.class)
 public class ManagedFileStagingApi {
-  private static final int MAX_BYTES=10*1024*1024;
+  private final ManagedFileContentInspector inspector;
   private final ManagedFileStagingStore storage;
   private final ManagedFileService files;
   private final TrustedActorResolver actors;
-  public ManagedFileStagingApi(ManagedFileStagingStore storage,ManagedFileService files,CanonicalHash hashes,TrustedActorResolver actors){
-    this.storage=storage;this.files=files;this.actors=actors;
+  public ManagedFileStagingApi(ManagedFileStagingStore storage,ManagedFileService files,ManagedFileContentInspector inspector,TrustedActorResolver actors){
+    this.inspector=inspector;this.storage=storage;this.files=files;this.actors=actors;
   }
 
-  @PostMapping(path="/api/managed-sources/v1/files",consumes="text/csv")
+  @PostMapping(path="/api/managed-sources/v1/files")
   public ResponseEntity<Map<String,Object>> upload(HttpServletRequest request,
       @RequestHeader(value="X-Content-SHA256",required=false) String declaredHash) throws IOException {
     var actor=actors.requireHuman(request,"ouf.managed-source.file.upload");
@@ -40,7 +40,9 @@ public class ManagedFileStagingApi {
     String encodedName=request.getHeader("X-OUF-File-Name");
     String fileName=encodedName==null?null:java.net.URLDecoder.decode(encodedName,java.nio.charset.StandardCharsets.UTF_8);
     ManagedFileService.validateFileName(fileName);
-    Path staged=Files.createTempFile("ouf-managed-intake-",".csv");
+    var format=inspector.requireFormat(request.getContentType());
+    inspector.checkSize(format,request.getContentLengthLong());
+    Path staged=Files.createTempFile("ouf-managed-intake-",".upload");
     try {
       MessageDigest digest=MessageDigest.getInstance("SHA-256");
       long size=0;
@@ -48,7 +50,7 @@ public class ManagedFileStagingApi {
         byte[] chunk=new byte[64*1024];
         for(int n;(n=source.read(chunk))!=-1;){
           size+=n;
-          if(size>MAX_BYTES)throw new DomainFailure(HttpStatus.PAYLOAD_TOO_LARGE,"ONB_FILE_SIZE_INVALID","File is empty or exceeds 10 MiB");
+          inspector.checkSize(format,size);
           digest.update(chunk,0,n);
           target.write(chunk,0,n);
         }
@@ -56,9 +58,10 @@ public class ManagedFileStagingApi {
       if(size==0)throw new DomainFailure(HttpStatus.BAD_REQUEST,"ONB_FILE_SIZE_INVALID","File is empty");
       String hash="sha256:"+java.util.HexFormat.of().formatHex(digest.digest());
       if(declaredHash!=null&&!hash.equals(declaredHash))throw new DomainFailure(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_FILE_HASH_MISMATCH","Upload checksum mismatch");
+      inspector.verify(format,Files.readAllBytes(staged));
       String ref;
-      try(var source=Files.newInputStream(staged)){ref=storage.put(source,size,"text/csv");}
-      var asset=files.registerOwned(null,ref,hash,"text/csv",size,actor.subject(),"retention://managed-files/30d",principal.tenantId(),fileName);
+      try(var source=Files.newInputStream(staged)){ref=storage.put(source,size,format.mediaType());}
+      var asset=files.registerOwned(null,ref,hash,format.mediaType(),size,actor.subject(),"retention://managed-files/30d",principal.tenantId(),fileName);
       return ResponseEntity.created(URI.create("/api/onboarding/v1/managed-files/"+asset.get("asset_id"))).body(asset);
     } catch(NoSuchAlgorithmException e){throw new IllegalStateException("SHA-256 unavailable",e);}
       finally {Files.deleteIfExists(staged);}

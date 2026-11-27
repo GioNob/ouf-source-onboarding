@@ -182,6 +182,22 @@ class ManagedPreviewPagingTest {
     assertThat(next.path("columns").get(0).path("name").asText()).isEqualTo(names.get(offset));
   }
 
+  @Test void f1_01_csvProfileAndColumnsFingerprints() {
+    var raw = new ManagedFileProfiler().profile("id;email\n1;a@example.test\n2;\n".getBytes(java.nio.charset.StandardCharsets.UTF_8), "text/csv");
+    var hashes = new CanonicalHash(json);
+    assertThat(hashes.of(json.convertValue(raw, Map.class))).isEqualTo("sha256:6794ebaf11a479b52fc0607d280f6329788d34bb693ce96790a2e1fb5c1ed30c");
+    var preview = new LinkedHashMap<String,Object>();
+    preview.put("assetId", UUID.fromString("00000000-0000-4000-8000-000000000001"));
+    preview.put("profileId", UUID.fromString("00000000-0000-4000-8000-000000000002"));
+    preview.put("profileVersion", 1);
+    preview.put("format", raw.format());
+    preview.put("columns", json.convertValue(raw.columns(), List.class));
+    preview.put("metadata", raw.metadata());
+    var page = paging(DEFAULT_BUDGET, NOW).columns(preview, raw.distinctCellValues(), TENANT, SUBJECT, null, 0, 128, null);
+    assertThat(page.get("schemaHash")).isEqualTo("sha256:da3d063f0d8675dce286960c91f2bddbab14f680be997337ea6c512fd4e17729");
+    assertThat(hashes.of(page)).isEqualTo("sha256:2379500294d3712e9f9d49006efc30c78053c00a731a1c34269758ccb1f81593");
+  }
+
   private static Map<String,Object> preview(List<String> names) {
     var out = new LinkedHashMap<String,Object>();
     out.put("assetId", UUID.randomUUID());

@@ -52,6 +52,7 @@ class ManagedFileAuthorizationTest {
     assertThatThrownBy(()->new ManagedFileApi(files,actors).requestProfile(asset,"key",request))
         .isInstanceOf(DomainFailure.class).hasMessageContaining("not owned");
     verify(files,never()).requestProfile(any(),any());
+    verify(files,never()).requestProfile(any(),any(),any());
   }
 
   @Test void assetPreviewDoesNotExposeStorageReferenceOrUploadedBy(){

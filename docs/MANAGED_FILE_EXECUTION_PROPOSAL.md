@@ -10,6 +10,10 @@ Onboarding reads the selected profile. Rows count data records and columns count
 
 For each dimension, the ceiling is `min(installationMaximum, max(1, observed + minHeadroom, ceil(observed × (100 + marginPercent) / 100)))`. An unmeasured cell uses the installation maximum. Both `executionProposal.limits` and its individual integer fields are optional. An omitted field takes the ceiling. A supplied field takes the smaller of the request and the ceiling. Only the effective numbers enter the execution configuration.
 
+For example, `"limits": {"maxRows": 100}` requests a row limit and leaves columns and cell length at their derived ceilings. OpenAPI references the same closed `limits` object as the CSV JSON contract. It accepts only `maxRows`, `maxColumns` and `maxCellChars`.
+
+When replacing a file for a `SHEET` or `LAYER`, the approved parent execution must already contain `maxRows` and `maxColumns`. A missing bound returns `ONB_REVISION_EXECUTION_LIMIT_EXCEEDED`. Historical CSV revisions can still derive missing bounds from the replacement profile.
+
 HTTP 422 identifies the first failed dimension in row, column, cell order. A measured count above installation capacity returns `ONB_ACQUISITION_LIMIT_INSTALLATION_EXCEEDED` with `limit`, `observed` and `installationMaximum`. A requested limit below the measurement returns `ONB_ACQUISITION_LIMIT_BELOW_PROFILE` with `limit`, `observed` and `ceiling`. Invalid shapes or values outside the absolute integer ranges (1–1,000,000 rows or cell units, 1–10,000 columns) return `ONB_MANAGED_EXECUTION_PROPOSAL_INVALID`.
 
 ### Draft reader checks and recovery

@@ -29,7 +29,12 @@ public class SourceRevisionService {
       String commandKey,String publicationEffect,List<Change> changes,
       @JsonInclude(JsonInclude.Include.NON_NULL) AssetRef assetRef,
       @JsonInclude(JsonInclude.Include.NON_NULL) List<ManagedCsvRevision.NewColumn> newColumns,
-      @JsonInclude(JsonInclude.Include.NON_NULL) List<Map<String,Object>> compositions){
+      @JsonInclude(JsonInclude.Include.NON_NULL) List<Map<String,Object>> compositions,
+      @JsonInclude(JsonInclude.Include.NON_NULL) SourceUnitProfiles.Reference unitProfileRef){
+    public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,String commandKey,
+        String publicationEffect,List<Change> changes,AssetRef assetRef,List<ManagedCsvRevision.NewColumn> newColumns,List<Map<String,Object>> compositions){
+      this(sourceId,parentVersionId,expectedVersion,configurationHash,commandKey,publicationEffect,changes,assetRef,newColumns,compositions,null);
+    }
     public Prepare(String sourceId,UUID parentVersionId,long expectedVersion,String configurationHash,
         String commandKey,String publicationEffect,List<Change> changes,AssetRef assetRef,List<ManagedCsvRevision.NewColumn> newColumns){
       this(sourceId,parentVersionId,expectedVersion,configurationHash,commandKey,publicationEffect,changes,assetRef,newColumns,null);
@@ -87,6 +92,12 @@ public class SourceRevisionService {
   @Transactional(timeout=8) public Map<String,Object> prepare(PrincipalContext p,Prepare r,String correlation){
     if(r==null)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
     authorize(p,PREPARE,"COMMAND",r.sourceId(),r.parentVersionId());
+    if(r.unitProfileRef()!=null){
+      if(r.assetRef()!=null || r.changes()!=null)throw fail(HttpStatus.BAD_REQUEST,"ONB_REVISION_REQUEST_INVALID");
+      var selected=files.resolve(null,null,null,r.unitProfileRef(),p.tenantId(),p.subjectId());
+      r=new Prepare(r.sourceId(),r.parentVersionId(),r.expectedVersion(),r.configurationHash(),r.commandKey(),r.publicationEffect(),null,
+          new AssetRef(selected.assetId(),selected.profileId()),r.newColumns(),r.compositions(),selected.pin());
+    }
     if(r.commandKey()==null||!r.commandKey().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
         ||r.expectedVersion()<0||r.expectedVersion()>9007199254740991L
         ||r.configurationHash()==null||!r.configurationHash().matches("sha256:[a-f0-9]{64}")
@@ -170,31 +181,40 @@ public class SourceRevisionService {
       throw fail(HttpStatus.FORBIDDEN,"ONB_REVISION_SOURCE_SCOPE_UNPROVEN");
     files.requireTenantOwner(UUID.fromString(origin),p.tenantId(),p.subjectId());
     var selection=object(object(config,"extractionProfile"),"selection");
-    UUID previous,profile;
+    UUID previous,previousProfile;
     try{
       previous=UUID.fromString(String.valueOf(selection.get("assetId")));
-      profile=UUID.fromString(String.valueOf(selection.get("fileProfileId")));
+      previousProfile=UUID.fromString(String.valueOf(selection.get("fileProfileId")));
     }catch(IllegalArgumentException e){throw fail(HttpStatus.UNPROCESSABLE_ENTITY,"ONB_REVISION_PROFILE_REQUIRED");}
     var ref=request.assetRef();
     if(previous.equals(ref.assetId()))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_NO_CHANGE");
     files.requireTenantOwner(previous,p.tenantId(),p.subjectId());
-    var base=files.asset(previous);
+    var oldProfile=files.evidenceFor(object(config,"extractionProfile"));
+    var base=files.checkBinding(files.asset(previous),ManagedFileService.unitRef(oldProfile),source,bound->reviews.assetConflict(p,bound));
     if(!source.equals(base.get("source_id")))throw reviews.assetConflict(p,(String)base.get("source_id"));
     files.requireTenantOwner(ref.assetId(),p.tenantId(),p.subjectId());
     // Serialize custody with initial onboarding and other sources competing for an unattached upload.
     db.sql("select asset_id from ouf_onboarding.managed_file_asset where asset_id=:a for update")
         .param("a",ref.assetId()).query(UUID.class).single();
-    var asset=files.asset(ref.assetId());
-    if(asset.get("source_id") instanceof String bound && !source.equals(bound))throw reviews.assetConflict(p,bound);
-    var other=db.sql("select source_id from ouf_onboarding.source where source_id<>:s and metadata->>'managedFileAssetId'=:id order by source_id limit 2")
-        .param("s",source).param("id",ref.assetId().toString()).query(String.class).list();
+    var pin=request.unitProfileRef();
+    String unit=pin==null?"table:0":pin.unitRef();
+    var asset=files.checkBinding(files.asset(ref.assetId()),unit,source,bound->reviews.assetConflict(p,bound));
+    var other=db.sql("""
+        select s.source_id from ouf_onboarding.source s where s.source_id<>:s and s.metadata->>'managedFileAssetId'=:id
+          and not exists(select 1 from ouf_onboarding.managed_file_effective_binding b where b.asset_id=:asset and b.source_id=s.source_id)
+        order by s.source_id limit 2
+        """).param("s",source).param("id",ref.assetId().toString()).param("asset",ref.assetId()).query(String.class).list();
     if(!other.isEmpty())throw reviews.assetConflict(p,other.size()==1?other.getFirst():null);
     if(!"PROFILED".equals(asset.get("status")))throw fail(HttpStatus.CONFLICT,"ONB_REVISION_ASSET_NOT_PROFILED");
-    ManagedCsvRevision.replace(config,base,files.fileProfile(previous,profile),asset,
-        files.fileProfile(ref.assetId(),ref.profileId()),number,request.newColumns(),acquisitionLimits);
-    if(asset.get("source_id")==null)
-      db.sql("update ouf_onboarding.managed_file_asset set source_id=:s where asset_id=:a and source_id is null")
-          .param("s",source).param("a",ref.assetId()).update();
+    var incoming=files.fileProfile(ref.assetId(),ref.profileId());
+    if(pin==null)ManagedCsvRevision.replace(config,base,oldProfile,asset,incoming,number,request.newColumns(),acquisitionLimits);
+    else {
+      var fromUnits=new SourceUnitProfiles(files.fileProfile(previous,previousProfile),hashes);
+      var from=fromUnits.find(ManagedFileService.unitRef(oldProfile));
+      var to=new SourceUnitProfiles(incoming,hashes).verify(pin);
+      ManagedUnitRevision.replace(config,base,oldProfile,from,asset,to,pin,number,request.newColumns(),acquisitionLimits);
+    }
+    files.bindUnit(ref.assetId(),unit,source);
   }
   private static boolean revisionParent(JdbcClient db,Map<String,Object> parent,boolean replacementAsset) {
     if ("ACTIVE".equals(parent.get("state"))) return true;

@@ -15,6 +15,22 @@ management:
   endpoint.health.probes.enabled: true
 ouf:
   onboarding:
+    units:
+      multiple-sources-per-asset: ${OUF_ONB_UNITS_MULTIPLE_SOURCES_PER_ASSET:false}
+    source-time-zone: "${OUF_ONBOARDING_SOURCE_TIME_ZONE:}"
+    files:
+      media-types: ${OUF_ONBOARDING_FILES_MEDIA_TYPES:text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet}
+      csv.max-bytes: ${OUF_ONBOARDING_FILES_CSV_MAX_BYTES:10485760}
+      xlsx.max-bytes: ${OUF_ONBOARDING_FILES_XLSX_MAX_BYTES:10485760}
+      gpkg.max-bytes: ${OUF_ONBOARDING_FILES_GPKG_MAX_BYTES:10485760}
+      xlsx.max-uncompressed-bytes: ${OUF_ONBOARDING_FILES_XLSX_MAX_UNCOMPRESSED_BYTES:104857600}
+      xlsx.max-entry-bytes: ${OUF_ONBOARDING_FILES_XLSX_MAX_ENTRY_BYTES:67108864}
+      xlsx.min-inflate-ratio: ${OUF_ONBOARDING_FILES_XLSX_MIN_INFLATE_RATIO:0.01}
+      xlsx.max-entries: ${OUF_ONBOARDING_FILES_XLSX_MAX_ENTRIES:10000}
+      xlsx.max-sheets: ${OUF_ONBOARDING_FILES_XLSX_MAX_SHEETS:64}
+      xlsx.max-rows: ${OUF_ONBOARDING_FILES_XLSX_MAX_ROWS:10000}
+      xlsx.max-columns: ${OUF_ONBOARDING_FILES_XLSX_MAX_COLUMNS:1024}
+      xlsx.max-profile-operations: ${OUF_ONBOARDING_FILES_XLSX_MAX_PROFILE_OPERATIONS:8}
     acquisition-limits:
       max-rows: ${OUF_ONB_ACQUISITION_LIMITS_MAX_ROWS:1000000}
       max-columns: ${OUF_ONB_ACQUISITION_LIMITS_MAX_COLUMNS:1024}

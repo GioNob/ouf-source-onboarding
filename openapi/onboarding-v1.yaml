@@ -54,6 +54,45 @@ paths:
       x-ouf-mcp-capability: ouf.source-onboarding.version.create
       parameters: [{$ref: '#/components/parameters/SourceId'}]
       responses: {'201': {description: DRAFT created}, default: {$ref: '#/components/responses/Problem'}}
+  /files:
+    servers: [{url: /api/managed-sources/v1}]
+    post:
+      operationId: stageHumanManagedFile
+      description: Receives a HUMAN file through the governed Gateway. Only installation-enabled formats are accepted.
+      parameters:
+        - {name: X-Content-SHA256, in: header, required: false, schema: {type: string}}
+        - {name: X-OUF-File-Name, in: header, required: false, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          text/csv: {schema: {type: string, format: binary}}
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}
+          application/geopackage+sqlite3: {schema: {type: string, format: binary}}
+      responses:
+        '201': {description: Managed file staged}
+        '415': {description: ONB_FILE_MEDIA_TYPE_UNSUPPORTED}
+        '422': {description: "Media type mismatch, invalid length or hash, or ONB_FILE_LIMIT_EXCEEDED with the limit name"}
+        default: {$ref: '#/components/responses/Problem'}
+  /managed-file-mcp/upload:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: stageDelegatedManagedFile
+      description: Gateway HUMAN delegation. Receipt v1 binds CSV implicitly. Receipt v2 signs mediaType. The owner checks length, hash and content before storage.
+      parameters:
+        - {name: X-OUF-Managed-File-Receipt, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          text/csv: {schema: {type: string, format: binary}}
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}
+          application/geopackage+sqlite3: {schema: {type: string, format: binary}}
+      responses:
+        '201': {description: Managed file staged}
+        '403': {description: ONB_MANAGED_FILE_RECEIPT_INVALID}
+        '409': {description: ONB_FILE_UPLOAD_IDEMPOTENCY_CONFLICT}
+        '415': {description: ONB_FILE_MEDIA_TYPE_UNSUPPORTED}
+        '422': {description: "Media type mismatch, invalid length or hash, or ONB_FILE_LIMIT_EXCEEDED with the limit name"}
+        default: {$ref: '#/components/responses/Problem'}
   /managed-files:
     post:
       operationId: registerManagedFile
@@ -78,6 +117,11 @@ paths:
     post:
       operationId: requestManagedFileProfile
       summary: Queue deterministic profiling
+      description: >-
+        For an XLSX workbook the profiling operation is identified by the asset, the reader
+        ouf.xlsx-cell-text.v1 and the effective options (declared header rows and the installation
+        time zone at request time). The same operation returns the same job; different options create
+        a new profile version. readOptions on another format returns 422 ONB_READ_OPTIONS_UNSUPPORTED.
       x-ouf-mcp-capability: ouf.managed-source.file.profile
       parameters:
         - $ref: '#/components/parameters/AssetId'
@@ -87,6 +131,15 @@ paths:
           schema:
             type: string
             minLength: 1
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                readOptions: {$ref: '#/components/schemas/XlsxReadOptions'}
       responses:
         '202':
           description: Profiling job accepted
@@ -155,6 +208,89 @@ paths:
                 $ref: '#/components/schemas/ManagedFilePreview'
         default:
           $ref: '#/components/responses/Problem'
+  /managed-file-mcp/create:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: createManagedFileDraftForMcp
+      parameters:
+        - {name: X-OUF-Managed-File-Receipt, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Arguments, CorrelationID]
+              properties:
+                CorrelationID: {type: string}
+                Arguments:
+                  type: object
+                  additionalProperties: false
+                  required: [sourceId, name, owner, targetClassIri, semanticRefs, sourceObjectKeyFields, fields]
+                  anyOf: [{required: [assetId, profileId]}, {required: [unitProfileRef]}]
+                  properties:
+                    assetId: {$ref: '#/components/schemas/UnitUuid'}
+                    profileId: {$ref: '#/components/schemas/UnitUuid'}
+                    sourceId: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/sourceId'}
+                    name: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/name'}
+                    owner: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/owner'}
+                    targetClassIri: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/targetClassIri'}
+                    semanticRefs: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/semanticRefs'}
+                    sourceObjectKeyFields: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/sourceObjectKeyFields'}
+                    fields: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/fields'}
+                    layer: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/layer'}
+                    category: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/category'}
+                    compositions: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/compositions'}
+                    semanticBindings: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/semanticBindings'}
+                    unitProfileRef: {$ref: '#/components/schemas/CreateManagedFileOnboardingRequest/properties/unitProfileRef'}
+      responses:
+        '200': {description: Idempotent DRAFT receipt}
+        '404': {description: ONB_FILE_PROFILE_NOT_FOUND or ONB_PROFILE_UNIT_NOT_FOUND}
+        '409': {description: ONB_UNIT_PROFILE_CHANGED or ONB_UNIT_SCHEMA_CHANGED or ONB_UNIT_SELECTION_CHANGED or ONB_UNIT_ALREADY_BOUND or ONB_UNIT_ASSET_ALREADY_BOUND}
+        '422': {description: ONB_UNIT_REJECTED or ONB_UNIT_FORMAT_UNSUPPORTED or ONB_UNIT_PROFILE_OUTDATED}
+  /managed-file-mcp/review-prepare:
+    servers: [{url: /api/internal/v1/onboarding}]
+    post:
+      operationId: prepareManagedFileReview
+      x-ouf-mcp-capability: ouf.managed-source.onboarding.review.prepare
+      parameters:
+        - {name: X-OUF-Managed-File-Receipt, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Arguments]
+              properties:
+                Arguments:
+                  type: object
+                  required: [sourceId, onboardingVersionId, expectedVersion, commandKey]
+                  properties:
+                    sourceId: {type: string}
+                    commandKey: {type: string}
+                    expectedVersion: {type: integer, minimum: 0}
+                    unitProfileRef: {$ref: '#/components/schemas/SourceUnitReference'}
+                    onboardingVersionId: {type: string, format: uuid}
+                    candidateAction: {enum: [WITHDRAW, RESTART_DRAFT]}
+                    executionProposal:
+                      oneOf:
+                        - allOf:
+                            - {$ref: '#/components/schemas/ManagedExecutionFields'}
+                          unevaluatedProperties: false
+                        - {$ref: '#/components/schemas/ManagedUnitExecutionProposal'}
+      responses:
+        '200': {description: Prepared review receipt}
+        '409': {description: ONB_UNIT_PROFILE_CHANGED or ONB_UNIT_SCHEMA_CHANGED or ONB_UNIT_SELECTION_CHANGED}
+        '422':
+          description: >-
+            ONB_ACQUISITION_LIMIT_BELOW_PROFILE identifies the limit, observed value and ceiling.
+            ONB_ACQUISITION_LIMIT_INSTALLATION_EXCEEDED reports the limit, observed value and installationMaximum.
+            ONB_GOVERNED_IDENTITY_INVALID identifies the violated constraint and its path.
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
+        default: {$ref: '#/components/responses/Problem'}
   /managed-file-mcp/preview:
     servers: [{url: /api/internal/v1/onboarding}]
     post:
@@ -212,6 +348,9 @@ paths:
                       then:
                         not:
                           anyOf: [{required: [offset]}, {required: [limit]}, {required: [layer]}]
+                    - {"type":"object","additionalProperties":false,"required":["view","profileId"],"properties":{"view":{"const":"UNITS"},"profileId":{"$ref":"#/components/schemas/UnitUuid"},"assetId":{"$ref":"#/components/schemas/UnitUuid"},"offset":{"type":"integer","minimum":0,"maximum":63},"limit":{"type":"integer","minimum":1,"maximum":64}}}
+                    - {"type":"object","additionalProperties":false,"required":["view","profileId","unitRef"],"properties":{"view":{"const":"UNIT"},"profileId":{"$ref":"#/components/schemas/UnitUuid"},"unitRef":{"$ref":"#/components/schemas/UnitRef"},"assetId":{"$ref":"#/components/schemas/UnitUuid"},"offset":{"type":"integer","minimum":0,"maximum":1023},"limit":{"type":"integer","minimum":1,"maximum":128}}}
+                    - {"type":"object","additionalProperties":false,"required":["view","profileId","unitRef","distinctValuesCursor"],"properties":{"view":{"const":"UNIT"},"profileId":{"$ref":"#/components/schemas/UnitUuid"},"unitRef":{"$ref":"#/components/schemas/UnitRef"},"assetId":{"$ref":"#/components/schemas/UnitUuid"},"distinctValuesCursor":{"type":"string","minLength":1}}}
                     - type: object
                       required: [view]
                       additionalProperties: false
@@ -354,6 +493,27 @@ paths:
               schema: {$ref: '#/components/responses/Problem/content/application~1problem+json/schema'}
         default:
           $ref: '#/components/responses/Problem'
+  /managed-files/{assetId}/preview:
+    get:
+      operationId: previewManagedExtractionUnit
+      parameters:
+        - {name: assetId, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: profileId, in: query, required: true, schema: {type: string, format: uuid}}
+        - {name: view, in: query, required: true, schema: {enum: [UNITS, UNIT]}}
+        - {name: unitRef, in: query, schema: {$ref: '#/components/schemas/UnitRef'}}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, maximum: 1023}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 128}}
+        - {name: distinctValuesCursor, in: query, schema: {$ref: '#/components/schemas/DistinctValuesCursor'}}
+      responses:
+        '200':
+          description: Immutable inventory or selected unit.
+          content:
+            application/json:
+              schema:
+                oneOf: [{$ref: '#/components/schemas/SourceUnitInventory'}, {$ref: '#/components/schemas/SourceUnitProfile'}]
+        '404': {description: ONB_FILE_PROFILE_NOT_FOUND or ONB_PROFILE_UNIT_NOT_FOUND}
+        '409': {description: ONB_UNIT_SELECTION_CHANGED or ONB_UNIT_PROFILE_CHANGED or ONB_UNIT_SCHEMA_CHANGED or ONB_UNIT_ASSET_ALREADY_BOUND or ONB_UNIT_ALREADY_BOUND}
+        '422': {description: ONB_UNIT_REJECTED or ONB_UNIT_FORMAT_UNSUPPORTED or ONB_UNIT_PROFILE_OUTDATED}
   /managed-files/{assetId}/create-onboarding:
     post:
       operationId: createManagedFileOnboarding
@@ -363,7 +523,7 @@ paths:
         - $ref: '#/components/parameters/AssetId'
         - name: profileId
           in: query
-          required: true
+          required: false
           schema:
             type: string
             format: uuid
@@ -638,6 +798,165 @@ components:
               code: {type: string}
               correlationId: {type: string}
   schemas:
+    UnitUuid: {"type":"string","format":"uuid","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}
+    UnitRef: {"type":"string","maxLength":16,"pattern":"^(table|sheet|layer|collection):(0|[1-9][0-9]{0,3})$"}
+    XlsxReadOptions:
+      type: object
+      additionalProperties: false
+      required: [xlsx]
+      properties:
+        xlsx:
+          type: object
+          additionalProperties: false
+          required: [headerRows]
+          properties:
+            headerRows:
+              type: object
+              minProperties: 1
+              maxProperties: 64
+              propertyNames: {pattern: '^sheet:(0|[1-9][0-9]{0,3})$'}
+              additionalProperties: {type: integer, minimum: 1, maximum: 1048576}
+    SourceUnitReference: {"type":"object","additionalProperties":false,"required":["profileId","profileVersion","unitRef","schemaHash"],"properties":{"profileId":{"$ref":"#/components/schemas/UnitUuid"},"profileVersion":{"type":"integer","minimum":1,"maximum":2147483647},"unitRef":{"$ref":"#/components/schemas/UnitRef"},"schemaHash":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}}
+    UnitSummary:
+      type: object
+      required: [unitCount, readyUnits]
+      properties:
+        unitCount: {type: integer, minimum: 0}
+        readyUnits: {type: integer, minimum: 0}
+        singleReadyUnitRef: {$ref: '#/components/schemas/UnitRef'}
+    ManagedUnitExecutionProposal:
+      allOf:
+        - {$ref: '#/components/schemas/ManagedExecutionFields'}
+      required: [contract]
+      properties:
+        contract: {const: ouf.managed-unit-execution-proposal.v1}
+      unevaluatedProperties: false
+    ManagedExecutionFields:
+      type: object
+      required: [semanticBindings, semanticPublicationSetRef, udp]
+      properties:
+        semanticBindings: {$ref: '../docs/contracts/managed-file-execution-proposal.schema.json#/properties/semanticBindings'}
+        semanticPublicationSetRef: {$ref: '../docs/contracts/managed-file-execution-proposal.schema.json#/properties/semanticPublicationSetRef'}
+        udp: {$ref: '../docs/contracts/managed-file-execution-proposal.schema.json#/properties/udp'}
+        limits: {$ref: '../docs/contracts/managed-file-execution-proposal.schema.json#/properties/limits'}
+    SourceUnitInventory:
+      type: object
+      required: [schema, sourceKind, origin, profileId, profileVersion, readerVersion, inventoryComplete, units, unitSummary, hasMore, nextOffset]
+      properties:
+        schema: {const: ouf.source-unit-inventory.v1}
+        sourceKind: {const: FILE}
+        origin: {$ref: '#/components/schemas/UnitOrigin'}
+        profileId: {$ref: '#/components/schemas/UnitUuid'}
+        profileVersion: {type: integer}
+        readerVersion: {type: [string, 'null']}
+        inventoryComplete: {type: boolean}
+        unitSummary: {$ref: '#/components/schemas/UnitSummary'}
+        units:
+          type: array
+          maxItems: 64
+          items:
+            type: object
+            required: [unitRef, unitKind, name, status, hidden, recordCount, columnCount, hasGeometry]
+            properties:
+              unitRef: {$ref: '#/components/schemas/UnitRef'}
+              unitKind: {enum: [TABLE, SHEET, LAYER]}
+              name: {type: string}
+              hidden: {type: boolean}
+              status: {enum: [READY, REJECTED]}
+              rejection: {$ref: '#/components/schemas/UnitRejection'}
+              recordCount: {type: [integer, 'null']}
+              columnCount: {type: [integer, 'null']}
+              hasGeometry: {type: boolean}
+        hasMore: {type: boolean}
+        nextOffset: {type: [integer, 'null']}
+    UnitRejection:
+      type: object
+      required: [code]
+      properties: {code: {type: string}, at: {type: string}}
+    UnitOrigin:
+      type: object
+      required: [assetId, mediaType]
+      properties: {assetId: {$ref: '#/components/schemas/UnitUuid'}, mediaType: {type: string}}
+    SourceUnitProfile:
+      type: object
+      required: [schema, view, sourceKind, origin, profileId, profileVersion, unitRef, unitKind, unitName, status, recordModel, schemaHash, columnsHash, limitsProfile, recordCount, columnCount, offset, columns, keys, geometry, readParameters, nextOffset, hasMore]
+      properties:
+        schema: {const: ouf.source-unit-profile.v1}
+        view: {const: UNIT}
+        unitRef: {$ref: '#/components/schemas/UnitRef'}
+        sourceKind: {const: FILE}
+        origin: {$ref: '#/components/schemas/UnitOrigin'}
+        unitKind: {enum: [TABLE, SHEET, LAYER]}
+        unitName: {type: string}
+        profileId: {$ref: '#/components/schemas/UnitUuid'}
+        profileVersion: {type: integer}
+        recordModel: {enum: [ONE_ROW_ONE_SOURCE_OBJECT, ONE_FEATURE_ONE_SOURCE_OBJECT]}
+        limitsProfile: {const: managed-tabular-1024.v1}
+        status: {enum: [READY, REJECTED]}
+        rejection: {$ref: '#/components/schemas/UnitRejection'}
+        schemaHash: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+        columnsHash: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+        recordCount: {type: [integer, 'null']}
+        columnCount: {type: [integer, 'null']}
+        keys:
+          type: object
+          required: [declared, candidates]
+          properties:
+            declared: {type: array, items: {type: array, items: {type: string}}}
+            candidates: {type: array, items: {type: array, items: {type: string}}}
+        geometry:
+          type: [object, 'null']
+          required: [column, geometryType, dimensions, srsId, sourceCrs]
+          properties:
+            column: {type: string}
+            geometryType: {type: string}
+            dimensions: {const: 2}
+            srsId: {type: integer}
+            sourceCrs: {type: string}
+            extent:
+              type: object
+              required: [minX, minY, maxX, maxY]
+              additionalProperties: {type: number}
+        readParameters:
+          type: object
+          minProperties: 1
+          maxProperties: 1
+          additionalProperties: false
+          properties:
+            csv:
+              type: object
+              required: [delimiter, encoding, headerRow]
+              properties: {delimiter: {enum: [',', ';']}, encoding: {const: UTF-8}, headerRow: {const: 1}}
+            xlsx:
+              type: object
+              required: [sheet, sheetIndex]
+              properties:
+                sheet: {type: string}
+                sheetIndex: {type: integer, minimum: 0}
+                headerRow: {type: integer, minimum: 1}
+                dateSystem: {enum: ['1900', '1904']}
+                timeZone: {type: string}
+                cellText: {const: ouf.xlsx-cell-text.v1}
+            geopackage:
+              type: object
+              required: [layer, geometryColumn, sourceCrs]
+              properties: {layer: {type: string}, geometryColumn: {type: string}, sourceCrs: {type: string}}
+        offset: {type: integer}
+        columns:
+          type: array
+          maxItems: 128
+          items:
+            allOf:
+              - {$ref: '#/components/schemas/ManagedMcpPreviewColumn'}
+              - type: object
+                required: [ordinal, nativeType, baseType, role]
+                properties:
+                  ordinal: {type: integer, minimum: 0}
+                  nativeType: {type: string}
+                  baseType: {enum: [string, integer, decimal, boolean, date, datetime, geometry]}
+                  role: {enum: [ATTRIBUTE, GEOMETRY]}
+        hasMore: {type: boolean}
+        nextOffset: {type: [integer, 'null']}
     RegisterManagedFileRequest:
       type: object
       required: [stagingRef, contentHash, mediaType, sizeBytes, retentionRef]
@@ -647,7 +966,7 @@ components:
         contentHash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
         mediaType:
           type: string
-          enum: [text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet]
+          enum: [text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/geopackage+sqlite3, application/x-msaccess, application/vnd.ms-access, application/zip]
         sizeBytes: {type: integer, minimum: 1, maximum: 10485760}
         retentionRef: {type: string, minLength: 1}
     ManagedFileAsset:
@@ -666,6 +985,7 @@ components:
       type: object
       required: [jobId, status, createdAt, updatedAt]
       properties:
+        unitSummary: {$ref: '#/components/schemas/UnitSummary'}
         jobId: {type: string, format: uuid}
         status: {type: string, enum: [QUEUED, RUNNING, RETRY_WAIT, SUCCEEDED, FAILED, CANCELLED]}
         createdAt: {type: string, format: date-time}
@@ -692,6 +1012,7 @@ components:
       type: object
       required: [profile_id, asset_id, version, format, inferred_schema, candidate_keys, redacted_sample]
       properties:
+        unitSummary: {$ref: '#/components/schemas/UnitSummary'}
         profile_id: {type: string, format: uuid}
         asset_id: {type: string, format: uuid}
         version: {type: integer, minimum: 1}
@@ -741,6 +1062,7 @@ components:
       type: object
       required: [workflowState, reasonCode, allowedActions]
       properties:
+        unitSummary: {$ref: '#/components/schemas/UnitSummary'}
         workflowState: {enum: [PROFILE_AVAILABLE, PROFILE_COLUMNS, ASSETS, QUEUED, RUNNING, RETRY_WAIT, SUCCEEDED, FAILED, CANCELLED]}
         reasonCode: {enum: [PROFILE_READY, COLUMN_PAGE, ASSET_LIST, PROFILE_PENDING, PROFILE_FAILED, PROFILE_CANCELLED]}
         allowedActions:
@@ -750,6 +1072,8 @@ components:
           items: {enum: [READ_AGAIN, READ_DISTINCT_VALUES, NONE]}
           description: READ_DISTINCT_VALUES is present when a returned column has a continuation cursor.
       oneOf:
+        - $ref: '#/components/schemas/SourceUnitInventory'
+        - $ref: '#/components/schemas/SourceUnitProfile'
         - $ref: '#/components/schemas/ManagedMcpColumnPage'
         - $ref: '#/components/schemas/ManagedMcpProfilePreview'
         - type: object
@@ -817,6 +1141,7 @@ components:
       type: object
       required: [assetId, profileId, profileVersion, format, schemaHash, columns, candidateKeys, redactedSample, recordModel, identityProposal, proposalStatus]
       properties:
+        unitSummary: {$ref: '#/components/schemas/UnitSummary'}
         assetId: {type: string, format: uuid}
         profileId: {type: string, format: uuid}
         profileVersion: {type: integer}
@@ -862,6 +1187,7 @@ components:
       type: object
       required: [sourceId, name, owner, targetClassIri, semanticRefs]
       properties:
+        unitProfileRef: {$ref: '#/components/schemas/SourceUnitReference'}
         sourceId: {type: string, minLength: 1}
         name: {type: string, minLength: 1}
         owner: {type: string, minLength: 1}
@@ -1026,9 +1352,10 @@ components:
       type: object
       additionalProperties: false
       required: [sourceId, parentVersionId, expectedVersion, configurationHash, publicationEffect, commandKey]
-      anyOf: [{required: [assetRef]}, {required: [changes]}, {required: [compositions]}]
-      not: {required: [assetRef, changes]}
-      dependentRequired: {newColumns: [assetRef]}
+      anyOf: [{required: [assetRef]}, {required: [unitProfileRef]}, {required: [changes]}, {required: [compositions]}]
+      not: {anyOf: [{required: [assetRef, changes]}, {required: [unitProfileRef, changes]}, {required: [assetRef, unitProfileRef]}]}
+      if: {required: [newColumns]}
+      then: {anyOf: [{required: [assetRef]}, {required: [unitProfileRef]}]}
       properties:
         sourceId: {type: string}
         parentVersionId: {type: string, format: uuid}
@@ -1052,6 +1379,7 @@ components:
               reconciliation: {type: object}
               transform: {$ref: '#/components/schemas/ValueReader'}
               transformParams: {$ref: '#/components/schemas/TransformParams'}
+        unitProfileRef: {$ref: '#/components/schemas/SourceUnitReference'}
         assetRef:
           type: object
           additionalProperties: false

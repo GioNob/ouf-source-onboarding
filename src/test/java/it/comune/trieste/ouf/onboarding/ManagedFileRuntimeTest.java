@@ -28,20 +28,26 @@ class ManagedFileRuntimeTest {
         .isInstanceOf(it.comune.trieste.ouf.onboarding.domain.DomainFailure.class)
         .hasMessageContaining("not owned");
   }
-  @Test void delegatedUploadRetryKeepsOneAssetAndRejectsChangedBytes(){
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={ManagedFileContentInspector.CSV,ManagedFileContentInspector.XLSX})
+  void delegatedUploadRetryKeepsOneAssetAndRejectsChangedBytes(String mediaType) throws Exception {
     byte[] csv="cinema,indirizzo\nA,Trieste\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-    String hash=hashes.ofBytes(csv);
+    byte[] content=mediaType.equals(ManagedFileContentInspector.CSV) ? csv : ManagedIntakeFixtures.workbook();
+    String hash=hashes.ofBytes(content);
     java.util.concurrent.atomic.AtomicInteger puts=new java.util.concurrent.atomic.AtomicInteger();
     java.util.function.Supplier<String> put=()->"object://staging/upload-"+puts.incrementAndGet();
-    var first=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put);
-    var retry=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,csv.length,put);
+    var first=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,content.length,mediaType,put);
+    var retry=files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,content.length,mediaType,put);
+    assertThat(files.asset((UUID)first.get("assetId"))).containsEntry("media_type",mediaType);
     assertThat(retry).isEqualTo(first).containsEntry("status","STAGED");
     assertThat(puts).hasValue(1);
     assertThat(db.sql("select count(*) from ouf_onboarding.managed_file_upload_attempt").query(Long.class).single()).isOne();
-    assertThatThrownBy(()->files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123","sha256:"+"0".repeat(64),csv.length,put))
+    assertThatThrownBy(()->files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123","sha256:"+"0".repeat(64),content.length,mediaType,put))
         .hasMessageContaining("different file content");
     assertThat(puts).hasValue(1);
-    var other=files.registerDelegatedUpload("tenant-b","human:alice","file_123","upload:file_123",hash,csv.length,put);
+    String otherType=mediaType.equals(ManagedFileContentInspector.CSV) ? ManagedFileContentInspector.XLSX : ManagedFileContentInspector.CSV;
+    assertThatThrownBy(()->files.registerDelegatedUpload("tenant-a","human:alice","file_123","upload:file_123",hash,content.length,otherType,put)).hasMessageContaining("media type");
+    var other=files.registerDelegatedUpload("tenant-b","human:alice","file_123","upload:file_123",hash,content.length,mediaType,put);
     assertThat(other.get("assetId")).isNotEqualTo(first.get("assetId"));
     assertThat(puts).hasValue(2);
   }
@@ -105,6 +111,11 @@ class ManagedFileRuntimeTest {
   }
   @Test @SuppressWarnings("unchecked") void geoPackageRegistrationRequiresLayerAndStableKeys()throws Exception{
     byte[] bytes=getClass().getResourceAsStream("/geopackage/cameras.gpkg").readAllBytes();
+    var baseline=profiler.profile(bytes,"application/geopackage+sqlite3");
+    assertThat(hashes.of(new com.fasterxml.jackson.databind.ObjectMapper().convertValue(baseline,Map.class))).isEqualTo("sha256:172e27358d92542a95ea545e7e19a470b1315db533eefabe63aae6fd23da6e28");
+    var layers=(List<Map<String,Object>>)baseline.metadata().get("layers");
+    assertThat(layers).extracting(layer->layer.get("layer")).containsExactly("cabinets","cameras");
+    assertThat(layers).allSatisfy(layer->assertThat(layer).containsEntry("sourceCrs","EPSG:4326").containsEntry("primaryKey","fid"));
     UUID asset=(UUID)files.register(null,"object://staging/cameras.gpkg",hashes.ofBytes(bytes),"application/geopackage+sqlite3",bytes.length,"human:test","retention://30d").get("asset_id");
     UUID profile=(UUID)files.profile(asset,bytes,"object://samples/cameras.json").get("profile_id");
     assertThat(String.valueOf(files.preview(asset,profile))).contains("cameras","cabinets","EPSG:4326","LAYER_AND_STABLE_KEYS_REQUIRED");
@@ -118,8 +129,8 @@ class ManagedFileRuntimeTest {
   }
 
   @Test @SuppressWarnings("unchecked") void csvProducesDeterministicSchemaAndCandidateKey(){byte[] csv="id;name;active;observed\n1;Alpha;true;2026-01-01\n2;Beta;false;2026-01-02\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);var asset=files.register(null,"object://staging/a.csv",hashes.ofBytes(csv),"text/csv",csv.length,"human:test","retention://30d");UUID assetId=(UUID)asset.get("asset_id");var profile=files.profile(assetId,csv,"object://samples/a.json");assertThat(profile.get("format")).isEqualTo("CSV");assertThat((List<?>)profile.get("inferred_schema")).hasSize(4);assertThat((List<String>)profile.get("candidate_keys")).contains("id","name","observed");Map<String,Object> preview=files.preview(assetId,(UUID)profile.get("profile_id"));List<Map<String,String>> sample=(List<Map<String,String>>)preview.get("redactedSample");assertThat(sample).hasSize(2);assertThat(sample.get(0)).containsEntry("id","1").containsEntry("name","[REDACTED]");assertThat(preview).doesNotContainKeys("stagingRef","contentHash").containsEntry("recordModel","ONE_ROW_ONE_SOURCE_OBJECT").containsEntry("proposalStatus","PENDING_HUMAN_REVIEW");assertThat(db.sql("select count(*) from information_schema.columns where table_schema='ouf_onboarding' and table_name='managed_file_asset' and data_type='bytea'").query(Long.class).single()).isZero();}
-  @Test void xlsxIsProfiledWithoutExecutingFormulas() throws Exception {byte[] bytes;try(var workbook=new XSSFWorkbook();var out=new ByteArrayOutputStream()){var sheet=workbook.createSheet("objects");var header=sheet.createRow(0);header.createCell(0).setCellValue("id");header.createCell(1).setCellValue("value");var row=sheet.createRow(1);row.createCell(0).setCellValue("1");row.createCell(1).setCellValue(42);workbook.write(out);bytes=out.toByteArray();}var p=profiler.profile(bytes,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");assertThat(p.format()).isEqualTo("XLSX");assertThat(p.columns()).extracting(ManagedFileProfiler.ColumnProfile::name).containsExactly("id","value");}
-  @Test void xlsxFormulaIsRejected() throws Exception {byte[] bytes;try(var workbook=new XSSFWorkbook();var out=new ByteArrayOutputStream()){var sheet=workbook.createSheet("objects");sheet.createRow(0).createCell(0).setCellValue("value");sheet.createRow(1).createCell(0).setCellFormula("1+1");workbook.write(out);bytes=out.toByteArray();}byte[] payload=bytes;assertThatThrownBy(()->profiler.profile(payload,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")).hasMessageContaining("formulas are not allowed");}
+  @Test @SuppressWarnings("unchecked") void xlsxIsProfiledWithoutExecutingFormulas() throws Exception {byte[] bytes;try(var workbook=new XSSFWorkbook();var out=new ByteArrayOutputStream()){var sheet=workbook.createSheet("objects");var header=sheet.createRow(0);header.createCell(0).setCellValue("id");header.createCell(1).setCellValue("value");var row=sheet.createRow(1);row.createCell(0).setCellValue("1");row.createCell(1).setCellValue(42);workbook.write(out);bytes=out.toByteArray();}var p=profiler.profile(bytes,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");assertThat(p.format()).isEqualTo("XLSX");/* ouf.xlsx-cell-text.v1: worksheets are units; no flat top-level schema (task-62f). */assertThat(p.columns()).isEmpty();var sheet=((List<Map<String,Object>>)p.metadata().get("sheets")).getFirst();assertThat(sheet).containsEntry("status","READY").containsEntry("sheet","objects");assertThat((List<ManagedFileProfiler.ColumnProfile>)sheet.get("columns")).extracting(ManagedFileProfiler.ColumnProfile::name).containsExactly("id","value");assertThat(p.distinctCellValues().get("sheet:0").get("value")).containsExactly("42");}
+  @Test @SuppressWarnings("unchecked") void xlsxFormulaIsRejected() throws Exception {byte[] bytes;try(var workbook=new XSSFWorkbook();var out=new ByteArrayOutputStream()){var sheet=workbook.createSheet("objects");sheet.createRow(0).createCell(0).setCellValue("value");sheet.createRow(1).createCell(0).setCellFormula("1+1");workbook.write(out);bytes=out.toByteArray();}/* v1: a formula without cached value rejects only its worksheet, with a stable code (task-62f). */var p=profiler.profile(bytes,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");var sheet=((List<Map<String,Object>>)p.metadata().get("sheets")).getFirst();assertThat(sheet).containsEntry("status","REJECTED");assertThat((Map<String,Object>)sheet.get("rejection")).containsEntry("code","XLSX_FORMULA_WITHOUT_CACHED_VALUE");}
   @Test void hashMismatchFailsBeforePersistence(){byte[] registered="id,name\n1,A\n".getBytes();byte[] forged="id,name\n2,B\n".getBytes();var asset=files.register(null,"object://staging/a.csv",hashes.ofBytes(registered),"text/csv",forged.length,"human:test","retention://30d");assertThatThrownBy(()->files.profile((UUID)asset.get("asset_id"),forged,"object://sample")).hasMessageContaining("hash");assertThat(db.sql("select count(*) from ouf_onboarding.file_profile").query(Long.class).single()).isZero();}
   @Test void profileIsImmutable(){byte[] csv="id,name\n1,A\n".getBytes();var asset=files.register(null,"object://staging/a.csv",hashes.ofBytes(csv),"text/csv",csv.length,"human:test","retention://30d");var profile=files.profile((UUID)asset.get("asset_id"),csv,"object://sample");assertThatThrownBy(()->db.sql("delete from ouf_onboarding.file_profile where profile_id=:p").param("p",profile.get("profile_id")).update()).hasStackTraceContaining("file_profile is immutable");}
   @Test void profilingRequestIsAsynchronousAndIdempotent(){byte[] csv="id,name\n1,A\n".getBytes();UUID asset=(UUID)files.register(null,"object://staging/job.csv",hashes.ofBytes(csv),"text/csv",csv.length,"agent:test","retention://30d").get("asset_id");var first=files.requestProfile(asset,"mcp-call-1");var replay=files.requestProfile(asset,"mcp-call-1");assertThat(replay.get("job_id")).isEqualTo(first.get("job_id"));var claimed=files.claimProfile("onboarding-profiler",Duration.ofMinutes(2),Instant.now()).orElseThrow();assertThat(claimed.get("staging_ref")).isEqualTo("object://staging/job.csv");var completed=files.completeProfile((UUID)claimed.get("job_id"),"onboarding-profiler",((Number)claimed.get("generation")).longValue(),csv,"object://samples/job.json");assertThat(completed.get("state")).isEqualTo("SUCCEEDED");assertThat(completed.get("profile_id")).isNotNull();}

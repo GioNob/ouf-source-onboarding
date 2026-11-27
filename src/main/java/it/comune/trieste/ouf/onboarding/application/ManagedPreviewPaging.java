@@ -72,6 +72,13 @@ public final class ManagedPreviewPaging {
       trimSamples(out);
       remaining = budget - bytes(out);
     }
+    if (remaining < 0 && job==null && object(preview.get("metadata")).containsKey("sheets")) {
+      var compact=new LinkedHashMap<>(object(preview.get("metadata")));
+      compact.remove("sheets"); // Each retained sheet remains available through UNIT.
+      out.put("metadata",compact);
+      out.put("metadataTruncated",true);
+      remaining=budget-bytes(out);
+    }
     if (remaining < 0) return compactProfile(out, schema, values, scope, deadline);
 
     // A compact JSON object's byte count changes by the serialized difference of its replaced child.
@@ -108,20 +115,7 @@ public final class ManagedPreviewPaging {
     out.put("schemaHash", schema.hash());
     out.put("limitsProfile", ManagedFileLimits.PROFILE);
 
-    if (cursor != null) {
-      var position = cursors.verify(cursor, scope);
-      int layer = position.layer();
-      int index = position.column();
-      if (layer < FLAT || layer >= schema.layers().size() || index < 0 || index >= schema.columns(layer).size())
-        throw DistinctValuesCursors.invalid();
-      var column = column(schema, values, layer, index);
-      if (column.values() == null || position.offset() < 0 || position.offset() >= column.values().size())
-        throw DistinctValuesCursors.invalid();
-      if (layer != FLAT) out.put("layer", schema.layerName(layer));
-      var page = pageEnvelope(out, schema.columns(layer).size(), index);
-      page.add(fitValues(column, scope, position.offset(), position.expiresAt(), budget - bytes(out), true));
-      return checked(out);
-    }
+    if (cursor != null) return continuation(out, schema, values, scope, cursor);
 
     int layer = FLAT;
     if (layerName != null) {
@@ -137,6 +131,67 @@ public final class ManagedPreviewPaging {
       throw new DomainFailure(HttpStatus.BAD_REQUEST, "ONB_PROFILE_PAGE_FORMAT_UNSUPPORTED", "Tabular profile or exact layer required");
     }
     return page(out, schema, values, scope, layer, offset, limit, cursors.deadline());
+  }
+
+  Map<String,Object> inventory(Map<String,Object> out,int offset) {
+    var units=items(out.get("units"));
+    if(bytes(out)<=budget)return out;
+    for(int count=units.size()-1;count>0;count--){
+      out.put("units",units.subList(0,count));
+      out.put("nextOffset",offset+count);
+      out.put("hasMore",true);
+      if(bytes(out)<=budget)return out;
+    }
+    throw tooLarge();
+  }
+
+  Map<String,Object> unit(Map<String,Object> out, SourceUnitProfiles.Unit unit,
+      Map<String,Map<String,List<String>>> values, String tenant, String subject, int offset, int limit, String cursor) {
+    var structural = unit.structuralColumns();
+    var columns = new ArrayList<Map<String,Object>>();
+    for (int i=0; i<structural.size(); i++) {
+      var column = new LinkedHashMap<>(structural.get(i));
+      String type = (String)column.get("dataType");
+      column.put("baseType",switch(type) {
+        case "LONG" -> "integer";
+        default -> type.toLowerCase(java.util.Locale.ROOT);
+      });
+      column.put("distinctValues",unit.columns().get(i).get("distinctValues"));
+      columns.add(column);
+    }
+    var schema = new Schema(columns,List.of(),hashes.of(List.of("UNIT",unit.ref(),out.get("schemaHash"))));
+    var scope = new DistinctValuesCursors.Scope(tenant,subject,(UUID)object(out.get("origin")).get("assetId"),
+        (UUID)out.get("profileId"),schema.hash());
+    String key = unit.layer() ? unit.name() : unit.readParameters().get("xlsx") instanceof Map<?,?> xlsx && xlsx.containsKey("cellText")
+        ? unit.ref() : ManagedFileProfiler.FLAT_PROFILE;
+    var selected = Map.of(ManagedFileProfiler.FLAT_PROFILE,values.getOrDefault(key,Map.of()));
+    if (cursor!=null) return continuation(out,schema,selected,scope,cursor);
+    if (offset<0 || offset>=ManagedFileLimits.MAX_COLUMNS || limit<1 || limit>ManagedFileLimits.COLUMN_PAGE_SIZE)
+      throw invalidPage("Invalid unit page bounds");
+    if (!unit.ready() && offset==0) {
+      out.put("columns", List.of());
+      out.put("hasMore",false);
+      out.put("offset",0);
+      out.put("nextOffset",null);
+      return checked(out);
+    }
+    return page(out,schema,selected,scope,FLAT,offset,limit,cursors.deadline());
+  }
+
+  private Map<String,Object> continuation(Map<String,Object> out, Schema schema, Map<String,Map<String,List<String>>> values,
+      DistinctValuesCursors.Scope scope, String cursor) {
+    var position = cursors.verify(cursor, scope);
+    int layer = position.layer();
+    int index = position.column();
+    if (layer < FLAT || layer >= schema.layers().size() || index < 0 || index >= schema.columns(layer).size())
+      throw DistinctValuesCursors.invalid();
+    var column = column(schema, values, layer, index);
+    if (column.values() == null || position.offset() < 0 || position.offset() >= column.values().size())
+      throw DistinctValuesCursors.invalid();
+    if (layer != FLAT) out.put("layer", schema.layerName(layer));
+    var page = pageEnvelope(out, schema.columns(layer).size(), index);
+    page.add(fitValues(column, scope, position.offset(), position.expiresAt(), budget - bytes(out), true));
+    return checked(out);
   }
 
   private List<Map<String,Object>> initialColumns(Schema schema, Map<String,Map<String,List<String>>> values,

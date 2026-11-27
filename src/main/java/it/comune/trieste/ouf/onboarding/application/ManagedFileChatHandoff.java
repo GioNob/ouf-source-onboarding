@@ -177,6 +177,8 @@ public class ManagedFileChatHandoff {
       if (row.asset() != null) {
         files.requireTenantOwner(row.asset(), tenant, subject);
         result.put("assetId", row.asset());
+        // Additive (contract ouf.extraction-unit.v1 §3.2) on the durable branch only: the legacy observation stays byte-identical.
+        if (!row.legacy() && files.asset(row.asset()).get("media_type") instanceof String mediaType) result.put("mediaType", mediaType);
       }
       if (row.code() != null) result.put("code", row.code());
       return result;

@@ -4,6 +4,7 @@ import it.comune.trieste.ouf.onboarding.domain.DomainFailure;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.http.HttpStatus;
 
@@ -72,16 +73,47 @@ public record AcquisitionLimits(int maxRows, int maxColumns, int maxCellChars, i
 
   record Measurements(Measure rows, Measure columns, Measure cells) {
     List<Measure> ordered() { return List.of(rows, columns, cells); }
+
+    boolean withinInstallation() {
+      return ordered().stream().noneMatch(measure -> measure.exceeds(measure.installationMaximum()));
+    }
+
+    Map<String,Integer> replacement(Map<?,?> execution, Supplier<? extends RuntimeException> invalidBound) {
+      boolean refresh = false;
+      for (var measure : ordered()) {
+        if (execution.containsKey(measure.limit())) {
+          if (!(execution.get(measure.limit()) instanceof Number bound) || bound.longValue() <= 0)
+            throw invalidBound.get();
+          if (measure.exceeds(bound.longValue())) refresh = true;
+        } else if (measure.observed() != null) {
+          refresh = true;
+        }
+      }
+      if (!refresh) return Map.of();
+      return Map.of(rows.limit(), rows.ceiling(), columns.limit(), columns.ceiling(), cells.limit(), cells.ceiling());
+    }
   }
 
   Measurements measures(Map<?,?> profile) {
+    int columns = ManagedReviewSnapshot.list(profile.get("inferred_schema")).size();
+    if ("SHEET".equals(profile.get("unitKind")) || "LAYER".equals(profile.get("unitKind")))
+      return unitMeasures((String) profile.get("unitKind"), profile, columns);
     var metadata = ManagedReviewSnapshot.child(profile, "metadata");
     Object rows = metadata.get("rows");
     if (rows == null) rows = profile.get("rowCount");
     if (rows == null) rows = profile.get("featureCount");
+    return measures(rows, columns, metadata.get("maxCellChars"));
+  }
+
+  Measurements unitMeasures(String kind, Map<?,?> evidence, int columns) {
+    // The XLSX adapter also checks header text. A data-only maximum cannot bound that read.
+    return measures(evidence.get("LAYER".equals(kind) ? "featureCount" : "rows"), columns, null);
+  }
+
+  private Measurements measures(Object rows, int columns, Object cellChars) {
     return new Measurements(measure("maxRows", count(rows), maxRows, minHeadroomRows),
-        measure("maxColumns", ManagedReviewSnapshot.list(profile.get("inferred_schema")).size(), maxColumns, minHeadroomColumns),
-        measure("maxCellChars", count(metadata.get("maxCellChars")), maxCellChars, minHeadroomCellChars));
+        measure("maxColumns", columns, maxColumns, minHeadroomColumns),
+        measure("maxCellChars", count(cellChars), maxCellChars, minHeadroomCellChars));
   }
 
   private static Integer count(Object value) {

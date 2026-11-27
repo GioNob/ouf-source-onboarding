@@ -87,39 +87,22 @@ public final class ManagedCsvRevision {
     var metadata=object(profile,"metadata");
     String delimiter=text(metadata,"delimiter");
     require(Set.of(",",";").contains(delimiter));
-    var measures=acquisitionLimits.measures(profile).ordered();
     require(metadata.get("rows") instanceof Number);
-    boolean needsNewLimits=false;
-    for(var measure:measures){
-      if(measure.exceeds(measure.installationMaximum()))
-        throw new Incompatible(List.of(new Finding("EXECUTION_LIMIT_EXCEEDED",null,null,null)));
-      if(execution.containsKey(measure.limit())){
-        if(measure.exceeds(number(execution,measure.limit())))needsNewLimits=true;
-      }else if(measure.observed()!=null){
-        // A historical execution profile may have no explicit bound for this measure.
-        needsNewLimits=true;
-      }
-    }
+    var measures=acquisitionLimits.measures(profile);
+    if (!measures.withinInstallation())
+      throw new Incompatible(List.of(new Finding("EXECUTION_LIMIT_EXCEEDED",null,null,null)));
+    var replacement=measures.replacement(execution,
+        () -> new Incompatible(List.of(new Finding("UNSUPPORTED_CSV_CONTRACT",null,null,null))));
     checkColumns(previousColumns,nextColumns,mapped,keys.getFirst(),strings(profile.get("candidate_keys")),decisions);
     var additions=decisions.stream().filter(d->"MAP".equals(d.decision())).toList();
     if(!additions.isEmpty())extendMappings(config,additions);
 
-    String id=asset.get("asset_id").toString(),profileId=profile.get("profile_id").toString();
-    String ref=schemaRef(id,profileId);
+    String profileId=profile.get("profile_id").toString();
     if(config.get("excludedFieldReview") instanceof Map<?,?> excluded && oldProfileId.equals(excluded.get("profileId")))
       config.put("excludedFieldReview",Map.of("profileId",profileId,"labels",excluded.get("labels")));
-    selection.put("assetId",id);
-    selection.put("fileProfileId",profileId);
-    runtime.put("assetId",id);
-    runtime.put("fileProfileId",profileId);
-    runtime.put("stagingRef",asset.get("staging_ref"));
-    runtime.put("contentHash",asset.get("content_hash"));
+    ManagedUnitRevision.bindAsset(selection,runtime,execution,bundle,asset,profileId,version);
     runtime.put("csvDelimiter",delimiter);
-    if(needsNewLimits)for(var measure:measures)execution.put(measure.limit(),measure.ceiling());
-    execution.put("expectedSize",asset.get("size_bytes"));
-    execution.put("sourceSchemaRef",ref);
-    execution.put("sourceSchemaVersion",String.valueOf(version));
-    bundle.put("schemaRef",ref);
+    execution.putAll(replacement);
   }
 
   static void checkColumns(Map<String,String> before,Map<String,String> after,Map<String,String> mapped,
@@ -167,7 +150,7 @@ public final class ManagedCsvRevision {
         &&order.stream().allMatch(s->s!=null&&!s.isBlank()&&s.length()<=2048));
   }
 
-  private static void extendMappings(Map<String,Object> config,List<NewColumn> additions){
+  static void extendMappings(Map<String,Object> config,List<NewColumn> additions){
     var extraction=object(config,"extractionProfile");
     var projection=object(extraction,"projection");
     var fields=new ArrayList<>(strings(projection.get("FILE")));
