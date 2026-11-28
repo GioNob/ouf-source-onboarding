@@ -11,6 +11,7 @@ import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -58,10 +59,7 @@ public class AnalysisMandateRegistry {
         ? acquire(() -> rights.fetch(binding, request.expectedVersion(), request.generation(), "issue", null, null))
         : null;
     // An issuance that races with another commit can use the time evidence it already fetched.
-    var replayCheck = installed && issueCheck == null
-        && (preview == null || active(preview) && preview.issueHash().equals(issueHash))
-        ? acquire(rights::fetchClock) : issueCheck;
-    return audited(event, () -> {
+    return auditedWithDeadline(event, issueCheck, replayCheck -> {
       require(installed, MANDATE_BINDING_MISMATCH);
       // The analysis may not have a row yet. Serialize issuance before consulting the latest generation.
       lockAnalysis(binding.analysisId());
@@ -118,12 +116,12 @@ public class AnalysisMandateRegistry {
       require(row.view().version() == request.expectedVersion(), MANDATE_VERSION_CHANGED);
       require(row.operations().contains(request.operation()), OPERATION_DENIED);
       require(row.binding().policyEpoch().equals(request.policyEpoch()), POLICY_EPOCH_CHANGED);
-      denyIfTerminal(expireAtDeadline(event, row, check));
+      denyIfTerminal(expireWithDispatchClock(event, row, check));
       var snapshot = AnalysisMandateRights.snapshot(check.get(), hashes);
       requirePolicy(row.binding(), snapshot);
       require(row.policyBundleHash().equals(snapshot.policyBundleHash()), POLICY_CHANGED);
       require(row.rightsHash().equals(snapshot.rightsHash()), RIGHTS_CHANGED);
-      denyIfTerminal(expireAtDeadline(event, row, check));
+      denyIfTerminal(expireWithDispatchClock(event, row, check));
       audit(event, "ADMITTED", "CURRENT_RIGHTS_VERIFIED");
       return row.view();
     });
@@ -153,8 +151,7 @@ public class AnalysisMandateRegistry {
     var event = new Event(request.mandateRef(), request.generation(), request.analysisId(), null,
         null, request.correlationId());
     boolean absoluteDeadline = ABSOLUTE_DEADLINE.equals(request.reason());
-    var check = absoluteDeadline ? deadlineEvidence(request) : null;
-    return audited(event, () -> {
+    return auditedWithDeadline(event, null, check -> {
       boolean closesAnalysis = closed(request.reason());
       // Serialize closure with issuance even when the request targets an older generation.
       if (closesAnalysis) lockAnalysis(request.analysisId());
@@ -179,8 +176,17 @@ public class AnalysisMandateRegistry {
   public View read(Read request) {
     request.validate();
     var event = new Event(request.mandateRef(), request.generation(), null, null, null, null);
-    var check = deadlineEvidence(request);
-    return audited(event, () -> expireAtDeadline(event, locked(request, event), check).view());
+    return auditedWithDeadline(event, null, check -> expireAtDeadline(event, locked(request, event), check).view());
+  }
+
+  private View auditedWithDeadline(Event event, RightsCheck check, Function<RightsCheck, View> work) {
+    try {
+      return audited(event, () -> work.apply(check));
+    } catch (DeadlineClockRequired required) {
+      // Fetch outside the registry locks, then recheck the row and deadline in a fresh transaction.
+      var clock = acquire(rights::fetchClock);
+      return audited(event, () -> work.apply(clock));
+    }
   }
 
   private View audited(Event event, Supplier<View> work) {
@@ -292,14 +298,16 @@ public class AnalysisMandateRegistry {
     if (!active(row)) throw new Failure("REVOKED".equals(row.view().state()) ? MANDATE_REVOKED : MANDATE_EXPIRED);
   }
 
-  private RightsCheck deadlineEvidence(Target request) {
-    var preview = find(request.mandateRef(), false);
-    return preview != null && preview.view().generation() == request.generation() && active(preview)
-        ? acquire(rights::fetchClock) : null;
-  }
-
   private Row expireAtDeadline(Event event, Row row, RightsCheck check) {
     if (!active(row)) return row;
+    long dbNow = now();
+    if (dbNow < row.view().expiresAtMs()) return row;
+    if (check == null) throw new DeadlineClockRequired();
+    check.get().check(dbNow, settings.clockSkewMs());
+    return terminate(event, row, "EXPIRED", ABSOLUTE_DEADLINE);
+  }
+
+  private Row expireWithDispatchClock(Event event, Row row, RightsCheck check) {
     require(check != null, CURRENT_RIGHTS_UNAVAILABLE);
     long verifiedNow = check.get().check(now(), settings.clockSkewMs());
     return verifiedNow >= row.view().expiresAtMs()
@@ -432,6 +440,8 @@ public class AnalysisMandateRegistry {
       return value;
     }
   }
+
+  private static final class DeadlineClockRequired extends RuntimeException {}
 
   private final class Event {
     final String ref;

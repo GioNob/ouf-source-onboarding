@@ -2,6 +2,7 @@ package it.comune.trieste.ouf.onboarding.authorization;
 
 import static it.comune.trieste.ouf.onboarding.authorization.AnalysisMandate.*;
 import static it.comune.trieste.ouf.onboarding.authorization.AnalysisMandate.Error.CURRENT_RIGHTS_UNAVAILABLE;
+import static it.comune.trieste.ouf.onboarding.authorization.AnalysisMandate.Error.RIGHTS_EVIDENCE_INVALID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -248,6 +249,24 @@ class AnalysisMandatePostgresTest {
         """).param("ref", id(mandate.mandateRef())).query(Boolean.class).single()).isTrue();
     assertThat(audit("EXPIRED")).isZero();
     assertThat(audit("ADMITTED")).isZero();
+  }
+
+  @Test
+  void activeMandateDoesNotRequireClockEvidence() throws Exception {
+    when(rights.fetchClock()).thenThrow(new Failure(RIGHTS_EVIDENCE_INVALID));
+    var command = command(proof());
+    var mandate = view(call("issue", command, gateway, null));
+    ObjectNode replay = json.valueToTree(command);
+    replay.remove("proof");
+    var expiry = new Expire(mandate.mandateRef(), mandate.generation(), mandate.version(), ANALYSIS,
+        "ABSOLUTE_DEADLINE", random());
+
+    assertThat(read(mandate)).isEqualTo(mandate);
+    assertThat(view(call("issue", replay, gateway, null))).isEqualTo(mandate);
+    var premature = call("expire", expiry, gateway, null);
+    assertThat(premature.status()).isEqualTo(409);
+    assertThat(premature.code()).isEqualTo("DEADLINE_NOT_REACHED");
+    verify(rights, never()).fetchClock();
   }
 
   @ParameterizedTest
