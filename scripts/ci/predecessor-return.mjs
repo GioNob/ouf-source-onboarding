@@ -116,11 +116,11 @@ try {
 
   const next = run(candidate);
   await ready(next, 'candidate on populated database');
-  const candidateHistory = history('46');
+  const candidateHistory = history('49');
   assert.deepEqual(candidateHistory.slice(0, baseline.length), baseline, 'candidate must retain the exact deployed migration history');
   const expected = predecessorHasDistinctValues ? [] :
     ['V44__managed_profile_distinct_values.sql', 'V45__managed_value_map_preparation.sql'];
-  assert.deepEqual(candidateHistory.slice(baseline.length).map(row => row.script), [...expected, 'V46__managed_file_handoff.sql']);
+  assert.deepEqual(candidateHistory.slice(baseline.length).map(row => row.script), [...expected, 'V46__managed_file_handoff.sql', 'V49__analysis_mandate_registry.sql']);
   const commandKey = randomUUID();
   const issued = await issuePicker(fixture, commandKey);
   const pending = await readPicker(fixture, issued.handoffId);
@@ -173,7 +173,7 @@ try {
   else assert.equal(returnedValues, 'NULL');
   assert.equal(sql(`select parent_version_id from ouf_onboarding.onboarding_version where onboarding_version_id='${result.child.onboardingVersionId}'`),
     seed.parent.onboardingVersionId, 'child draft keeps its parent link after the return');
-  assert.deepEqual(history('46'), candidateHistory);
+  assert.deepEqual(history('49'), candidateHistory);
   assert.equal(pickerRow(), pickerEvidence);
   assert.deepEqual(candidateEvidence(), evidence);
   assert.equal(sql("select count(*) from ouf_onboarding.onboarding_version where source_id='review'"), '2');

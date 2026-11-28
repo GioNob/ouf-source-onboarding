@@ -14,10 +14,11 @@ public class CorrelationFilter extends OncePerRequestFilter {
   public static final String ATTRIBUTE="ouf.correlationId";
   @Override protected void doFilterInternal(HttpServletRequest request,HttpServletResponse response,FilterChain chain) throws ServletException,IOException {
     String supplied=request.getHeader("X-Correlation-ID");
-    // A review diagnostic and the request completion log must never echo arbitrary header text.
-    boolean review=request.getRequestURI().endsWith("/managed-file-mcp/review-prepare")
-        || request.getRequestURI().endsWith("/managed-file-mcp/review-read");
-    String id=supplied==null || supplied.isBlank() || review && !supplied.matches("(?i)[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}")
+    // Protected routes only echo a UUID in the request completion log.
+    boolean protectedRoute=request.getRequestURI().endsWith("/managed-file-mcp/review-prepare")
+        || request.getRequestURI().endsWith("/managed-file-mcp/review-read")
+        || request.getRequestURI().startsWith(request.getContextPath()+AnalysisMandateApi.PATH+"/");
+    String id=supplied==null || supplied.isBlank() || protectedRoute && !supplied.matches("(?i)[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}")
         ?UUID.randomUUID().toString():supplied;
     request.setAttribute(ATTRIBUTE,id);
     response.setHeader("X-Correlation-ID",id);
