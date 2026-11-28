@@ -173,7 +173,7 @@ try {
   else assert.equal(returnedValues, 'NULL');
   assert.equal(sql(`select parent_version_id from ouf_onboarding.onboarding_version where onboarding_version_id='${result.child.onboardingVersionId}'`),
     seed.parent.onboardingVersionId, 'child draft keeps its parent link after the return');
-  assert.deepEqual(history('46'), candidateHistory);
+  assert.deepEqual(history('49'), candidateHistory);
   assert.equal(pickerRow(), pickerEvidence);
   assert.deepEqual(candidateEvidence(), evidence);
   assert.equal(sql("select count(*) from ouf_onboarding.onboarding_version where source_id='review'"), '2');
