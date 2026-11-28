@@ -60,8 +60,7 @@ public class AnalysisMandateRegistry {
     return audited(event, () -> {
       require(installed(binding), MANDATE_BINDING_MISMATCH);
       // The analysis may not have a row yet. Serialize issuance before consulting the latest generation.
-      db.sql("select pg_advisory_xact_lock(hashtextextended(:key, 104))")
-          .param("key", settings.installation() + ":" + binding.analysisId()).query((rs, n) -> true).single();
+      lockAnalysis(binding.analysisId());
       var replay = byKey(request, true);
       if (replay != null) return replay(event, replay, issueHash);
 
@@ -111,7 +110,7 @@ public class AnalysisMandateRegistry {
       var row = locked(request, event);
       require(installed(row.binding()) && matchesAdmit(request, row), MANDATE_BINDING_MISMATCH);
       event.actor = row.binding().holder();
-      denyIfTerminal(expireAtDeadline(event, row, now()));
+      denyIfTerminal(row);
       require(row.view().version() == request.expectedVersion(), MANDATE_VERSION_CHANGED);
       require(row.operations().contains(request.operation()), OPERATION_DENIED);
       require(row.binding().policyEpoch().equals(request.policyEpoch()), POLICY_EPOCH_CHANGED);
@@ -154,9 +153,17 @@ public class AnalysisMandateRegistry {
     var event = new Event(request.mandateRef(), request.generation(), request.analysisId(), null,
         null, request.correlationId());
     return audited(event, () -> {
+      boolean closesAnalysis = closed(request.reason());
+      // Serialize closure with issuance even when the request targets an older generation.
+      if (closesAnalysis) lockAnalysis(request.analysisId());
       var row = locked(request, event);
       require(row.binding().analysisId().equals(request.analysisId()), MANDATE_BINDING_MISMATCH);
-      if (!active(row)) return row.view();
+      if (!active(row)) {
+        if (closesAnalysis && "REVOKED".equals(row.view().state()) && !closed(row.terminalReason())) {
+          recordRevokedClosure(event, row, request.reason());
+        }
+        return row.view();
+      }
       require(row.view().version() == request.expectedVersion(), MANDATE_VERSION_CHANGED);
       if (ABSOLUTE_DEADLINE.equals(request.reason())) {
         require(now() >= row.view().expiresAtMs(), DEADLINE_NOT_REACHED);
@@ -198,7 +205,7 @@ public class AnalysisMandateRegistry {
     require(previous.binding().samePlan(binding) && previous.view().mandateRef().equals(request.previousMandateRef()),
         MANDATE_BINDING_MISMATCH);
     require(previous.view().version() == request.expectedVersion(), MANDATE_VERSION_CHANGED);
-    require(!active(previous) && !closed(previous.terminalReason()), MANDATE_NOT_RENEWABLE);
+    require(!active(previous) && !analysisClosed(binding.analysisId()), MANDATE_NOT_RENEWABLE);
   }
 
   private void validateProof(Proof proof, long now) {
@@ -211,6 +218,20 @@ public class AnalysisMandateRegistry {
 
   private boolean installed(Binding binding) {
     return settings.issuer().equals(binding.issuer()) && settings.mcpWorkload().equals(binding.workload());
+  }
+
+  private void lockAnalysis(String analysisId) {
+    db.sql("select pg_advisory_xact_lock(hashtextextended(:key, 104))")
+        .param("key", settings.installation() + ":" + analysisId).query((rs, n) -> true).single();
+  }
+
+  private boolean analysisClosed(String analysisId) {
+    return db.sql("""
+        select exists (select 1 from ouf_authorization.analysis_mandate
+          where installation=:installation and analysis_id=:analysis
+            and terminal_reason in ('FIRST_ROUND_COMPLETE', 'CLOSED', 'CANCELLED'))
+        """).param("installation", settings.installation()).param("analysis", analysisId)
+        .query(Boolean.class).single();
   }
 
   private void requirePolicy(Binding binding, Snapshot snapshot) {
@@ -281,6 +302,14 @@ public class AnalysisMandateRegistry {
     event.row = changed;
     audit(event, state, reason);
     return changed;
+  }
+
+  private void recordRevokedClosure(Event event, Row row, String reason) {
+    // The row is locked. Keep the revocation state and version while recording permanent closure.
+    db.sql("""
+        update ouf_authorization.analysis_mandate set terminal_reason=:reason where mandate_ref=:ref
+        """).param("reason", reason).param("ref", id(row.view().mandateRef())).update();
+    audit(event, "EXPIRED", reason);
   }
 
   private long now() {

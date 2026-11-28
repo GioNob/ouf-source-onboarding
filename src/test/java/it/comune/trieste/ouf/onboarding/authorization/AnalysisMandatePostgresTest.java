@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.PolicyBundle;
 import it.comune.trieste.ouf.onboarding.authorization.AnalysisMandateRights.Evidence;
 import it.comune.trieste.ouf.onboarding.domain.CanonicalHash;
@@ -21,6 +22,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -220,6 +223,57 @@ class AnalysisMandatePostgresTest {
   }
 
   @Test
+  void unverifiedForwardClockDoesNotExpireTheMandate() throws Exception {
+    var mandate = issue();
+    long deadline = db.sql("""
+        update ouf_authorization.analysis_mandate
+        set issued_at_ms=issued_at_ms-86410000, expires_at_ms=expires_at_ms-86410000
+        where mandate_ref=:ref returning expires_at_ms
+        """).param("ref", id(mandate.mandateRef())).query(Long.class).single();
+    when(rights.fetch(any(), anyLong(), anyLong(), eq("dispatch"), any(), isNull())).thenAnswer(call -> {
+      var current = current(true, EPOCH, bundleHash, "f");
+      // The authority still sees a valid mandate while PostgreSQL sees a passed deadline.
+      return new Evidence(current.value(), deadline - 60_000, deadline - 30_000,
+          current.started(), current.received());
+    });
+
+    var denied = call("admit", admit(mandate), gateway, null);
+    assertThat(denied.status()).isEqualTo(503);
+    assertThat(denied.code()).isEqualTo("CLOCK_UNVERIFIED");
+    assertThat(db.sql("""
+        select state='ACTIVE' and version=1 and terminal_reason is null
+        from ouf_authorization.analysis_mandate where mandate_ref=:ref
+        """).param("ref", id(mandate.mandateRef())).query(Boolean.class).single()).isTrue();
+    assertThat(audit("EXPIRED")).isZero();
+    assertThat(audit("ADMITTED")).isZero();
+  }
+
+  @ParameterizedTest
+  @CsvSource({"FIRST_ROUND_COMPLETE, false", "CLOSED, false", "CANCELLED, false", "CLOSED, true"})
+  void closingRevokedMandatePreventsRenewalWithFreshHumanProof(String reason, boolean renewedBeforeClosure)
+      throws Exception {
+    var command = command(proof());
+    var first = view(call("issue", command, gateway, null));
+    var revoked = view(revoke(first));
+    assertThat(revoked.state()).isEqualTo("REVOKED");
+    var latest = revoked;
+    if (renewedBeforeClosure) {
+      var second = view(call("issue", renewal(command, revoked), gateway, null));
+      latest = view(revoke(second));
+    }
+    var expiry = new Expire(first.mandateRef(), first.generation(), first.version(), ANALYSIS, reason, random());
+    assertThat(view(call("expire", expiry, gateway, null))).isEqualTo(revoked);
+    assertThat(view(call("expire", expiry, gateway, null))).isEqualTo(revoked);
+
+    var denied = call("issue", renewal(command, latest), gateway, null);
+    assertThat(denied.status()).isEqualTo(409);
+    assertThat(denied.code()).isEqualTo("MANDATE_NOT_RENEWABLE");
+    assertThat(audit("ISSUED")).isEqualTo(latest.generation());
+    assertThat(db.sql("select reason from ouf_authorization.analysis_mandate_audit where outcome='EXPIRED'")
+        .query(String.class).single()).isEqualTo(reason);
+  }
+
+  @Test
   void renewalRequiresFreshAuthenticationAndCompletionIsTerminal() throws Exception {
     var command = command(proof());
     var first = view(call("issue", command, gateway, null));
@@ -292,6 +346,17 @@ class AnalysisMandatePostgresTest {
   private static Proof proof() {
     long now = System.currentTimeMillis();
     return new Proof("HUMAN", "BATCH_V1", "FIRST_ROUND", now - 10_000, now, now + 30_000);
+  }
+
+  private ObjectNode renewal(Issue command, View previous) {
+    ObjectNode body = json.valueToTree(command);
+    body.put("previousMandateRef", previous.mandateRef()).put("expectedVersion", previous.version())
+        .put("generation", previous.generation() + 1).put("issueKey", random());
+    long afterIssue = previous.expiresAtMs() - TTL_MS + 1;
+    long observed = Math.max(System.currentTimeMillis(), afterIssue);
+    body.set("proof", json.valueToTree(new Proof("HUMAN", "BATCH_V1", "FIRST_ROUND",
+        afterIssue, observed, observed + 10_000)));
+    return body;
   }
 
   private static Issue command(Proof proof) {
