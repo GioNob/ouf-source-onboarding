@@ -52,17 +52,21 @@ public class AnalysisMandateRegistry {
     String issueHash = hashes.of(List.of(binding, request.generation(), request.expectedVersion(),
         request.previousMandateRef() == null ? "" : request.previousMandateRef())).substring(7);
 
-    RightsCheck evidence = null;
-    if (request.proof() != null && installed(binding) && byKey(request, false) == null) {
-      evidence = acquire(() -> rights.fetch(binding, request.expectedVersion(), request.generation(), "issue", null, null));
-    }
-    var check = evidence;
+    boolean installed = installed(binding);
+    var preview = installed ? byKey(request, false) : null;
+    var issueCheck = installed && preview == null && request.proof() != null
+        ? acquire(() -> rights.fetch(binding, request.expectedVersion(), request.generation(), "issue", null, null))
+        : null;
+    // An issuance that races with another commit can use the time evidence it already fetched.
+    var replayCheck = installed && issueCheck == null
+        && (preview == null || active(preview) && preview.issueHash().equals(issueHash))
+        ? acquire(rights::fetchClock) : issueCheck;
     return audited(event, () -> {
-      require(installed(binding), MANDATE_BINDING_MISMATCH);
+      require(installed, MANDATE_BINDING_MISMATCH);
       // The analysis may not have a row yet. Serialize issuance before consulting the latest generation.
       lockAnalysis(binding.analysisId());
       var replay = byKey(request, true);
-      if (replay != null) return replay(event, replay, issueHash);
+      if (replay != null) return replay(event, replay, issueHash, replayCheck);
 
       var previous = latest(binding.analysisId());
       validateGeneration(request, binding, previous);
@@ -74,8 +78,8 @@ public class AnalysisMandateRegistry {
         require(proof.authenticatedAtMs() > Math.max(previous.authenticatedAtMs(), previous.issuedAtMs()),
             REAUTHENTICATION_REQUIRED);
       }
-      require(check != null, CURRENT_RIGHTS_UNAVAILABLE);
-      var currentEvidence = check.get();
+      require(issueCheck != null, CURRENT_RIGHTS_UNAVAILABLE);
+      var currentEvidence = issueCheck.get();
       currentEvidence.check(now(), settings.clockSkewMs());
       var snapshot = AnalysisMandateRights.snapshot(currentEvidence, hashes);
       requirePolicy(binding, snapshot);
@@ -87,7 +91,7 @@ public class AnalysisMandateRegistry {
         // A concurrent request on a different analysis can commit the same issuance key.
         var winner = byKey(request, true);
         require(winner != null, ISSUE_KEY_CONFLICT);
-        return replay(event, winner, issueHash);
+        return replay(event, winner, issueHash, replayCheck);
       }
       event.row = created;
       audit(event, "ISSUED", previous == null ? "VERIFIED_BATCH_PLAN" : "VERIFIED_REAUTHENTICATION");
@@ -114,16 +118,12 @@ public class AnalysisMandateRegistry {
       require(row.view().version() == request.expectedVersion(), MANDATE_VERSION_CHANGED);
       require(row.operations().contains(request.operation()), OPERATION_DENIED);
       require(row.binding().policyEpoch().equals(request.policyEpoch()), POLICY_EPOCH_CHANGED);
-      require(check != null, CURRENT_RIGHTS_UNAVAILABLE);
-      var evidence = check.get();
-      long verifiedNow = evidence.check(now(), settings.clockSkewMs());
-      denyIfTerminal(expireAtDeadline(event, row, verifiedNow));
-      var snapshot = AnalysisMandateRights.snapshot(evidence, hashes);
+      denyIfTerminal(expireAtDeadline(event, row, check));
+      var snapshot = AnalysisMandateRights.snapshot(check.get(), hashes);
       requirePolicy(row.binding(), snapshot);
       require(row.policyBundleHash().equals(snapshot.policyBundleHash()), POLICY_CHANGED);
       require(row.rightsHash().equals(snapshot.rightsHash()), RIGHTS_CHANGED);
-      verifiedNow = evidence.check(now(), settings.clockSkewMs());
-      denyIfTerminal(expireAtDeadline(event, row, verifiedNow));
+      denyIfTerminal(expireAtDeadline(event, row, check));
       audit(event, "ADMITTED", "CURRENT_RIGHTS_VERIFIED");
       return row.view();
     });
@@ -152,6 +152,8 @@ public class AnalysisMandateRegistry {
     request.validate();
     var event = new Event(request.mandateRef(), request.generation(), request.analysisId(), null,
         null, request.correlationId());
+    boolean absoluteDeadline = ABSOLUTE_DEADLINE.equals(request.reason());
+    var check = absoluteDeadline ? deadlineEvidence(request) : null;
     return audited(event, () -> {
       boolean closesAnalysis = closed(request.reason());
       // Serialize closure with issuance even when the request targets an older generation.
@@ -165,8 +167,10 @@ public class AnalysisMandateRegistry {
         return row.view();
       }
       require(row.view().version() == request.expectedVersion(), MANDATE_VERSION_CHANGED);
-      if (ABSOLUTE_DEADLINE.equals(request.reason())) {
-        require(now() >= row.view().expiresAtMs(), DEADLINE_NOT_REACHED);
+      if (absoluteDeadline) {
+        var expired = expireAtDeadline(event, row, check);
+        require(!active(expired), DEADLINE_NOT_REACHED);
+        return expired.view();
       }
       return terminate(event, row, "EXPIRED", request.reason()).view();
     });
@@ -175,7 +179,8 @@ public class AnalysisMandateRegistry {
   public View read(Read request) {
     request.validate();
     var event = new Event(request.mandateRef(), request.generation(), null, null, null, null);
-    return audited(event, () -> expireAtDeadline(event, locked(request, event), now()).view());
+    var check = deadlineEvidence(request);
+    return audited(event, () -> expireAtDeadline(event, locked(request, event), check).view());
   }
 
   private View audited(Event event, Supplier<View> work) {
@@ -275,10 +280,10 @@ public class AnalysisMandateRegistry {
     return row;
   }
 
-  private View replay(Event event, Row row, String issueHash) {
+  private View replay(Event event, Row row, String issueHash, RightsCheck check) {
     require(row.issueHash().equals(issueHash), ISSUE_KEY_CONFLICT);
     event.row = row;
-    return expireAtDeadline(event, row, now()).view();
+    return expireAtDeadline(event, row, check).view();
   }
 
   private static boolean active(Row row) { return "ACTIVE".equals(row.view().state()); }
@@ -287,8 +292,17 @@ public class AnalysisMandateRegistry {
     if (!active(row)) throw new Failure("REVOKED".equals(row.view().state()) ? MANDATE_REVOKED : MANDATE_EXPIRED);
   }
 
-  private Row expireAtDeadline(Event event, Row row, long now) {
-    return active(row) && now >= row.view().expiresAtMs()
+  private RightsCheck deadlineEvidence(Target request) {
+    var preview = find(request.mandateRef(), false);
+    return preview != null && preview.view().generation() == request.generation() && active(preview)
+        ? acquire(rights::fetchClock) : null;
+  }
+
+  private Row expireAtDeadline(Event event, Row row, RightsCheck check) {
+    if (!active(row)) return row;
+    require(check != null, CURRENT_RIGHTS_UNAVAILABLE);
+    long verifiedNow = check.get().check(now(), settings.clockSkewMs());
+    return verifiedNow >= row.view().expiresAtMs()
         ? terminate(event, row, "EXPIRED", ABSOLUTE_DEADLINE) : row;
   }
 

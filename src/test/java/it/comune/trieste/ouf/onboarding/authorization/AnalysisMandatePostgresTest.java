@@ -24,6 +24,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -80,6 +81,7 @@ class AnalysisMandatePostgresTest {
         .thenAnswer(call -> current(true, EPOCH, bundleHash, "f"));
     when(rights.fetch(any(), anyLong(), anyLong(), eq("revoke"), isNull(), anyString()))
         .thenAnswer(call -> revoker("owner-test", "plan-client", false));
+    when(rights.fetchClock()).thenAnswer(call -> evidence(json.createObjectNode()));
   }
 
   @Test
@@ -246,6 +248,47 @@ class AnalysisMandatePostgresTest {
         """).param("ref", id(mandate.mandateRef())).query(Boolean.class).single()).isTrue();
     assertThat(audit("EXPIRED")).isZero();
     assertThat(audit("ADMITTED")).isZero();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"read", "issue", "expire"})
+  void deadlineRequiresVerifiedClock(String action) throws Exception {
+    var command = command(proof());
+    var mandate = view(call("issue", command, gateway, null));
+    ObjectNode replay = json.valueToTree(command);
+    replay.remove("proof");
+    Object body = switch (action) {
+      case "read" -> new Read(mandate.mandateRef(), mandate.generation());
+      case "issue" -> replay;
+      case "expire" -> new Expire(mandate.mandateRef(), mandate.generation(), mandate.version(), ANALYSIS,
+          "ABSOLUTE_DEADLINE", random());
+      default -> throw new IllegalArgumentException(action);
+    };
+    long deadline = db.sql("""
+        update ouf_authorization.analysis_mandate
+        set issued_at_ms=issued_at_ms-86410000, expires_at_ms=expires_at_ms-86410000
+        where mandate_ref=:ref returning expires_at_ms
+        """).param("ref", id(mandate.mandateRef())).query(Long.class).single();
+    when(rights.fetchClock()).thenAnswer(call -> {
+      long tick = System.nanoTime();
+      return new Evidence(json.createObjectNode(), deadline - 60_000, deadline - 30_000, tick, tick);
+    }).thenAnswer(call -> evidence(json.createObjectNode()));
+
+    var denied = call(action, body, gateway, null);
+    assertThat(denied.status()).isEqualTo(503);
+    assertThat(denied.code()).isEqualTo("CLOCK_UNVERIFIED");
+    assertThat(db.sql("""
+        select state='ACTIVE' and version=1 and terminal_reason is null
+        from ouf_authorization.analysis_mandate where mandate_ref=:ref
+        """).param("ref", id(mandate.mandateRef())).query(Boolean.class).single()).isTrue();
+    assertThat(audit("EXPIRED")).isZero();
+
+    var expired = view(call(action, body, gateway, null));
+    assertThat(expired.state()).isEqualTo("EXPIRED");
+    assertThat(expired.version()).isEqualTo(2);
+    assertThat(view(call(action, body, gateway, null))).isEqualTo(expired);
+    assertThat(audit("EXPIRED")).isEqualTo(1);
+    verify(rights, times(2)).fetchClock();
   }
 
   @ParameterizedTest

@@ -80,13 +80,27 @@ class AnalysisMandateRights {
     query.put("schemaHash", binding.schemaHash());
     query.put("commandKey", binding.commandKey());
     query.put("scope", binding.scope());
-    query.put("nonce", UUID.randomUUID().toString());
     if (dispatch != null) {
       query.put("operation", dispatch.operation());
       query.put("argumentsHash", dispatch.argumentsHash());
       query.put("attemptId", dispatch.attemptId());
       if (dispatch.requestId() != null) query.put("requestId", dispatch.requestId());
     }
+    var evidence = fetch(query, bearer);
+    require(evidence.value().path("active").isBoolean() && evidence.value().path("allowed").isBoolean(),
+        RIGHTS_EVIDENCE_INVALID);
+    return evidence;
+  }
+
+  Evidence fetchClock() {
+    var query = new LinkedHashMap<String, Object>();
+    query.put("action", "clock");
+    query.put("installation", settings.installation());
+    return fetch(query, null);
+  }
+
+  private Evidence fetch(Map<String, Object> query, String bearer) {
+    query.put("nonce", UUID.randomUUID().toString());
     byte[] body = hashes.definitionBytes(query);
     var request = HttpRequest.newBuilder(settings.rightsUri())
         .timeout(Duration.ofMillis(settings.clockSkewMs()))
@@ -135,8 +149,8 @@ class AnalysisMandateRights {
       throw new Failure(RIGHTS_EVIDENCE_INVALID);
     }
     require(value != null && value.isObject() && hashes.ofBytes(body).substring(7).equals(text(value, "requestHash"))
-        && value.path("clockSynchronized").isBoolean() && value.path("clockSynchronized").booleanValue()
-        && value.path("active").isBoolean() && value.path("allowed").isBoolean(), RIGHTS_EVIDENCE_INVALID);
+        && value.path("clockSynchronized").isBoolean() && value.path("clockSynchronized").booleanValue(),
+        RIGHTS_EVIDENCE_INVALID);
     long observed = millis(value, "observedAtMs");
     long until = millis(value, "validUntilMs");
     require(observed > 0 && until > observed && until - observed <= EVIDENCE_MS, RIGHTS_EVIDENCE_INVALID);
